@@ -10,10 +10,11 @@
           </div>
         </div>
         <span class="service-status" :class="{ active: enabled }">
-          <span class="status-dot"></span
-          >{{ enabled ? "服务运行中" : "服务未开启" }}
+          <span class="status-dot"></span>
+          {{ enabled ? "服务运行中" : "服务未开启" }}
         </span>
       </header>
+
       <div class="protocol-cards">
         <article
           v-for="protocol in protocols"
@@ -21,76 +22,93 @@
           class="protocol-card"
           :class="[protocol.id, { selected: selectedProtocol === protocol.id }]"
         >
-          <div class="card-heading">
+          <div class="card-header">
             <button
               class="protocol-picker"
               type="button"
               :aria-pressed="selectedProtocol === protocol.id"
               @click="selectEndpoint(protocol)"
             >
-              <span class="protocol-mark"><Code2 :size="16" /></span
-              >{{ protocol.name }}
-            </button>
-            <button
-              class="base-copy"
-              type="button"
-              :aria-label="`复制 ${protocol.name} BASE`"
-              @click="copyText(`${base}${protocol.basePath}`)"
-            >
-              <Copy :size="12" />复制 BASE
+              <span class="protocol-mark"><Code2 :size="16" /></span>
+              <div class="protocol-name-wrap">
+                <span class="protocol-title-text">{{ protocol.name }}</span>
+                <span class="protocol-desc-text">{{ protocol.desc }}</span>
+              </div>
             </button>
           </div>
-          <code class="base-address">{{ base }}{{ protocol.basePath }}</code>
-          <div class="endpoint-list">
-            <div
-              v-for="endpoint in protocol.endpoints"
-              :key="endpoint.id"
-              class="endpoint-item"
-            >
+
+          <div class="base-row">
+            <span class="base-label">BASE 地址</span>
+            <div class="base-box">
+              <code class="base-address"
+                >{{ base }}{{ protocol.basePath }}</code
+              >
               <button
-                class="endpoint-picker"
-                :class="{
-                  active:
+                class="base-copy"
+                type="button"
+                :aria-label="`复制 ${protocol.name} BASE`"
+                @click="copyText(`${base}${protocol.basePath}`)"
+              >
+                <Copy :size="12" />复制
+              </button>
+            </div>
+          </div>
+
+          <div class="endpoints-section">
+            <span class="endpoints-title">主要接口 (示例)</span>
+            <div class="endpoint-list">
+              <div
+                v-for="endpoint in protocol.endpoints"
+                :key="endpoint.id"
+                class="endpoint-item"
+              >
+                <button
+                  class="endpoint-picker"
+                  :class="{
+                    active:
+                      selectedProtocol === protocol.id &&
+                      activeEndpoint.id === endpoint.id
+                  }"
+                  type="button"
+                  :aria-pressed="
                     selectedProtocol === protocol.id &&
                     activeEndpoint.id === endpoint.id
-                }"
-                type="button"
-                :aria-pressed="
-                  selectedProtocol === protocol.id &&
-                  activeEndpoint.id === endpoint.id
-                "
-                @click="selectEndpoint(protocol, endpoint)"
-              >
-                <span class="endpoint-heading">
-                  <span class="endpoint-dot"></span>{{ endpoint.name }}
-                  <span v-if="endpoint.label" class="endpoint-badge">{{
-                    endpoint.label
-                  }}</span>
-                </span>
-                <code class="endpoint-path">{{ endpoint.path }}</code>
-              </button>
-              <button
-                class="endpoint-copy"
-                type="button"
-                :aria-label="`复制 ${endpoint.name} 地址`"
-                @click="copyText(endpointUrl(endpoint))"
-              >
-                <Copy :size="13" />
-              </button>
+                  "
+                  @click="selectEndpoint(protocol, endpoint)"
+                >
+                  <span class="endpoint-heading">
+                    <span class="method-tag">POST</span>
+                    <span v-if="endpoint.label" class="endpoint-badge">{{
+                      endpoint.label
+                    }}</span>
+                  </span>
+                  <code class="endpoint-path">{{ endpoint.path }}</code>
+                </button>
+                <button
+                  class="endpoint-copy"
+                  type="button"
+                  :aria-label="`复制 ${endpoint.name} 地址`"
+                  @click="copyText(endpointUrl(endpoint))"
+                >
+                  <Copy :size="13" />
+                </button>
+              </div>
             </div>
           </div>
         </article>
       </div>
+
       <footer class="protocol-footer">
         <p class="auth-note">
           <KeyRound :size="13" />所有接口均需调用 Token；支持
-          Bearer、x-api-key、x-goog-api-key。
+          Bearer、x-api-key、x-goog-api-key 鉴权请求头。
         </p>
         <button class="token-link" type="button" @click="emit('manage-tokens')">
           管理调用 Token<ArrowUpRight :size="13" />
         </button>
       </footer>
     </section>
+
     <section class="integration-panel">
       <header class="integration-heading">
         <div class="integration-title">
@@ -102,13 +120,43 @@
           <Copy :size="13" />复制模型列表接口
         </button>
       </header>
+
       <div class="integration-body">
         <div class="model-browser">
           <div class="model-browser-heading">
-            <span class="browser-caption">选择模型，生成接入示例</span>
+            <span class="browser-caption"
+              >可在「配置与模型」中添加模型，启用后即可通过上述协议地址调用。</span
+            >
             <code class="models-path">GET {{ modelsPath }}</code>
           </div>
-          <div class="model-table-wrap">
+
+          <!-- 筛选服务商与模型搜索栏 -->
+          <div v-if="modelEntries.length > 0" class="model-filter-bar">
+            <div class="search-input-wrap">
+              <Search :size="13" class="filter-icon" />
+              <input
+                v-model.trim="modelSearch"
+                class="model-search-input"
+                placeholder="搜索模型名称或 ID..."
+              />
+            </div>
+            <div class="target-select-wrap">
+              <select v-model="selectedTargetFilter" class="target-select">
+                <option value="all">
+                  全部服务商 ({{ modelEntries.length }})
+                </option>
+                <option
+                  v-for="target in providerFilterOptions"
+                  :key="target.id"
+                  :value="target.id"
+                >
+                  {{ target.name }} ({{ target.count }})
+                </option>
+              </select>
+            </div>
+          </div>
+
+          <div v-if="paginatedModelEntries.length > 0" class="model-table-wrap">
             <table class="model-table">
               <thead class="model-head">
                 <tr class="model-heading-row">
@@ -120,7 +168,7 @@
               </thead>
               <tbody class="model-body">
                 <tr
-                  v-for="model in modelEntries"
+                  v-for="model in paginatedModelEntries"
                   :key="model.id"
                   class="model-row"
                   :class="{ selected: modelId === model.id }"
@@ -133,7 +181,7 @@
                       :aria-pressed="modelId === model.id"
                       @click="selectedModelId = model.id"
                     >
-                      <span class="model-symbol"><Box :size="15" /></span>
+                      <span class="model-symbol"><Box :size="14" /></span>
                       <span class="model-name">{{ model.name }}</span>
                     </button>
                   </td>
@@ -151,6 +199,7 @@
                       class="model-copy"
                       type="button"
                       :aria-label="`复制模型 ${model.id}`"
+                      title="复制模型 ID"
                       @click.stop="copyText(model.id)"
                     >
                       <Copy :size="13" />
@@ -160,20 +209,64 @@
               </tbody>
             </table>
           </div>
-          <div v-if="!modelEntries.length" class="empty-models">
-            <Boxes :size="27" />
+
+          <div v-else-if="modelEntries.length > 0" class="filter-empty-models">
+            <Boxes :size="24" class="empty-icon" />
+            <p class="empty-title">未找到匹配的模型</p>
+            <button
+              class="reset-filter-btn"
+              type="button"
+              @click="resetModelFilters"
+            >
+              重置筛选条件
+            </button>
+          </div>
+
+          <div v-else class="empty-models">
+            <Boxes :size="32" class="empty-icon" />
             <p class="empty-title">暂时没有可用模型</p>
             <p class="empty-description">
               在“配置与模型”中选择底层目标，添加模型路由并保存后，即可在这里接入。
             </p>
           </div>
-          <p v-else class="model-note">
-            模型与路由来自已保存配置，可在“用量与追踪”中查看实际转发结果。
-          </p>
+
+          <!-- 模型分页设置栏 -->
+          <div v-if="filteredModelEntries.length > 0" class="model-pagination">
+            <span class="pagination-info"
+              >共 {{ filteredModelEntries.length }} 个模型</span
+            >
+            <div class="pagination-actions">
+              <select v-model.number="pageSize" class="page-size-select">
+                <option :value="5">5 条/页</option>
+                <option :value="10">10 条/页</option>
+                <option :value="20">20 条/页</option>
+              </select>
+              <button
+                class="page-nav-btn"
+                type="button"
+                :disabled="currentPage <= 1"
+                @click="currentPage--"
+              >
+                &lt;
+              </button>
+              <span class="page-current"
+                >{{ currentPage }} / {{ totalPages }}</span
+              >
+              <button
+                class="page-nav-btn"
+                type="button"
+                :disabled="currentPage >= totalPages"
+                @click="currentPage++"
+              >
+                &gt;
+              </button>
+            </div>
+          </div>
         </div>
+
         <aside class="quick-integration">
           <header class="code-heading">
-            <span class="code-title"><Terminal :size="16" />快速集成</span>
+            <span class="code-title"><Terminal :size="15" />快速集成</span>
             <select
               v-model="language"
               class="language-select"
@@ -184,11 +277,11 @@
               <option value="powershell">PowerShell</option>
             </select>
           </header>
+
           <div class="code-toolbar">
-            <span class="request-path"
-              ><span class="request-method">POST</span
-              >{{ activeEndpoint.path }}</span
-            >
+            <span class="request-path">
+              <span class="request-method">POST</span>{{ activeEndpoint.path }}
+            </span>
             <button
               class="code-copy"
               type="button"
@@ -198,29 +291,42 @@
               <Copy :size="13" />复制代码
             </button>
           </div>
-          <pre
-            class="code-example"
-          ><code class="code-content"><span v-for="(segment, index) in codeSegments" :key="index" :class="segment.kind">{{ segment.text }}</span></code></pre>
+
+          <div class="code-container">
+            <div class="code-lines-col" aria-hidden="true">
+              <span
+                v-for="(_, idx) in snippetLines"
+                :key="idx"
+                class="line-number"
+                >{{ idx + 1 }}</span
+              >
+            </div>
+            <pre
+              class="code-example"
+            ><code class="code-content"><span v-for="(segment, index) in codeSegments" :key="index" :class="segment.kind">{{ segment.text }}</span></code></pre>
+          </div>
+
           <footer class="code-footer">
-            <KeyRound :size="13" /><span class="code-note"
-              >先将调用 Token 写入环境变量
+            <KeyRound :size="13" />
+            <span class="code-note">
+              先将调用 Token 写入环境变量
               <code class="token-variable">AI_MANAGER_TOKEN</code
-              >，示例会自动读取。</span
-            >
+              >，示例会自动读取。
+            </span>
           </footer>
         </aside>
       </div>
     </section>
+
     <p class="connection-note">
-      <Info
-        :size="14"
-      />跨协议支持文本与函数工具调用；图片、可见思考及其他专属字段请使用同协议目标。请求需携带完整历史。
+      <Info :size="14" />
+      跨协议支持文本与函数工具调用；图片、可见思考及其他专属字段请使用同协议目标。请求需携带完整历史。
     </p>
   </div>
 </template>
 
 <script setup>
-import { computed, ref } from "vue"
+import { computed, ref, watch } from "vue"
 import {
   ArrowUpRight,
   Box,
@@ -229,6 +335,7 @@ import {
   Copy,
   Info,
   KeyRound,
+  Search,
   Terminal
 } from "lucide-vue-next"
 import { createMessage } from "@/utils/message"
@@ -240,15 +347,22 @@ const props = defineProps({
   modelMappings: { type: Object, default: () => ({}) },
   targets: { type: Array, default: () => [] }
 })
-const emit = defineEmits(["manage-tokens"])
+const emit = defineEmits(["manage-tokens", "add-model"])
 const selectedProtocol = ref("openai")
 const selectedEndpoint = ref("chat")
 const selectedModelId = ref("")
 const language = ref("python")
+
+// 模型列表服务商筛选与分页设置
+const selectedTargetFilter = ref("all")
+const modelSearch = ref("")
+const currentPage = ref(1)
+const pageSize = ref(10)
 const protocols = [
   {
     id: "openai",
     name: "OpenAI 协议",
+    desc: "兼容 OpenAI API (如 openai-python、openai-js 等)。",
     basePath: "/v1",
     endpoints: [
       { id: "chat", name: "Chat Completions", path: "/v1/chat/completions" },
@@ -263,6 +377,7 @@ const protocols = [
   {
     id: "anthropic",
     name: "Anthropic 协议",
+    desc: "兼容 Anthropic Messages API (即 Claude API)。",
     basePath: "",
     endpoints: [
       { id: "messages", name: "Anthropic Messages", path: "/v1/messages" }
@@ -271,6 +386,7 @@ const protocols = [
   {
     id: "gemini",
     name: "Gemini 协议",
+    desc: "兼容 Gemini API (即 Google Generative Language API)。",
     basePath: "",
     endpoints: [
       {
@@ -299,7 +415,6 @@ const activeEndpoint = computed(
       (endpoint) => endpoint.id === selectedEndpoint.value
     ) || activeProtocol.value.endpoints[0]
 )
-// 路由与模型只读取已保存状态；模型被移除后自然回到首个有效模型。
 const modelEntries = computed(() =>
   props.models.map((model) => {
     const mapping = Object.hasOwn(props.modelMappings, model.id)
@@ -316,6 +431,54 @@ const modelEntries = computed(() =>
     }
   })
 )
+const providerFilterOptions = computed(() => {
+  const map = new Map()
+  for (const model of modelEntries.value) {
+    const key = model.targetName || "其他"
+    if (!map.has(key)) {
+      map.set(key, { id: key, name: key, count: 0 })
+    }
+    map.get(key).count++
+  }
+  return Array.from(map.values())
+})
+
+const filteredModelEntries = computed(() => {
+  let list = modelEntries.value
+  if (selectedTargetFilter.value !== "all") {
+    list = list.filter((m) => m.targetName === selectedTargetFilter.value)
+  }
+  if (modelSearch.value) {
+    const q = modelSearch.value.toLowerCase()
+    list = list.filter(
+      (m) =>
+        m.id.toLowerCase().includes(q) ||
+        m.name.toLowerCase().includes(q) ||
+        m.targetName.toLowerCase().includes(q)
+    )
+  }
+  return list
+})
+
+const totalPages = computed(() =>
+  Math.max(1, Math.ceil(filteredModelEntries.value.length / pageSize.value))
+)
+
+const paginatedModelEntries = computed(() => {
+  const start = (currentPage.value - 1) * pageSize.value
+  return filteredModelEntries.value.slice(start, start + pageSize.value)
+})
+
+function resetModelFilters() {
+  selectedTargetFilter.value = "all"
+  modelSearch.value = ""
+  currentPage.value = 1
+}
+
+watch([selectedTargetFilter, modelSearch, pageSize], () => {
+  currentPage.value = 1
+})
+
 const modelId = computed(
   () =>
     modelEntries.value.find((model) => model.id === selectedModelId.value)
@@ -327,7 +490,6 @@ const modelsPath = computed(() =>
   selectedProtocol.value === "gemini" ? "/v1beta/models" : "/v1/models"
 )
 const modelsUrl = computed(() => `${base.value}${modelsPath.value}`)
-// 示例仅引用调用方的环境变量，不读取底层账号或刚创建的 Token 明文。
 const snippet = computed(() => {
   const protocol = selectedProtocol.value
   const endpoint = activeEndpoint.value.id
@@ -400,7 +562,7 @@ const snippet = computed(() => {
       : ['    print(response.read().decode("utf-8"))'])
   ].join("\n")
 })
-// 用文本插值着色，模型别名中的 HTML 不会进入可执行标记。
+const snippetLines = computed(() => snippet.value.split("\n"))
 const codeSegments = computed(() =>
   snippet.value
     .split(
@@ -442,11 +604,11 @@ async function copyText(value) {
   display: flex;
   min-width: 0;
   flex-direction: column;
-  gap: 18px;
+  gap: 16px;
   color: var(--color-text);
 
   .protocol-panel {
-    padding: 22px;
+    padding: 20px;
     border: 1px solid var(--color-line);
     border-radius: 12px;
     background: var(--color-panel);
@@ -456,22 +618,22 @@ async function copyText(value) {
       align-items: center;
       justify-content: space-between;
       gap: 16px;
-      margin-bottom: 20px;
+      margin-bottom: 18px;
 
       .protocol-title {
         display: flex;
         align-items: center;
-        gap: 11px;
+        gap: 12px;
 
         .heading-icon {
           display: flex;
           align-items: center;
           justify-content: center;
-          width: 38px;
-          height: 38px;
-          border-radius: 10px;
-          color: #5c8fea;
-          background: rgba(92, 143, 234, 0.1);
+          width: 36px;
+          height: 36px;
+          border-radius: 9px;
+          color: #7c3aed;
+          background: rgba(124, 58, 237, 0.1);
         }
         .heading-copy {
           .heading-name {
@@ -479,9 +641,8 @@ async function copyText(value) {
             font-size: 15px;
           }
           .heading-caption {
-            color: var(--color-text-soft);
-            font-size: 11px;
-            letter-spacing: 0.3px;
+            color: var(--color-text-muted);
+            font-size: 12px;
           }
         }
       }
@@ -489,25 +650,26 @@ async function copyText(value) {
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        padding: 5px 9px;
+        padding: 4px 10px;
         border: 1px solid var(--color-line);
         border-radius: 20px;
         color: var(--color-text-muted);
         font-size: 11px;
 
         &.active {
-          color: var(--color-success);
-          border-color: var(--color-success-line);
-          background: var(--color-success-soft);
+          color: #10b981;
+          border-color: rgba(16, 185, 129, 0.25);
+          background: rgba(16, 185, 129, 0.08);
         }
         .status-dot {
-          width: 5px;
-          height: 5px;
+          width: 6px;
+          height: 6px;
           border-radius: 50%;
           background: currentColor;
         }
       }
     }
+
     .protocol-cards {
       display: flex;
       align-items: stretch;
@@ -518,163 +680,214 @@ async function copyText(value) {
         flex: 1;
         min-width: 0;
         flex-direction: column;
-        padding: 15px;
+        padding: 16px;
         border: 1px solid var(--color-line);
         border-radius: 10px;
         background: var(--color-panel-soft);
-        transition: border-color 0.15s;
+        transition:
+          border-color 0.15s,
+          box-shadow 0.15s;
 
         &.openai {
-          --protocol-color: #5c8fea;
-          --protocol-soft: rgba(92, 143, 234, 0.09);
+          --proto-color: #10b981;
+          --proto-soft: rgba(16, 185, 129, 0.08);
         }
         &.anthropic {
-          --protocol-color: #a387de;
-          --protocol-soft: rgba(163, 135, 222, 0.09);
+          --proto-color: #d97706;
+          --proto-soft: rgba(217, 119, 6, 0.08);
         }
         &.gemini {
-          --protocol-color: #38a58c;
-          --protocol-soft: rgba(56, 165, 140, 0.09);
+          --proto-color: #2563eb;
+          --proto-soft: rgba(37, 99, 235, 0.08);
         }
         &.selected {
-          border-color: var(--protocol-color);
+          border-color: var(--proto-color);
+          box-shadow: 0 0 0 1px var(--proto-color);
         }
-        .card-heading {
-          display: flex;
-          align-items: center;
-          justify-content: space-between;
-          gap: 6px;
+
+        .card-header {
+          margin-bottom: 12px;
 
           .protocol-picker {
-            display: inline-flex;
-            min-width: 0;
-            align-items: center;
-            gap: 8px;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            width: 100%;
             padding: 0;
             border: 0;
-            color: var(--color-text);
             background: transparent;
             text-align: left;
-            font-size: 13px;
             cursor: pointer;
 
             .protocol-mark {
               display: inline-flex;
-              padding: 5px;
+              align-items: center;
+              justify-content: center;
+              padding: 7px;
               border-radius: 7px;
-              color: var(--protocol-color);
-              background: var(--protocol-soft);
+              color: var(--proto-color);
+              background: var(--proto-soft);
+            }
+            .protocol-name-wrap {
+              display: flex;
+              flex-direction: column;
+              gap: 2px;
+
+              .protocol-title-text {
+                font-size: 14px;
+                color: var(--color-text);
+              }
+              .protocol-desc-text {
+                font-size: 11px;
+                color: var(--color-text-muted);
+                line-height: 1.4;
+              }
             }
           }
-          .base-copy {
-            display: inline-flex;
-            align-items: center;
-            gap: 4px;
-            flex-shrink: 0;
-            padding: 5px 6px;
-            border: 1px solid var(--color-line);
-            border-radius: 5px;
+        }
+
+        .base-row {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+          margin-bottom: 14px;
+
+          .base-label {
+            font-size: 11px;
             color: var(--color-text-muted);
+          }
+          .base-box {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 8px;
+            border: 1px solid var(--color-line);
+            border-radius: 6px;
             background: var(--color-panel);
-            font-size: 10px;
-            cursor: pointer;
-            &:hover {
-              color: var(--protocol-color);
-              border-color: var(--protocol-color);
+
+            .base-address {
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+              color: var(--color-text);
+              font-size: 11px;
+            }
+            .base-copy {
+              display: inline-flex;
+              align-items: center;
+              gap: 4px;
+              padding: 3px 6px;
+              border: 1px solid var(--color-line);
+              border-radius: 4px;
+              color: var(--color-text-muted);
+              background: var(--color-panel-soft);
+              font-size: 10px;
+              cursor: pointer;
+
+              &:hover {
+                color: var(--proto-color);
+                border-color: var(--proto-color);
+              }
             }
           }
         }
-        .base-address {
-          display: block;
-          margin: 14px 0 13px;
-          padding: 9px 10px;
-          border: 1px solid var(--color-line);
-          border-radius: 6px;
-          color: var(--color-text-muted);
-          background: var(--color-panel);
-          overflow-wrap: anywhere;
-          font-size: 11px;
-        }
-        .endpoint-list {
+
+        .endpoints-section {
           display: flex;
           flex-direction: column;
           gap: 7px;
 
+          .endpoints-title {
+            font-size: 11px;
+            color: var(--color-text-muted);
+          }
+        }
+
+        .endpoint-list {
+          display: flex;
+          flex-direction: column;
+          gap: 6px;
+
           .endpoint-item {
             display: flex;
             align-items: center;
-            gap: 4px;
+            gap: 6px;
+            padding: 6px 8px;
+            border: 1px solid var(--color-line);
+            border-radius: 6px;
+            background: var(--color-panel);
 
             .endpoint-picker {
+              display: flex;
+              align-items: center;
+              gap: 8px;
               flex: 1;
               min-width: 0;
-              padding: 6px;
+              padding: 0;
               border: 0;
-              border-radius: 5px;
-              text-align: left;
               background: transparent;
-              color: var(--color-text-muted);
+              text-align: left;
               cursor: pointer;
 
-              &.active {
-                background: var(--protocol-soft);
-                color: var(--protocol-color);
-              }
-              &:hover {
-                background: var(--protocol-soft);
-              }
               .endpoint-heading {
-                display: flex;
+                display: inline-flex;
                 align-items: center;
-                gap: 6px;
-                font-size: 11px;
-                .endpoint-dot {
-                  width: 4px;
-                  height: 4px;
-                  flex-shrink: 0;
-                  border-radius: 50%;
-                  background: var(--protocol-color);
+                gap: 4px;
+
+                .method-tag {
+                  padding: 2px 5px;
+                  border-radius: 4px;
+                  color: #7c3aed;
+                  background: rgba(124, 58, 237, 0.1);
+                  font-size: 10px;
                 }
                 .endpoint-badge {
-                  padding: 1px 5px;
-                  border-radius: 4px;
-                  color: var(--protocol-color);
-                  background: var(--protocol-soft);
+                  padding: 1px 4px;
+                  border-radius: 3px;
+                  color: var(--proto-color);
+                  background: var(--proto-soft);
                   font-size: 9px;
                 }
               }
               .endpoint-path {
-                display: block;
-                margin: 5px 0 0 10px;
-                color: var(--color-text-soft);
-                overflow-wrap: anywhere;
-                font-size: 10px;
-                line-height: 1.5;
+                flex: 1;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                color: var(--color-text);
+                font-size: 11px;
               }
             }
+
             .endpoint-copy {
-              display: flex;
-              padding: 5px;
+              display: inline-flex;
+              align-items: center;
+              justify-content: center;
+              padding: 4px;
               border: 0;
               border-radius: 4px;
+              color: var(--color-text-muted);
               background: transparent;
-              color: var(--color-text-soft);
               cursor: pointer;
+
               &:hover {
-                color: var(--protocol-color);
-                background: var(--protocol-soft);
+                color: var(--proto-color);
+                background: var(--proto-soft);
               }
             }
           }
         }
       }
     }
+
     .protocol-footer {
       display: flex;
       align-items: center;
       justify-content: space-between;
       gap: 12px;
       margin-top: 16px;
+      padding-top: 14px;
+      border-top: 1px solid var(--color-line);
 
       .auth-note {
         display: flex;
@@ -687,17 +900,21 @@ async function copyText(value) {
       .token-link {
         display: inline-flex;
         align-items: center;
-        gap: 3px;
-        flex-shrink: 0;
+        gap: 4px;
         padding: 0;
         border: 0;
-        color: var(--color-primary);
+        color: #7c3aed;
         background: transparent;
         cursor: pointer;
-        font-size: 11px;
+        font-size: 12px;
+
+        &:hover {
+          text-decoration: underline;
+        }
       }
     }
   }
+
   .integration-panel {
     overflow: hidden;
     border: 1px solid var(--color-line);
@@ -709,25 +926,26 @@ async function copyText(value) {
       align-items: center;
       justify-content: space-between;
       gap: 14px;
-      padding: 18px 22px;
+      padding: 16px 20px;
       border-bottom: 1px solid var(--color-line);
 
       .integration-title {
         display: flex;
         align-items: center;
-        gap: 9px;
-        color: var(--color-primary);
+        gap: 8px;
+        color: #7c3aed;
+
         .heading-name {
           margin: 0;
           color: var(--color-text);
-          font-size: 14px;
+          font-size: 15px;
         }
         .model-count {
-          padding: 3px 7px;
-          border-radius: 5px;
+          padding: 2px 7px;
+          border-radius: 12px;
           color: var(--color-text-muted);
           background: var(--color-panel-soft);
-          font-size: 10px;
+          font-size: 11px;
         }
       }
       .models-copy {
@@ -740,11 +958,13 @@ async function copyText(value) {
         color: var(--color-text-muted);
         font-size: 11px;
         cursor: pointer;
+
         &:hover {
-          color: var(--color-primary);
+          color: #7c3aed;
         }
       }
     }
+
     .integration-body {
       display: flex;
       align-items: stretch;
@@ -759,18 +979,73 @@ async function copyText(value) {
           align-items: center;
           justify-content: space-between;
           gap: 10px;
-          margin-bottom: 16px;
+          margin-bottom: 14px;
+
           .browser-caption {
             color: var(--color-text-muted);
             font-size: 11px;
           }
           .models-path {
-            color: var(--color-text-soft);
+            color: var(--color-text-muted);
             font-size: 10px;
           }
         }
+
+        .model-filter-bar {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          margin-bottom: 12px;
+
+          .search-input-wrap {
+            position: relative;
+            display: flex;
+            align-items: center;
+            flex: 1;
+
+            .filter-icon {
+              position: absolute;
+              left: 9px;
+              color: var(--color-text-muted);
+            }
+            .model-search-input {
+              width: 100%;
+              padding: 6px 10px 6px 28px;
+              box-sizing: border-box;
+              border: 1px solid var(--color-line);
+              border-radius: 6px;
+              color: var(--color-text);
+              background: var(--color-panel-soft);
+              font-size: 11px;
+              outline: none;
+
+              &:focus {
+                border-color: #7c3aed;
+              }
+            }
+          }
+
+          .target-select-wrap {
+            .target-select {
+              padding: 6px 10px;
+              border: 1px solid var(--color-line);
+              border-radius: 6px;
+              color: var(--color-text);
+              background: var(--color-panel-soft);
+              font-size: 11px;
+              outline: none;
+              cursor: pointer;
+
+              &:focus {
+                border-color: #7c3aed;
+              }
+            }
+          }
+        }
+
         .model-table-wrap {
           overflow-x: auto;
+
           .model-table {
             width: 100%;
             border-collapse: collapse;
@@ -778,35 +1053,40 @@ async function copyText(value) {
             .model-head {
               .model-heading-row {
                 .table-heading {
-                  padding: 10px 8px;
+                  padding: 8px 10px;
                   border-bottom: 1px solid var(--color-line);
                   text-align: left;
-                  white-space: nowrap;
-                  color: var(--color-text-soft);
-                  font-size: 10px;
+                  color: var(--color-text-muted);
+                  font-size: 11px;
+
                   &.action-heading {
                     text-align: right;
                   }
                 }
               }
             }
+
             .model-body {
               .model-row {
                 cursor: pointer;
+
                 &.selected {
-                  background: var(--color-primary-soft);
+                  background: rgba(124, 58, 237, 0.06);
                 }
-                &:hover {
+                &:hover:not(.selected) {
                   background: var(--color-panel-soft);
                 }
+
                 .model-cell {
-                  padding: 13px 8px;
+                  padding: 10px;
                   border-bottom: 1px solid var(--color-line);
-                  color: var(--color-text-muted);
-                  font-size: 11px;
+                  color: var(--color-text);
+                  font-size: 12px;
+
                   &.action-cell {
                     text-align: right;
                   }
+
                   .model-picker {
                     display: flex;
                     align-items: center;
@@ -816,54 +1096,48 @@ async function copyText(value) {
                     color: var(--color-text);
                     background: transparent;
                     cursor: pointer;
-                    text-align: left;
-                    font-size: 12px;
+
                     .model-symbol {
                       display: inline-flex;
-                      padding: 6px;
+                      padding: 5px;
                       border: 1px solid var(--color-line);
-                      border-radius: 7px;
-                      background: var(--color-panel);
+                      border-radius: 6px;
                       color: var(--color-text-muted);
+                      background: var(--color-panel);
                     }
                     .model-name {
-                      min-width: 80px;
-                      overflow-wrap: anywhere;
+                      overflow: hidden;
+                      text-overflow: ellipsis;
+                      white-space: nowrap;
                     }
                   }
+
                   .model-id {
-                    display: block;
-                    min-width: 95px;
-                    max-width: 200px;
-                    overflow-wrap: anywhere;
-                    color: var(--color-primary);
+                    color: #7c3aed;
                     font-size: 11px;
                   }
                   .route-target {
-                    display: block;
-                    min-width: 70px;
-                    max-width: 160px;
-                    overflow-wrap: anywhere;
+                    color: var(--color-text-muted);
+                    font-size: 11px;
                   }
                   .route-model {
                     display: block;
-                    max-width: 160px;
-                    margin-top: 4px;
-                    color: var(--color-text-soft);
-                    overflow-wrap: anywhere;
+                    margin-top: 3px;
+                    color: var(--color-text-muted);
                     font-size: 10px;
                   }
                   .model-copy {
                     display: inline-flex;
-                    padding: 6px;
+                    padding: 5px;
                     border: 0;
-                    border-radius: 5px;
+                    border-radius: 4px;
                     color: var(--color-text-muted);
                     background: transparent;
                     cursor: pointer;
+
                     &:hover {
-                      color: var(--color-primary);
-                      background: var(--color-primary-soft);
+                      color: #7c3aed;
+                      background: rgba(124, 58, 237, 0.1);
                     }
                   }
                 }
@@ -871,37 +1145,138 @@ async function copyText(value) {
             }
           }
         }
+
         .empty-models {
           display: flex;
-          align-items: center;
           flex-direction: column;
-          padding: 40px 18px;
+          align-items: center;
+          padding: 36px 16px;
           text-align: center;
-          color: var(--color-text-soft);
-          .empty-title {
-            margin: 12px 0 5px;
+
+          .empty-icon {
             color: var(--color-text-muted);
-            font-size: 13px;
+            opacity: 0.6;
+            margin-bottom: 10px;
+          }
+          .empty-title {
+            margin: 0 0 6px;
+            color: var(--color-text);
+            font-size: 14px;
           }
           .empty-description {
-            max-width: 340px;
-            margin: 0;
+            margin: 0 0 14px;
+            color: var(--color-text-muted);
             font-size: 12px;
-            line-height: 1.8;
+          }
+          .empty-add-btn {
+            padding: 6px 14px;
+            border: 1px solid #7c3aed;
+            border-radius: 6px;
+            color: #7c3aed;
+            background: rgba(124, 58, 237, 0.06);
+            font-size: 12px;
+            cursor: pointer;
+
+            &:hover {
+              background: rgba(124, 58, 237, 0.12);
+            }
           }
         }
-        .model-note {
-          margin: 16px 0 0;
-          color: var(--color-text-soft);
-          font-size: 10px;
-          line-height: 1.7;
+
+        .filter-empty-models {
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          padding: 28px 16px;
+          text-align: center;
+          gap: 8px;
+
+          .empty-icon {
+            color: var(--color-text-muted);
+            opacity: 0.6;
+          }
+          .empty-title {
+            margin: 0;
+            color: var(--color-text-muted);
+            font-size: 12px;
+          }
+          .reset-filter-btn {
+            padding: 4px 10px;
+            border: 1px solid var(--color-line);
+            border-radius: 5px;
+            color: #7c3aed;
+            background: transparent;
+            font-size: 11px;
+            cursor: pointer;
+
+            &:hover {
+              background: rgba(124, 58, 237, 0.08);
+            }
+          }
+        }
+
+        .model-pagination {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          margin-top: 12px;
+          padding-top: 10px;
+          border-top: 1px solid var(--color-line);
+
+          .pagination-info {
+            color: var(--color-text-muted);
+            font-size: 11px;
+          }
+          .pagination-actions {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+
+            .page-size-select {
+              padding: 3px 6px;
+              border: 1px solid var(--color-line);
+              border-radius: 4px;
+              color: var(--color-text);
+              background: var(--color-panel-soft);
+              font-size: 11px;
+              outline: none;
+              cursor: pointer;
+            }
+            .page-nav-btn {
+              display: inline-flex;
+              align-items: center;
+              justify-content: center;
+              width: 24px;
+              height: 24px;
+              border: 1px solid var(--color-line);
+              border-radius: 4px;
+              color: var(--color-text);
+              background: var(--color-panel);
+              cursor: pointer;
+              font-size: 11px;
+
+              &:disabled {
+                opacity: 0.4;
+                cursor: default;
+              }
+              &:hover:not(:disabled) {
+                border-color: #7c3aed;
+                color: #7c3aed;
+              }
+            }
+            .page-current {
+              color: var(--color-text-muted);
+              font-size: 11px;
+              padding: 0 4px;
+            }
+          }
         }
       }
+
       .quick-integration {
         display: flex;
-        flex: 0 0 40%;
-        min-width: 290px;
-        max-width: 50%;
+        flex: 0 0 42%;
+        min-width: 320px;
         flex-direction: column;
         color-scheme: dark;
         color: #c5cddd;
@@ -912,119 +1287,143 @@ async function copyText(value) {
           display: flex;
           align-items: center;
           justify-content: space-between;
-          gap: 10px;
-          padding: 17px 18px;
-          border-bottom: 1px solid #2a3243;
+          padding: 14px 16px;
+          border-bottom: 1px solid #232c3f;
+
           .code-title {
             display: inline-flex;
             align-items: center;
             gap: 7px;
-            white-space: nowrap;
             color: #e1e7f3;
             font-size: 12px;
           }
           .language-select {
-            min-width: 0;
-            padding: 5px 7px;
+            padding: 4px 8px;
             border: 1px solid #384155;
             border-radius: 5px;
             color: #b8c4d8;
             background: #1e2637;
-            font-size: 10px;
+            font-size: 11px;
             cursor: pointer;
+            outline: none;
           }
         }
+
         .code-toolbar {
           display: flex;
-          align-items: flex-start;
+          align-items: center;
           justify-content: space-between;
-          gap: 10px;
-          padding: 12px 18px 0;
+          padding: 10px 16px;
+          border-bottom: 1px solid #1e2637;
+
           .request-path {
-            color: #8491ab;
-            overflow-wrap: anywhere;
             font-family: Consolas, "Cascadia Code", monospace;
-            font-size: 10px;
+            font-size: 11px;
+            color: #8491ab;
+
             .request-method {
-              margin-right: 7px;
-              color: #7abbaa;
+              margin-right: 6px;
+              color: #10b981;
             }
           }
           .code-copy {
             display: inline-flex;
             align-items: center;
             gap: 4px;
-            flex-shrink: 0;
-            padding: 0;
-            border: 0;
-            background: transparent;
+            padding: 3px 8px;
+            border: 1px solid #384155;
+            border-radius: 4px;
             color: #a6b4cd;
-            font-size: 10px;
+            background: #1e2637;
+            font-size: 11px;
             cursor: pointer;
-            &:hover {
-              color: #e1e7f3;
+
+            &:hover:not(:disabled) {
+              color: #fff;
+              border-color: #4b5875;
             }
             &:disabled {
-              opacity: 0.4;
+              opacity: 0.5;
               cursor: default;
             }
           }
         }
-        .code-example {
+
+        .code-container {
+          display: flex;
           flex: 1;
-          min-height: 265px;
-          max-height: 460px;
-          margin: 0;
-          padding: 18px;
+          min-height: 260px;
+          max-height: 480px;
           overflow: auto;
-          tab-size: 2;
-          font-size: 11px;
-          line-height: 1.8;
-          .code-content {
+
+          .code-lines-col {
+            display: flex;
+            flex-direction: column;
+            padding: 14px 10px 14px 14px;
+            border-right: 1px solid #232c3f;
+            user-select: none;
+            color: #4b5875;
             font-family: Consolas, "Cascadia Code", monospace;
-            .code-string {
-              color: #a6cfb2;
-            }
-            .code-keyword {
-              color: #c4a6e9;
-            }
-            .code-number {
-              color: #e5b78c;
-            }
-            .code-plain {
-              color: #c5cddd;
+            font-size: 11px;
+            line-height: 1.8;
+            text-align: right;
+          }
+
+          .code-example {
+            flex: 1;
+            margin: 0;
+            padding: 14px;
+            overflow-x: auto;
+            font-size: 11px;
+            line-height: 1.8;
+
+            .code-content {
+              font-family: Consolas, "Cascadia Code", monospace;
+
+              .code-string {
+                color: #a6cfb2;
+              }
+              .code-keyword {
+                color: #c4a6e9;
+              }
+              .code-number {
+                color: #e5b78c;
+              }
+              .code-plain {
+                color: #c5cddd;
+              }
             }
           }
         }
+
         .code-footer {
           display: flex;
           align-items: flex-start;
           gap: 6px;
-          padding: 14px 18px;
-          border-top: 1px solid #2a3243;
+          padding: 12px 16px;
+          border-top: 1px solid #232c3f;
           color: #8491ab;
+          font-size: 11px;
+
           .code-note {
-            flex: 1;
-            font-size: 10px;
-            line-height: 1.8;
+            line-height: 1.5;
+
             .token-variable {
               color: #a6b4cd;
-              overflow-wrap: anywhere;
             }
           }
         }
       }
     }
   }
+
   .connection-note {
     display: flex;
-    align-items: flex-start;
-    gap: 7px;
+    align-items: center;
+    gap: 8px;
     margin: 0;
-    padding: 0 3px;
     color: var(--color-text-muted);
     font-size: 11px;
-    line-height: 1.8;
   }
 }
 </style>
