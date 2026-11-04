@@ -1,150 +1,5 @@
 <template>
   <section class="gateway-tool">
-    <!-- 顶部标题与全局刷新 -->
-    <header class="gateway-top-bar">
-      <div class="top-title-group">
-        <div class="top-icon-box">
-          <Waypoints :size="20" />
-        </div>
-        <div class="top-text-box">
-          <h2 class="top-title">多协议反代</h2>
-          <p class="top-subtitle">
-            统一转发 Provider、Codex 与 Gemini 官方账号，管理调用 Token
-            和真实模型记录。
-          </p>
-        </div>
-      </div>
-      <button
-        class="icon-action-btn"
-        type="button"
-        title="刷新网关状态"
-        :disabled="busy || loading"
-        @click="load"
-      >
-        <RotateCw :size="16" :class="{ spin: loading }" />
-      </button>
-    </header>
-
-    <!-- 统一模型网关状态卡片 -->
-    <section class="gateway-service-card">
-      <div class="service-left">
-        <div class="service-badge-icon">
-          <ServerCog :size="24" />
-        </div>
-        <div class="service-meta">
-          <div class="service-title-line">
-            <h3 class="service-name">统一模型网关</h3>
-            <span
-              class="service-status-pill"
-              :class="{ active: gateway.enabled }"
-            >
-              <span class="status-dot"></span>
-              {{ gateway.enabled ? "运行中" : "未运行" }}
-            </span>
-          </div>
-          <p class="service-url">
-            {{ gateway.baseUrl || defaultBaseUrl }}
-          </p>
-        </div>
-      </div>
-
-      <div class="service-right">
-        <!-- 局域网模式 switch -->
-        <div class="switch-item">
-          <span
-            class="switch-label"
-            title="开启后监听 0.0.0.0，局域网内其他设备可通过本机 IP 访问"
-          >
-            <Info :size="13" class="info-icon" /> 局域网模式
-          </span>
-          <button
-            type="button"
-            class="switch-control"
-            :class="{ checked: isLanMode }"
-            :disabled="busy || loading"
-            :aria-checked="isLanMode"
-            role="switch"
-            @click="toggleLanMode"
-          >
-            <span class="switch-thumb"></span>
-          </button>
-        </div>
-
-        <!-- 网关配置入口 -->
-        <button
-          class="tool-button"
-          type="button"
-          title="配置网关监听 IP 与端口"
-          :disabled="busy || loading"
-          @click="openListenerModal"
-        >
-          <SlidersHorizontal :size="14" />
-          监听配置
-        </button>
-
-        <button
-          class="tool-button"
-          type="button"
-          title="选择参与反代的 Provider 与官方账号"
-          :disabled="busy || loading"
-          @click="openPoolModal"
-        >
-          <Layers :size="14" />
-          底层池
-        </button>
-
-        <!-- 刷新按钮 -->
-        <button
-          class="tool-button"
-          type="button"
-          :disabled="busy || loading"
-          @click="load"
-        >
-          <RefreshCw :size="14" :class="{ spin: loading }" />
-          刷新
-        </button>
-
-        <!-- 启动 / 停止网关按钮 -->
-        <button
-          class="tool-button"
-          :class="gateway.enabled ? 'danger' : 'primary'"
-          type="button"
-          :disabled="busy || loading"
-          @click="toggleGateway"
-        >
-          <component :is="gateway.enabled ? Square : Play" :size="13" />
-          {{ gateway.enabled ? "停止网关" : "启动网关" }}
-        </button>
-      </div>
-    </section>
-
-    <!-- 局域网模式提醒横幅 -->
-    <div
-      v-if="isLanMode && gateway.enabled && !lanBannerDismissed"
-      class="lan-alert-banner"
-    >
-      <div class="banner-content">
-        <Info :size="15" class="banner-icon" />
-        <span
-          >局域网访问已开启，局域网内设备可通过本机IP:{{
-            draft.port
-          }}
-          访问该服务。</span
-        >
-      </div>
-      <button
-        class="banner-close-btn"
-        type="button"
-        title="关闭提醒"
-        @click="lanBannerDismissed = true"
-      >
-        <X :size="14" />
-      </button>
-    </div>
-
-    <!-- 加载错误提示 -->
-    <p v-if="loadError" class="gateway-error" role="alert">{{ loadError }}</p>
-
     <!-- 管理页签导航 -->
     <nav class="gateway-tabs" aria-label="反代管理">
       <button
@@ -160,8 +15,129 @@
       </button>
     </nav>
 
+    <!-- 加载错误提示 -->
+    <p v-if="loadError" class="gateway-error" role="alert">{{ loadError }}</p>
+
     <!-- 接入地址 -->
-    <section v-if="activeTab === 'connections'" class="gateway-content">
+    <section v-if="activeTab === 'connections'" class="gateway-content connections-view">
+      <!-- 统一模型网关控制卡片 -->
+      <section class="gateway-service-card">
+        <div class="service-left">
+          <div class="service-badge-icon">
+            <ServerCog :size="22" />
+          </div>
+          <div class="service-meta">
+            <div class="service-title-line">
+              <h3 class="service-name">统一模型网关</h3>
+              <span
+                class="service-status-pill"
+                :class="{ active: gateway.enabled }"
+              >
+                <span class="status-dot"></span>
+                {{ gateway.enabled ? "运行中" : "未运行" }}
+              </span>
+            </div>
+            <p class="service-url">
+              {{ gateway.baseUrl || defaultBaseUrl }}
+            </p>
+          </div>
+        </div>
+
+        <div class="service-right">
+          <!-- 局域网模式 switch -->
+          <div class="switch-item">
+            <span
+              class="switch-label"
+              title="开启后监听 0.0.0.0，局域网内其他设备可通过本机 IP 访问"
+            >
+              <Info :size="13" class="info-icon" /> 局域网模式
+            </span>
+            <button
+              type="button"
+              class="switch-control"
+              :class="{ checked: isLanMode }"
+              :disabled="busy || loading"
+              :aria-checked="isLanMode"
+              role="switch"
+              @click="toggleLanMode"
+            >
+              <span class="switch-thumb"></span>
+            </button>
+          </div>
+
+          <!-- 网关配置入口 -->
+          <button
+            class="tool-button"
+            type="button"
+            title="配置网关监听 IP 与端口"
+            :disabled="busy || loading"
+            @click="openListenerModal"
+          >
+            <SlidersHorizontal :size="13" />
+            监听配置
+          </button>
+
+          <button
+            class="tool-button"
+            type="button"
+            title="选择参与反代的 Provider 与官方账号"
+            :disabled="busy || loading"
+            @click="openPoolModal"
+          >
+            <Layers :size="13" />
+            底层池
+          </button>
+
+          <!-- 刷新按钮 -->
+          <button
+            class="tool-button"
+            type="button"
+            :disabled="busy || loading"
+            @click="load"
+          >
+            <RefreshCw :size="13" :class="{ spin: loading }" />
+            刷新
+          </button>
+
+          <!-- 启动 / 停止网关按钮 -->
+          <button
+            class="tool-button"
+            :class="gateway.enabled ? 'danger' : 'primary'"
+            type="button"
+            :disabled="busy || loading"
+            @click="toggleGateway"
+          >
+            <component :is="gateway.enabled ? Square : Play" :size="13" />
+            {{ gateway.enabled ? "停止网关" : "启动网关" }}
+          </button>
+        </div>
+      </section>
+
+      <!-- 局域网模式提醒横幅 -->
+      <div
+        v-if="isLanMode && gateway.enabled && !lanBannerDismissed"
+        class="lan-alert-banner"
+      >
+        <div class="banner-content">
+          <Info :size="15" class="banner-icon" />
+          <span
+            >局域网访问已开启，局域网内设备可通过本机IP:{{
+              draft.port
+            }}
+            访问该服务。</span
+          >
+        </div>
+        <button
+          class="banner-close-btn"
+          type="button"
+          title="关闭提醒"
+          @click="lanBannerDismissed = true"
+        >
+          <X :size="14" />
+        </button>
+      </div>
+
+      <!-- 协议与模型集成面板 -->
       <GatewayConnectionPanel
         :base-url="gateway.baseUrl || ''"
         :enabled="gateway.enabled === true"
@@ -173,7 +149,7 @@
     </section>
 
     <!-- 调用 Token -->
-    <section v-else-if="activeTab === 'tokens'" class="gateway-content">
+    <section v-else-if="activeTab === 'tokens'" class="gateway-content tokens-view">
       <section class="gateway-panel">
         <div class="panel-heading">
           <div class="heading-title-group">
@@ -430,7 +406,7 @@
     </section>
 
     <!-- 用量与追踪 -->
-    <section v-else class="gateway-content">
+    <section v-else class="gateway-content usage-logs-view">
       <div class="usage-top-row">
         <!-- 用量概览 -->
         <section class="gateway-panel usage-overview-panel">
@@ -446,34 +422,84 @@
                 <option value="30d">近 30 天</option>
                 <option value="all">全部时间</option>
               </select>
-              <span class="date-range-badge">{{ formattedDateRange }}</span>
+              <span class="date-range-badge">
+                <Calendar :size="12" class="calendar-icon" />
+                {{ formattedDateRange }}
+              </span>
             </div>
           </div>
 
           <div class="overview-stats-grid">
-            <div class="overview-tile">
-              <span class="tile-label">总请求</span>
-              <span class="tile-value">{{
-                formatNumber(overviewStats.totalRequests)
-              }}</span>
+            <div class="overview-tile requests">
+              <div class="tile-icon-box requests">
+                <Layers :size="18" />
+              </div>
+              <div class="tile-meta-box">
+                <span class="tile-label">总请求</span>
+                <span class="tile-value">{{
+                  formatNumber(overviewStats.totalRequests)
+                }}</span>
+                <span
+                  class="tile-trend"
+                  :class="statTrends.totalRequests.isPositive ? 'positive' : 'negative'"
+                >
+                  {{ statTrends.totalRequests.text }}
+                </span>
+              </div>
             </div>
+
             <div class="overview-tile success">
-              <span class="tile-label">成功</span>
-              <span class="tile-value">{{
-                formatNumber(overviewStats.successRequests)
-              }}</span>
+              <div class="tile-icon-box success">
+                <CheckCircle2 :size="18" />
+              </div>
+              <div class="tile-meta-box">
+                <span class="tile-label">成功</span>
+                <span class="tile-value">{{
+                  formatNumber(overviewStats.successRequests)
+                }}</span>
+                <span
+                  class="tile-trend"
+                  :class="statTrends.successRequests.isPositive ? 'positive' : 'negative'"
+                >
+                  {{ statTrends.successRequests.text }}
+                </span>
+              </div>
             </div>
+
             <div class="overview-tile failure">
-              <span class="tile-label">失败</span>
-              <span class="tile-value">{{
-                formatNumber(overviewStats.failureRequests)
-              }}</span>
+              <div class="tile-icon-box failure">
+                <XCircle :size="18" />
+              </div>
+              <div class="tile-meta-box">
+                <span class="tile-label">失败</span>
+                <span class="tile-value">{{
+                  formatNumber(overviewStats.failureRequests)
+                }}</span>
+                <span
+                  class="tile-trend"
+                  :class="statTrends.failureRequests.isPositive ? 'positive' : 'negative'"
+                >
+                  {{ statTrends.failureRequests.text }}
+                </span>
+              </div>
             </div>
+
             <div class="overview-tile token">
-              <span class="tile-label">总 Token</span>
-              <span class="tile-value">{{
-                formatNumber(overviewStats.totalTokens)
-              }}</span>
+              <div class="tile-icon-box token">
+                <Database :size="18" />
+              </div>
+              <div class="tile-meta-box">
+                <span class="tile-label">总 Token</span>
+                <span class="tile-value">{{
+                  formatNumber(overviewStats.totalTokens)
+                }}</span>
+                <span
+                  class="tile-trend"
+                  :class="statTrends.totalTokens.isPositive ? 'positive' : 'negative'"
+                >
+                  {{ statTrends.totalTokens.text }}
+                </span>
+              </div>
             </div>
           </div>
         </section>
@@ -528,7 +554,7 @@
       </div>
 
       <!-- 最近请求 -->
-      <section class="gateway-panel">
+      <section class="gateway-panel recent-requests-panel">
         <div class="panel-heading">
           <div class="heading-title-group">
             <ListFilter :size="16" class="heading-icon" />
@@ -540,9 +566,31 @@
               <input
                 v-model.trim="logSearch"
                 class="log-search-input"
-                placeholder="搜索请求 ID、IP、模型或调用方"
+                placeholder="搜索请求 ID、IP、模型或调用方..."
               />
+              <button
+                v-if="logSearch"
+                type="button"
+                class="clear-input-btn"
+                title="清除搜索"
+                @click="logSearch = ''"
+              >
+                <X :size="12" />
+              </button>
             </div>
+            <button
+              class="tool-button filter-toggle-btn"
+              :class="{ active: showLogFilters || activeLogFilterCount > 0 }"
+              type="button"
+              title="切换筛选面板"
+              @click="showLogFilters = !showLogFilters"
+            >
+              <Filter :size="13" />
+              筛选
+              <span v-if="activeLogFilterCount > 0" class="filter-badge">
+                {{ activeLogFilterCount }}
+              </span>
+            </button>
             <button
               class="tool-button"
               type="button"
@@ -554,12 +602,100 @@
           </div>
         </div>
 
+        <!-- 筛选下拉面板 -->
+        <div v-if="showLogFilters" class="logs-filter-drawer">
+          <div class="filter-drawer-row">
+            <div class="filter-drawer-group">
+              <span class="drawer-label">请求状态：</span>
+              <div class="drawer-options">
+                <button
+                  type="button"
+                  class="drawer-option-btn"
+                  :class="{ active: logFilterStatus === 'all' }"
+                  @click="logFilterStatus = 'all'"
+                >
+                  全部
+                </button>
+                <button
+                  type="button"
+                  class="drawer-option-btn success"
+                  :class="{ active: logFilterStatus === 'success' }"
+                  @click="logFilterStatus = 'success'"
+                >
+                  成功
+                </button>
+                <button
+                  type="button"
+                  class="drawer-option-btn failure"
+                  :class="{ active: logFilterStatus === 'failed' }"
+                  @click="logFilterStatus = 'failed'"
+                >
+                  失败
+                </button>
+              </div>
+            </div>
+            <div class="filter-drawer-group">
+              <span class="drawer-label">协议类型：</span>
+              <div class="drawer-options">
+                <button
+                  type="button"
+                  class="drawer-option-btn"
+                  :class="{ active: logFilterProtocol === 'all' }"
+                  @click="logFilterProtocol = 'all'"
+                >
+                  全部
+                </button>
+                <button
+                  type="button"
+                  class="drawer-option-btn"
+                  :class="{ active: logFilterProtocol === 'chat' }"
+                  @click="logFilterProtocol = 'chat'"
+                >
+                  chat
+                </button>
+                <button
+                  type="button"
+                  class="drawer-option-btn"
+                  :class="{ active: logFilterProtocol === 'openai' }"
+                  @click="logFilterProtocol = 'openai'"
+                >
+                  openai
+                </button>
+                <button
+                  type="button"
+                  class="drawer-option-btn"
+                  :class="{ active: logFilterProtocol === 'anthropic' }"
+                  @click="logFilterProtocol = 'anthropic'"
+                >
+                  anthropic
+                </button>
+                <button
+                  type="button"
+                  class="drawer-option-btn"
+                  :class="{ active: logFilterProtocol === 'gemini' }"
+                  @click="logFilterProtocol = 'gemini'"
+                >
+                  gemini
+                </button>
+              </div>
+            </div>
+            <button
+              v-if="activeLogFilterCount > 0"
+              type="button"
+              class="drawer-reset-btn"
+              @click="resetLogFilters"
+            >
+              <RotateCcw :size="12" /> 重置筛选
+            </button>
+          </div>
+        </div>
+
         <div v-if="filteredLogs.length > 0" class="request-table-wrap">
           <table class="request-table">
             <thead class="request-head">
               <tr>
                 <th>时间 / 调用方</th>
-                <th>请求 IP</th>
+                <th>来源 IP</th>
                 <th>协议</th>
                 <th>请求 → 路由 → 上游报告</th>
                 <th>最终目标</th>
@@ -583,7 +719,9 @@
                   }}</span>
                 </td>
                 <td>
-                  <span class="log-time">{{ log.clientIp || "未记录" }}</span>
+                  <span class="log-ip" :class="{ muted: !log.clientIp }">{{
+                    log.clientIp || "未记录"
+                  }}</span>
                 </td>
                 <td>
                   <span class="protocol-tag" :class="log.protocol">{{
@@ -603,11 +741,7 @@
                       class="upstream-report"
                       :class="{ ok: log.ok, error: !log.ok }"
                     >
-                      {{
-                        log.ok
-                          ? `${log.statusCode || 200} OK`
-                          : `${log.statusCode || 500} Error`
-                      }}
+                      {{ log.statusCode || (log.ok ? 200 : 500) }}
                     </span>
                   </div>
                 </td>
@@ -625,16 +759,20 @@
                   <span v-else class="cell-muted">未报告</span>
                 </td>
                 <td>
-                  <span
-                    class="request-status-badge"
-                    :class="{ failed: !log.ok }"
-                  >
-                    {{ log.ok ? "成功" : "失败" }} · {{ log.statusCode }}
-                  </span>
-                  <span class="cell-detail">{{ log.latencyMs || 0 }} ms</span>
-                  <span v-if="log.errorMessage" class="cell-error">
-                    {{ log.errorMessage }}
-                  </span>
+                  <div class="status-cell-wrap" :class="{ failed: !log.ok }">
+                    <span class="status-text">
+                      <component
+                        :is="log.ok ? CheckCircle2 : XCircle"
+                        :size="13"
+                        class="status-icon"
+                      />
+                      {{ log.ok ? "成功" : "失败" }} {{ log.statusCode }}
+                    </span>
+                    <span class="cell-detail">{{ log.latencyMs || 0 }} ms</span>
+                    <span v-if="log.errorMessage" class="cell-error">
+                      {{ log.errorMessage }}
+                    </span>
+                  </div>
                 </td>
                 <td>
                   <div class="table-actions">
@@ -691,41 +829,138 @@
       :description="viewingRequest.id"
       @close="closeRequestDetail"
     >
-      <div class="request-detail-view">
-        <div class="request-detail-meta">
-          <span class="request-detail-meta-item">
-            请求 IP：{{ viewingRequest.clientIp || "未记录" }}
-          </span>
-          <span class="request-detail-meta-item">
-            入口：{{ viewingRequest.requestMethod || "POST" }}
-            {{ viewingRequest.requestPath || "未记录" }}
-          </span>
-          <span class="request-detail-meta-item">
-            协议：{{ viewingRequest.protocol || "—" }} →
-            {{ viewingRequest.upstreamProtocol || "未记录" }}
-          </span>
-          <span class="request-detail-meta-item">
-            Provider：{{ viewingRequest.providerName || "未路由" }}
-          </span>
-          <span class="request-detail-meta-item">
-            模型：{{ viewingRequest.requestedModel || "—" }} →
-            {{ viewingRequest.physicalModel || "—" }}
-          </span>
-          <span class="request-detail-meta-item">
-            上游报告：{{ viewingRequest.upstreamModel || "未报告" }}
-          </span>
-          <span class="request-detail-meta-item">
-            状态：{{ viewingRequest.statusCode || "—" }} ·
-            {{ viewingRequest.latencyMs || 0 }} ms
-          </span>
-          <span class="request-detail-meta-item">
-            上游状态：{{ viewingRequest.upstreamStatusCode || "未记录" }} ·
-            {{ viewingRequest.upstreamPath || "—" }}
-          </span>
+      <template #header>
+        <div class="modal-header-left">
+          <div class="modal-icon-badge">
+            <Layers :size="20" />
+          </div>
+          <div class="modal-header-titles">
+            <h2 class="modal-main-title">请求详情</h2>
+            <p class="modal-id-subtitle">{{ viewingRequest.id }}</p>
+          </div>
         </div>
+        <button
+          class="modal-close-icon-btn"
+          type="button"
+          title="关闭"
+          @click="closeRequestDetail"
+        >
+          <X :size="16" />
+        </button>
+      </template>
+
+      <div class="request-detail-view">
+        <!-- 顶部两列元数据卡片 -->
+        <div class="request-detail-meta-card">
+          <div class="meta-column">
+            <div class="meta-row">
+              <span class="meta-label-group">
+                <MapPin :size="13" class="meta-icon" />
+                <span class="meta-label">请求 IP</span>
+              </span>
+              <span class="meta-value">{{ viewingRequest.clientIp || "未记录" }}</span>
+            </div>
+            <div class="meta-row">
+              <span class="meta-label-group">
+                <LogIn :size="13" class="meta-icon" />
+                <span class="meta-label">入口</span>
+              </span>
+              <span class="meta-value">
+                <strong class="method-tag">{{ viewingRequest.requestMethod || "POST" }}</strong>
+                {{ viewingRequest.requestPath || "未记录" }}
+              </span>
+            </div>
+            <div class="meta-row">
+              <span class="meta-label-group">
+                <GitFork :size="13" class="meta-icon" />
+                <span class="meta-label">协议</span>
+              </span>
+              <span class="meta-value">
+                {{ viewingRequest.protocol || "—" }}
+                <span class="meta-arrow">→</span>
+                {{ viewingRequest.upstreamProtocol || "未记录" }}
+              </span>
+            </div>
+            <div class="meta-row">
+              <span class="meta-label-group">
+                <Layers :size="13" class="meta-icon" />
+                <span class="meta-label">Provider</span>
+              </span>
+              <span class="meta-value">
+                <span class="meta-provider-pill">
+                  {{ viewingRequest.providerName || "未路由" }}
+                </span>
+              </span>
+            </div>
+          </div>
+
+          <div class="meta-column">
+            <div class="meta-row">
+              <span class="meta-label-group">
+                <Box :size="13" class="meta-icon" />
+                <span class="meta-label">模型</span>
+              </span>
+              <span class="meta-value">
+                {{ viewingRequest.requestedModel || "—" }}
+                <span class="meta-arrow">→</span>
+                {{ viewingRequest.physicalModel || "—" }}
+              </span>
+            </div>
+            <div class="meta-row">
+              <span class="meta-label-group">
+                <component
+                  :is="viewingRequest.ok ? CheckCircle2 : AlertCircle"
+                  :size="13"
+                  class="meta-icon"
+                  :class="viewingRequest.ok ? 'ok-color' : 'err-color'"
+                />
+                <span class="meta-label">状态</span>
+              </span>
+              <span class="meta-value">
+                <span
+                  class="meta-status-pill"
+                  :class="viewingRequest.ok ? 'ok' : 'err'"
+                >
+                  {{ viewingRequest.statusCode || "—" }}
+                </span>
+              </span>
+            </div>
+            <div class="meta-row">
+              <span class="meta-label-group">
+                <Clock :size="13" class="meta-icon" />
+                <span class="meta-label">耗时</span>
+              </span>
+              <span class="meta-value">{{ viewingRequest.latencyMs || 0 }} ms</span>
+            </div>
+            <div class="meta-row">
+              <span class="meta-label-group">
+                <ArrowUpRight :size="13" class="meta-icon" />
+                <span class="meta-label">上游状态</span>
+              </span>
+              <span class="meta-value">
+                <span
+                  class="meta-status-pill"
+                  :class="upstreamStatusClass"
+                >
+                  {{ viewingRequest.upstreamStatusCode || "未记录" }}
+                </span>
+              </span>
+            </div>
+            <div class="meta-row">
+              <span class="meta-label-group">
+                <Link2 :size="13" class="meta-icon" />
+                <span class="meta-label">路径</span>
+              </span>
+              <span class="meta-value">{{ viewingRequest.upstreamPath || "—" }}</span>
+            </div>
+          </div>
+        </div>
+
         <p v-if="viewingRequest.errorMessage" class="request-detail-error">
+          <AlertCircle :size="14" class="error-icon" />
           {{ viewingRequest.errorMessage }}
         </p>
+
         <nav class="request-detail-tabs" aria-label="请求内容">
           <button
             v-for="section in requestDetailSections"
@@ -738,8 +973,9 @@
             {{ section.label }}
           </button>
         </nav>
+
         <p v-if="requestDetailLoading" class="request-detail-hint">
-          正在读取请求内容…
+          <RefreshCw :size="14" class="spin" /> 正在读取请求内容…
         </p>
         <p v-else-if="requestDetailError" class="request-detail-error">
           {{ requestDetailError }}
@@ -752,6 +988,7 @@
             此记录未保存该项内容。旧记录无法补回，尚未请求上游时也没有上游内容。
           </p>
         </template>
+
         <div class="request-detail-actions">
           <button
             class="tool-button"
@@ -765,7 +1002,11 @@
           >
             <Copy :size="13" /> 复制当前内容
           </button>
-          <button class="tool-button" type="button" @click="closeRequestDetail">
+          <button
+            class="tool-button primary"
+            type="button"
+            @click="closeRequestDetail"
+          >
             关闭
           </button>
         </div>
@@ -1146,16 +1387,28 @@
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from "vue"
 import {
+  AlertCircle,
+  ArrowUpRight,
   BarChart3,
+  Box,
+  Calendar,
+  CheckCircle2,
+  Clock,
   Code2,
   Copy,
+  Database,
   Download,
   Eye,
   EyeOff,
+  Filter,
+  GitFork,
   Info,
   KeyRound,
   Layers,
+  Link2,
   ListFilter,
+  LogIn,
+  MapPin,
   Play,
   Plus,
   RefreshCw,
@@ -1167,19 +1420,21 @@ import {
   SlidersHorizontal,
   Square,
   Trash2,
-  Waypoints,
-  X
+  X,
+  XCircle
 } from "lucide-vue-next"
 import BaseModal from "@/components/BaseModal.vue"
 import GatewayConnectionPanel from "@/features/tools/multiProtocolGateway/components/GatewayConnectionPanel.vue"
 import { multiProtocolGatewayApi } from "@/api"
-import { formatDateTime, formatTokenCount } from "@/utils/formatters"
+import { formatDateTime } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"
 
 const props = defineProps({
   providers: { type: Array, default: () => [] },
   codexAccounts: { type: Array, default: () => [] }
 })
+
+const emit = defineEmits(["status-change"])
 
 const tabs = [
   { id: "connections", label: "接入地址", icon: Code2 },
@@ -1198,6 +1453,27 @@ let tokenPreviewVersion = 0
 const deletingToken = ref(null)
 const viewingToken = ref(null)
 const lanBannerDismissed = ref(false)
+
+watch(
+  [() => gateway.value.enabled, loading, busy],
+  () => {
+    if (typeof emit === "function") {
+      emit("status-change", {
+        enabled: Boolean(gateway.value.enabled),
+        loading: loading.value,
+        busy: busy.value
+      })
+    }
+  },
+  { immediate: true }
+)
+
+defineExpose({
+  load,
+  loading,
+  busy,
+  gateway
+})
 
 const draft = reactive({
   host: "127.0.0.1",
@@ -1229,6 +1505,10 @@ const pageSize = 10
 const logTimeFilter = ref("7d")
 const logSearch = ref("")
 const logPage = ref(1)
+const showLogFilters = ref(false)
+const logFilterStatus = ref("all")
+const logFilterProtocol = ref("all")
+
 const viewingRequest = ref(null)
 const requestDetailLoading = ref(false)
 const requestDetailError = ref("")
@@ -1240,6 +1520,7 @@ const requestDetailSections = [
   { id: "responseBody", label: "响应内容" }
 ]
 let requestDetailVersion = 0
+
 const requestDetailBody = computed(() => {
   const value = viewingRequest.value?.[requestDetailTab.value]
   if (typeof value !== "string") return null
@@ -1248,6 +1529,13 @@ const requestDetailBody = computed(() => {
   } catch {
     return value
   }
+})
+
+const upstreamStatusClass = computed(() => {
+  const code = Number(viewingRequest.value?.upstreamStatusCode)
+  if (!code) return "muted"
+  if (code >= 200 && code < 300) return "ok"
+  return "err"
 })
 
 const defaultBaseUrl = computed(() => {
@@ -1446,6 +1734,99 @@ const overviewStats = computed(() => {
   }
 })
 
+const previousPeriodLogs = computed(() => {
+  const logs = gateway.value.logs || []
+  const now = Date.now()
+  let duration = 7 * 24 * 3600 * 1000
+  if (logTimeFilter.value === "24h") duration = 24 * 3600 * 1000
+  else if (logTimeFilter.value === "30d") duration = 30 * 24 * 3600 * 1000
+  else if (logTimeFilter.value === "all") return []
+
+  const periodEnd = now - duration
+  const periodStart = now - 2 * duration
+  return logs.filter((l) => {
+    const time = l.createdAt || 0
+    return time >= periodStart && time < periodEnd
+  })
+})
+
+const previousOverviewStats = computed(() => {
+  let total = 0
+  let success = 0
+  let failure = 0
+  let inTokens = 0
+  let outTokens = 0
+  for (const log of previousPeriodLogs.value) {
+    total++
+    if (log.ok) success++
+    else failure++
+    inTokens += log.inputTokens || 0
+    outTokens += log.outputTokens || 0
+  }
+  return {
+    totalRequests: total,
+    successRequests: success,
+    failureRequests: failure,
+    totalTokens: inTokens + outTokens,
+    inputTokens: inTokens,
+    outputTokens: outTokens
+  }
+})
+
+const trendPeriodLabel = computed(() => {
+  if (logTimeFilter.value === "24h") return "上24小时"
+  if (logTimeFilter.value === "30d") return "上30天"
+  if (logTimeFilter.value === "all") return "上一周期"
+  return "上7天"
+})
+
+const statTrends = computed(() => {
+  const cur = overviewStats.value
+  const prev = previousOverviewStats.value
+  const label = trendPeriodLabel.value
+
+  function formatTrendMetric(curVal, prevVal, isFailure = false) {
+    if (prevVal === 0 && curVal === 0) {
+      return {
+        text: `持平 较${label} (0)`,
+        isPositive: true
+      }
+    }
+    if (prevVal === 0 && curVal > 0) {
+      return {
+        text: `▲ +100% 较${label} (0)`,
+        isPositive: !isFailure
+      }
+    }
+    const diff = curVal - prevVal
+    const pct = (Math.abs(diff) / prevVal) * 100
+    const pctStr = pct % 1 === 0 ? pct.toFixed(0) : pct.toFixed(1)
+    if (diff > 0) {
+      return {
+        text: `▲ +${pctStr}% 较${label} (${formatNumber(prevVal)})`,
+        isPositive: !isFailure
+      }
+    } else if (diff < 0) {
+      return {
+        text: `▼ -${pctStr}% 较${label} (${formatNumber(prevVal)})`,
+        isPositive: isFailure
+      }
+    } else {
+      return {
+        text: `— 0% 较${label} (${formatNumber(prevVal)})`,
+        isPositive: true
+      }
+    }
+  }
+
+  return {
+    totalRequests: formatTrendMetric(cur.totalRequests, prev.totalRequests, false),
+    successRequests: formatTrendMetric(cur.successRequests, prev.successRequests, false),
+    failureRequests: formatTrendMetric(cur.failureRequests, prev.failureRequests, true),
+    totalTokens: formatTrendMetric(cur.totalTokens, prev.totalTokens, false)
+  }
+})
+
 const formattedDateRange = computed(() => {
   const now = new Date()
   const endStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`
@@ -1501,8 +1882,29 @@ const usageAttributionRows = computed(() => {
   return Array.from(map.values())
 })
 
+const activeLogFilterCount = computed(() => {
+  let count = 0
+  if (logFilterStatus.value !== "all") count++
+  if (logFilterProtocol.value !== "all") count++
+  return count
+})
+
+function resetLogFilters() {
+  logFilterStatus.value = "all"
+  logFilterProtocol.value = "all"
+  logSearch.value = ""
+}
+
 const filteredLogs = computed(() => {
   let list = gateway.value.logs || []
+  if (logFilterStatus.value === "success") {
+    list = list.filter((l) => l.ok)
+  } else if (logFilterStatus.value === "failed") {
+    list = list.filter((l) => !l.ok)
+  }
+  if (logFilterProtocol.value !== "all") {
+    list = list.filter((l) => (l.protocol || "chat") === logFilterProtocol.value)
+  }
   if (logSearch.value) {
     const q = logSearch.value.toLowerCase()
     list = list.filter(
@@ -1803,9 +2205,9 @@ onMounted(load)
   flex: 1;
   min-height: 0;
   flex-direction: column;
-  gap: 16px;
+  gap: 14px;
   overflow: auto;
-  padding: 4px 4px 24px;
+  padding: 4px 6px 24px;
   color: var(--color-text);
 
   .spin {
@@ -1869,58 +2271,61 @@ onMounted(load)
     }
   }
 
-  .icon-action-btn {
-    display: inline-flex;
+  /* 管理页签导航 */
+  .gateway-tabs {
+    display: flex;
     align-items: center;
-    justify-content: center;
-    width: 32px;
-    height: 32px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: var(--color-panel);
-    color: var(--color-text-muted);
-    cursor: pointer;
+    gap: 6px;
+    padding-bottom: 2px;
 
-    &:hover:not(:disabled) {
-      color: #7c3aed;
-      border-color: #7c3aed;
+    .tab-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 7px 14px;
+      border: 1px solid transparent;
+      border-radius: 8px;
+      background: transparent;
+      color: var(--color-text-muted);
+      cursor: pointer;
+      font-size: 13px;
+      transition: all 0.15s;
+
+      .tab-icon {
+        flex-shrink: 0;
+      }
+
+      &:hover:not(.active) {
+        color: var(--color-text);
+        background: var(--color-panel-soft);
+      }
+
+      &.active {
+        color: #7c3aed;
+        background: rgba(124, 58, 237, 0.09);
+        border-color: rgba(124, 58, 237, 0.2);
+      }
     }
   }
 
-  /* 顶部标题栏 */
-  .gateway-top-bar {
+  .gateway-error {
+    margin: 0;
+    padding: 10px 14px;
+    border-radius: 8px;
+    border: 1px solid rgba(239, 68, 68, 0.3);
+    color: #ef4444;
+    background: rgba(239, 68, 68, 0.06);
+    font-size: 12px;
+  }
+
+  .gateway-content {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 16px;
+    flex-direction: column;
+    gap: 14px;
+    min-height: 0;
 
-    .top-title-group {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-
-      .top-icon-box {
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        width: 38px;
-        height: 38px;
-        border-radius: 10px;
-        color: #7c3aed;
-        background: rgba(124, 58, 237, 0.1);
-      }
-      .top-text-box {
-        .top-title {
-          margin: 0 0 3px;
-          font-size: 17px;
-          color: var(--color-text);
-        }
-        .top-subtitle {
-          margin: 0;
-          color: var(--color-text-muted);
-          font-size: 12px;
-        }
-      }
+    &.connections-view {
+      gap: 16px;
     }
   }
 
@@ -1930,7 +2335,7 @@ onMounted(load)
     justify-content: space-between;
     align-items: center;
     gap: 20px;
-    padding: 18px 20px;
+    padding: 16px 20px;
     border: 1px solid var(--color-line);
     border-radius: 12px;
     background: var(--color-panel);
@@ -1939,6 +2344,7 @@ onMounted(load)
       display: flex;
       align-items: center;
       gap: 14px;
+      min-width: 0;
 
       .service-badge-icon {
         display: flex;
@@ -1948,34 +2354,45 @@ onMounted(load)
         height: 44px;
         border-radius: 10px;
         color: #7c3aed;
-        background: rgba(124, 58, 237, 0.1);
+        background: rgba(124, 58, 237, 0.08);
+        border: 1px solid rgba(124, 58, 237, 0.15);
+        flex-shrink: 0;
       }
+
       .service-meta {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
+        min-width: 0;
+
         .service-title-line {
           display: flex;
           align-items: center;
           gap: 10px;
-          margin-bottom: 4px;
 
           .service-name {
             margin: 0;
+            font-size: 15px;
             color: var(--color-text);
-            font-size: 16px;
           }
+
           .service-status-pill {
             display: inline-flex;
             align-items: center;
             gap: 5px;
             padding: 2px 8px;
-            border: 1px solid var(--color-line);
-            border-radius: 20px;
+            border-radius: 12px;
             color: var(--color-text-muted);
+            background: var(--color-panel-soft);
             font-size: 11px;
 
             &.active {
               color: #10b981;
-              border-color: rgba(16, 185, 129, 0.25);
               background: rgba(16, 185, 129, 0.08);
+
+              .status-dot {
+                background: #10b981;
+              }
             }
             .status-dot {
               width: 6px;
@@ -1985,10 +2402,12 @@ onMounted(load)
             }
           }
         }
+
         .service-url {
           margin: 0;
           color: var(--color-text-muted);
           font-size: 12px;
+          font-family: Consolas, monospace;
         }
       }
     }
@@ -1996,13 +2415,14 @@ onMounted(load)
     .service-right {
       display: flex;
       align-items: center;
-      gap: 14px;
+      gap: 10px;
+      flex-wrap: wrap;
 
       .switch-item {
         display: flex;
         align-items: center;
         gap: 8px;
-        cursor: pointer;
+        margin-right: 4px;
 
         .switch-label {
           display: inline-flex;
@@ -2010,684 +2430,858 @@ onMounted(load)
           gap: 4px;
           color: var(--color-text-muted);
           font-size: 12px;
-          white-space: nowrap;
+          cursor: help;
 
           .info-icon {
-            color: var(--color-text-muted);
+            opacity: 0.7;
           }
         }
 
         .switch-control {
           position: relative;
-          display: inline-block;
-          width: 36px;
+          width: 38px;
           height: 20px;
           padding: 0;
-          border: 0;
+          border: 1px solid var(--color-line);
           border-radius: 10px;
-          background: var(--color-line);
+          background: var(--color-panel-soft);
           cursor: pointer;
-          transition: background 0.2s;
-
-          &.checked {
-            background: #7c3aed;
-
-            .switch-thumb {
-              transform: translateX(16px);
-            }
-          }
-          &:disabled {
-            opacity: 0.5;
-            cursor: wait;
-          }
+          transition:
+            background 0.2s,
+            border-color 0.2s;
 
           .switch-thumb {
             position: absolute;
             top: 2px;
             left: 2px;
-            width: 16px;
-            height: 16px;
+            width: 14px;
+            height: 14px;
             border-radius: 50%;
             background: #fff;
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.15);
             transition: transform 0.2s;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+          }
+
+          &.checked {
+            background: #7c3aed;
+            border-color: #7c3aed;
+
+            .switch-thumb {
+              transform: translateX(18px);
+            }
+          }
+
+          &:disabled {
+            opacity: 0.5;
+            cursor: wait;
           }
         }
       }
     }
   }
 
-  /* 局域网提醒条 */
   .lan-alert-banner {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 12px;
-    padding: 10px 16px;
-    border: 1px solid rgba(124, 58, 237, 0.25);
+    padding: 10px 14px;
+    border: 1px solid rgba(124, 58, 237, 0.2);
     border-radius: 8px;
-    background: rgba(124, 58, 237, 0.06);
-    color: #7c3aed;
+    background: rgba(124, 58, 237, 0.05);
+    color: var(--color-text);
     font-size: 12px;
 
     .banner-content {
       display: flex;
       align-items: center;
       gap: 8px;
-    }
-    .banner-close-btn {
-      display: flex;
-      padding: 2px;
-      border: 0;
-      border-radius: 4px;
-      color: #7c3aed;
-      background: transparent;
-      cursor: pointer;
-      &:hover {
-        background: rgba(124, 58, 237, 0.15);
+
+      .banner-icon {
+        color: #7c3aed;
+        flex-shrink: 0;
       }
     }
-  }
 
-  .gateway-error {
-    margin: 0;
-    color: #ef4444;
-    font-size: 12px;
-  }
-
-  /* 页签导航 */
-  .gateway-tabs {
-    display: flex;
-    gap: 4px;
-    border-bottom: 1px solid var(--color-line);
-
-    .tab-button {
-      display: inline-flex;
+    .banner-close-btn {
+      display: flex;
       align-items: center;
-      gap: 7px;
-      padding: 10px 16px;
+      justify-content: center;
+      width: 20px;
+      height: 20px;
       border: 0;
-      border-bottom: 2px solid transparent;
       background: transparent;
       color: var(--color-text-muted);
       cursor: pointer;
-      font-size: 13px;
-      transition:
-        color 0.15s,
-        border-color 0.15s;
+      border-radius: 4px;
 
       &:hover {
         color: var(--color-text);
       }
-      &.active {
-        color: #7c3aed;
-        border-bottom-color: #7c3aed;
+    }
+  }
+
+  /* 通用面板容器 */
+  .gateway-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    padding: 16px 20px;
+    border: 1px solid var(--color-line);
+    border-radius: 12px;
+    background: var(--color-panel);
+
+    .panel-heading {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 12px;
+
+      .heading-title-group {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+
+        .heading-icon {
+          color: #7c3aed;
+          flex-shrink: 0;
+        }
+        .panel-title {
+          margin: 0;
+          font-size: 14px;
+          color: var(--color-text);
+        }
+      }
+
+      .panel-detail {
+        color: var(--color-text-muted);
+        font-size: 11px;
       }
     }
   }
 
-  /* 页签主体内容区 */
-  .gateway-content {
+  /* 用量与追踪页签: 顶部概览与归属两栏布局 */
+  .usage-top-row {
     display: flex;
-    flex-direction: column;
     gap: 16px;
+    align-items: stretch;
 
-    .gateway-panel {
-      padding: 18px 20px;
-      border: 1px solid var(--color-line);
-      border-radius: 10px;
-      background: var(--color-panel);
+    .usage-overview-panel {
+      flex: 0 0 45%;
+      min-width: 360px;
 
-      .panel-heading {
+      .overview-controls {
         display: flex;
         align-items: center;
-        justify-content: space-between;
-        gap: 16px;
-        margin-bottom: 16px;
+        gap: 8px;
 
-        .heading-title-group {
+        .overview-period-select {
+          padding: 5px 9px;
+          border: 1px solid var(--color-line);
+          border-radius: 6px;
+          color: var(--color-text);
+          background: var(--color-panel-soft);
+          font-size: 11px;
+          outline: none;
+          cursor: pointer;
+
+          &:focus {
+            border-color: #7c3aed;
+          }
+        }
+        .date-range-badge {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          padding: 5px 9px;
+          border: 1px solid var(--color-line);
+          border-radius: 6px;
+          color: var(--color-text-muted);
+          background: var(--color-panel-soft);
+          font-size: 11px;
+          white-space: nowrap;
+
+          .calendar-icon {
+            opacity: 0.8;
+          }
+        }
+      }
+
+      .overview-stats-grid {
+        display: grid;
+        grid-template-columns: repeat(2, 1fr);
+        gap: 12px;
+        margin-top: 4px;
+
+        .overview-tile {
           display: flex;
           align-items: center;
-          gap: 8px;
+          gap: 12px;
+          padding: 13px 15px;
+          border: 1px solid var(--color-line);
+          border-radius: 10px;
+          background: var(--color-panel-soft);
+          box-sizing: border-box;
+          transition: all 0.15s;
 
-          .heading-icon {
+          &:hover {
+            border-color: var(--color-line-strong);
+          }
+
+          .tile-icon-box {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 38px;
+            height: 38px;
+            border-radius: 50%;
+            flex-shrink: 0;
+
+            &.requests {
+              color: #7c3aed;
+              background: rgba(124, 58, 237, 0.1);
+            }
+            &.success {
+              color: #10b981;
+              background: rgba(16, 185, 129, 0.1);
+            }
+            &.failure {
+              color: #ef4444;
+              background: rgba(239, 68, 68, 0.1);
+            }
+            &.token {
+              color: #7c3aed;
+              background: rgba(124, 58, 237, 0.1);
+            }
+          }
+
+          .tile-meta-box {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            min-width: 0;
+            flex: 1;
+
+            .tile-label {
+              color: var(--color-text-muted);
+              font-size: 11px;
+            }
+
+            .tile-value {
+              color: var(--color-text);
+              font-size: 20px;
+              line-height: 1.2;
+            }
+
+            .tile-trend {
+              font-size: 10px;
+              white-space: nowrap;
+              margin-top: 2px;
+
+              &.positive {
+                color: #10b981;
+              }
+              &.negative {
+                color: #ef4444;
+              }
+            }
+          }
+
+          &.success .tile-value {
+            color: #10b981;
+          }
+          &.failure .tile-value {
+            color: #ef4444;
+          }
+          &.token .tile-value {
             color: #7c3aed;
           }
-          .panel-title {
-            margin: 0;
-            font-size: 15px;
-            color: var(--color-text);
-          }
-        }
-        .panel-detail {
-          color: var(--color-text-muted);
-          font-size: 12px;
-        }
-        .heading-actions {
-          display: flex;
-          align-items: center;
-          gap: 8px;
         }
       }
+    }
 
-      /* Token 筛选与列表 */
-      .token-filter-bar {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-bottom: 16px;
+    .usage-attribution-panel {
+      flex: 1;
+      min-width: 0;
 
-        .filter-field {
-          position: relative;
-          display: flex;
-          align-items: center;
-          flex: 1;
+      .attribution-table-wrap {
+        max-height: 195px;
+        overflow-y: auto;
 
-          .filter-icon {
-            position: absolute;
-            left: 10px;
-            color: var(--color-text-muted);
-          }
-          .filter-input {
-            width: 100%;
-            padding: 7px 10px 7px 30px;
-            border: 1px solid var(--color-line);
-            border-radius: 6px;
-            color: var(--color-text);
-            background: var(--color-panel-soft);
-            font-size: 12px;
-            outline: none;
-
-            &:focus {
-              border-color: #7c3aed;
-            }
-          }
-          .filter-select {
-            width: 100%;
-            padding: 7px 10px;
-            border: 1px solid var(--color-line);
-            border-radius: 6px;
-            color: var(--color-text);
-            background: var(--color-panel-soft);
-            font-size: 12px;
-            outline: none;
-            cursor: pointer;
-
-            &:focus {
-              border-color: #7c3aed;
-            }
-          }
-        }
-        .filter-actions {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-        }
-      }
-
-      .token-table-wrap {
-        overflow-x: auto;
-
-        .token-table {
+        .attribution-table {
           width: 100%;
           border-collapse: collapse;
 
+          th {
+            padding: 8px 10px;
+            border-bottom: 1px solid var(--color-line);
+            text-align: left;
+            color: var(--color-text-muted);
+            font-size: 11px;
+          }
+          td {
+            padding: 9px 10px;
+            border-bottom: 1px solid var(--color-line);
+            color: var(--color-text);
+            font-size: 11px;
+          }
+
+          .cell-caller {
+            color: var(--color-text);
+          }
+          .target-badge {
+            display: inline-block;
+            padding: 2px 7px;
+            border-radius: 4px;
+            color: #7c3aed;
+            background: rgba(124, 58, 237, 0.08);
+            font-size: 11px;
+          }
+          .model-id-code {
+            color: #2563eb;
+            font-size: 11px;
+            font-family: Consolas, monospace;
+          }
+        }
+      }
+    }
+  }
+
+  /* 最近请求工具栏与表格 */
+  .recent-requests-panel {
+    .logs-toolbar {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+
+      .log-search-wrap {
+        position: relative;
+        display: flex;
+        align-items: center;
+
+        .filter-icon {
+          position: absolute;
+          left: 10px;
+          color: var(--color-text-muted);
+        }
+        .log-search-input {
+          width: 270px;
+          padding: 6px 28px 6px 30px;
+          border: 1px solid var(--color-line);
+          border-radius: 6px;
+          color: var(--color-text);
+          background: var(--color-panel-soft);
+          font-size: 11px;
+          outline: none;
+          transition: border-color 0.15s;
+
+          &:focus {
+            border-color: #7c3aed;
+          }
+        }
+        .clear-input-btn {
+          position: absolute;
+          right: 7px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          width: 16px;
+          height: 16px;
+          padding: 0;
+          border: 0;
+          border-radius: 50%;
+          background: transparent;
+          color: var(--color-text-muted);
+          cursor: pointer;
+
+          &:hover {
+            color: var(--color-text);
+          }
+        }
+      }
+
+      .filter-toggle-btn {
+        position: relative;
+
+        &.active {
+          border-color: #7c3aed;
+          color: #7c3aed;
+          background: rgba(124, 58, 237, 0.08);
+        }
+
+        .filter-badge {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          padding: 0 5px;
+          height: 15px;
+          border-radius: 8px;
+          background: #7c3aed;
+          color: #fff;
+          font-size: 10px;
+          margin-left: 2px;
+        }
+      }
+    }
+
+    /* 筛选抽屉 */
+    .logs-filter-drawer {
+      padding: 10px 14px;
+      border: 1px solid var(--color-line);
+      border-radius: 8px;
+      background: var(--color-panel-soft);
+
+      .filter-drawer-row {
+        display: flex;
+        align-items: center;
+        gap: 24px;
+        flex-wrap: wrap;
+
+        .filter-drawer-group {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+
+          .drawer-label {
+            font-size: 11px;
+            color: var(--color-text-muted);
+          }
+
+          .drawer-options {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+
+            .drawer-option-btn {
+              padding: 3px 9px;
+              border: 1px solid var(--color-line);
+              border-radius: 5px;
+              background: var(--color-panel);
+              color: var(--color-text-muted);
+              font-size: 11px;
+              cursor: pointer;
+              transition: all 0.15s;
+
+              &:hover {
+                color: var(--color-text);
+              }
+
+              &.active {
+                border-color: #7c3aed;
+                color: #7c3aed;
+                background: rgba(124, 58, 237, 0.08);
+
+                &.success {
+                  border-color: #10b981;
+                  color: #10b981;
+                  background: rgba(16, 185, 129, 0.08);
+                }
+                &.failure {
+                  border-color: #ef4444;
+                  color: #ef4444;
+                  background: rgba(239, 68, 68, 0.08);
+                }
+              }
+            }
+          }
+        }
+
+        .drawer-reset-btn {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          padding: 3px 8px;
+          border: 0;
+          background: transparent;
+          color: var(--color-text-muted);
+          font-size: 11px;
+          cursor: pointer;
+
+          &:hover {
+            color: #7c3aed;
+          }
+        }
+      }
+    }
+
+    .request-table-wrap {
+      overflow-x: auto;
+
+      .request-table {
+        width: 100%;
+        border-collapse: collapse;
+
+        .request-head {
           th {
             padding: 9px 10px;
             border-bottom: 1px solid var(--color-line);
             text-align: left;
             color: var(--color-text-muted);
             font-size: 11px;
-
-            &.action-th {
-              text-align: right;
-            }
           }
-          td {
-            padding: 12px 10px;
-            border-bottom: 1px solid var(--color-line);
-            color: var(--color-text);
-            font-size: 12px;
+        }
 
-            &.action-td {
-              text-align: right;
-            }
-          }
-
-          .token-name-col {
-            display: flex;
-            flex-direction: column;
-            gap: 3px;
-
-            .token-name {
-              font-size: 13px;
-            }
-            .token-desc {
-              color: var(--color-text-muted);
+        .request-body {
+          .request-row {
+            td {
+              padding: 10px;
+              border-bottom: 1px solid var(--color-line);
+              vertical-align: top;
               font-size: 11px;
             }
-          }
 
-          .token-stats-col {
-            display: flex;
-            flex-direction: column;
-            gap: 3px;
-
-            .stats-total {
-              display: inline-flex;
-              align-items: center;
-              gap: 4px;
+            .log-time {
               color: var(--color-text);
-              font-size: 11px;
             }
-            .stats-detail {
+            .cell-detail {
+              display: block;
+              margin-top: 3px;
               color: var(--color-text-muted);
               font-size: 10px;
             }
-          }
+            .log-ip {
+              color: var(--color-text);
 
-          .number-text {
-            color: var(--color-text);
-            font-size: 12px;
-          }
-          .time-text {
-            color: var(--color-text-muted);
-            font-size: 11px;
-          }
-
-          .token-status-pill {
-            display: inline-flex;
-            align-items: center;
-            gap: 5px;
-            padding: 2px 7px;
-            border-radius: 12px;
-            color: var(--color-text-muted);
-            background: var(--color-panel-soft);
-            font-size: 11px;
-
-            &.enabled {
-              color: #10b981;
-              background: rgba(16, 185, 129, 0.08);
-
-              .status-dot {
-                background: #10b981;
-              }
-            }
-            .status-dot {
-              width: 5px;
-              height: 5px;
-              border-radius: 50%;
-              background: currentColor;
-            }
-          }
-        }
-      }
-
-      .empty-state-box {
-        display: flex;
-        flex-direction: column;
-        align-items: center;
-        padding: 36px 16px;
-        text-align: center;
-
-        .empty-icon {
-          color: var(--color-text-muted);
-          opacity: 0.5;
-          margin-bottom: 10px;
-        }
-        .empty-title {
-          margin: 0 0 6px;
-          color: var(--color-text);
-          font-size: 14px;
-        }
-        .empty-sub {
-          margin: 0 0 16px;
-          color: var(--color-text-muted);
-          font-size: 12px;
-        }
-      }
-
-      /* 最近请求工具栏与表格 */
-      .logs-toolbar {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-
-        .log-search-wrap {
-          position: relative;
-          display: flex;
-          align-items: center;
-
-          .filter-icon {
-            position: absolute;
-            left: 10px;
-            color: var(--color-text-muted);
-          }
-          .log-search-input {
-            width: 260px;
-            padding: 6px 10px 6px 30px;
-            border: 1px solid var(--color-line);
-            border-radius: 6px;
-            color: var(--color-text);
-            background: var(--color-panel-soft);
-            font-size: 11px;
-            outline: none;
-
-            &:focus {
-              border-color: #7c3aed;
-            }
-          }
-        }
-      }
-
-      .request-table-wrap {
-        overflow-x: auto;
-
-        .request-table {
-          width: 100%;
-          border-collapse: collapse;
-
-          .request-head {
-            th {
-              padding: 9px 10px;
-              border-bottom: 1px solid var(--color-line);
-              text-align: left;
-              color: var(--color-text-muted);
-              font-size: 11px;
-            }
-          }
-
-          .request-body {
-            .request-row {
-              td {
-                padding: 10px;
-                border-bottom: 1px solid var(--color-line);
-                vertical-align: top;
-                font-size: 11px;
-              }
-
-              .log-time {
-                color: var(--color-text);
-              }
-              .cell-detail {
-                display: block;
-                margin-top: 3px;
+              &.muted {
                 color: var(--color-text-muted);
-                font-size: 10px;
               }
-              .protocol-tag {
-                display: inline-block;
-                padding: 2px 6px;
-                border-radius: 4px;
-                font-size: 10px;
+            }
+            .protocol-tag {
+              display: inline-block;
+              padding: 2px 6px;
+              border-radius: 4px;
+              font-size: 10px;
+              color: #7c3aed;
+              background: rgba(124, 58, 237, 0.08);
+
+              &.openai {
+                color: #10b981;
+                background: rgba(16, 185, 129, 0.08);
+              }
+              &.claude {
+                color: #d97706;
+                background: rgba(217, 119, 6, 0.08);
+              }
+              &.gemini {
+                color: #2563eb;
+                background: rgba(37, 99, 235, 0.08);
+              }
+            }
+
+            .routing-chain {
+              display: flex;
+              align-items: center;
+              gap: 5px;
+
+              .cell-model {
                 color: #7c3aed;
-                background: rgba(124, 58, 237, 0.08);
-
-                &.openai {
-                  color: #10b981;
-                  background: rgba(16, 185, 129, 0.08);
-                }
-                &.claude {
-                  color: #d97706;
-                  background: rgba(217, 119, 6, 0.08);
-                }
-                &.gemini {
-                  color: #2563eb;
-                  background: rgba(37, 99, 235, 0.08);
-                }
               }
-
-              .routing-chain {
-                display: flex;
-                align-items: center;
-                gap: 5px;
-
-                .cell-model {
-                  color: #7c3aed;
-                }
-                .cell-arrow {
-                  color: var(--color-text-muted);
-                }
-                .cell-target {
-                  color: var(--color-text);
-                }
-                .upstream-report {
-                  display: inline-block;
-                  padding: 1px 5px;
-                  border-radius: 3px;
-                  font-size: 9px;
-
-                  &.ok {
-                    color: #10b981;
-                    background: rgba(16, 185, 129, 0.1);
-                  }
-                  &.error {
-                    color: #ef4444;
-                    background: rgba(239, 68, 68, 0.1);
-                  }
-                }
-              }
-
-              .log-provider-name {
-                color: var(--color-text);
-              }
-              .token-in-out {
-                color: var(--color-text);
-              }
-              .cell-muted {
+              .cell-arrow {
                 color: var(--color-text-muted);
               }
-
-              .request-status-badge {
+              .cell-target {
+                color: var(--color-text);
+              }
+              .upstream-report {
                 display: inline-block;
+                padding: 1px 5px;
+                border-radius: 3px;
+                font-size: 10px;
+
+                &.ok {
+                  color: #10b981;
+                  background: rgba(16, 185, 129, 0.1);
+                }
+                &.error {
+                  color: #ef4444;
+                  background: rgba(239, 68, 68, 0.1);
+                }
+              }
+            }
+
+            .log-provider-name {
+              color: var(--color-text);
+            }
+            .token-in-out {
+              color: var(--color-text);
+            }
+            .cell-muted {
+              color: var(--color-text-muted);
+            }
+
+            .status-cell-wrap {
+              .status-text {
+                display: inline-flex;
+                align-items: center;
+                gap: 4px;
                 color: #10b981;
 
-                &.failed {
+                .status-icon {
+                  flex-shrink: 0;
+                }
+              }
+
+              &.failed {
+                .status-text {
                   color: #ef4444;
                 }
               }
-              .cell-error {
-                display: block;
-                margin-top: 4px;
-                color: #ef4444;
-                font-size: 10px;
-                overflow-wrap: anywhere;
-              }
             }
-          }
-        }
-      }
 
-      .empty-state {
-        padding: 20px;
-        margin: 0;
-        color: var(--color-text-muted);
-        font-size: 12px;
-        text-align: center;
-      }
-
-      .pagination-footer {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        margin-top: 14px;
-        padding-top: 12px;
-        border-top: 1px solid var(--color-line);
-
-        .total-text {
-          color: var(--color-text-muted);
-          font-size: 11px;
-        }
-        .page-controls {
-          display: flex;
-          align-items: center;
-          gap: 6px;
-
-          .page-size {
-            color: var(--color-text-muted);
-            font-size: 11px;
-            margin-right: 6px;
-          }
-          .page-btn {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 26px;
-            height: 26px;
-            border: 1px solid var(--color-line);
-            border-radius: 5px;
-            color: var(--color-text);
-            background: var(--color-panel);
-            cursor: pointer;
-            font-size: 12px;
-
-            &:disabled {
-              opacity: 0.4;
-              cursor: default;
-            }
-            &:hover:not(:disabled) {
-              border-color: #7c3aed;
-              color: #7c3aed;
-            }
-          }
-          .page-num {
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            width: 26px;
-            height: 26px;
-            border-radius: 5px;
-            font-size: 12px;
-
-            &.active {
-              color: #fff;
-              background: #7c3aed;
+            .cell-error {
+              display: block;
+              margin-top: 4px;
+              color: #ef4444;
+              font-size: 10px;
+              overflow-wrap: anywhere;
             }
           }
         }
       }
     }
+  }
 
-    /* 用量与追踪页签: 顶部概览与归属两栏布局 */
-    .usage-top-row {
+  /* 调用 Token 专属表格 */
+  .token-filter-bar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 2px;
+
+    .filter-field {
+      position: relative;
       display: flex;
-      gap: 16px;
+      align-items: center;
+      flex: 1;
 
-      .usage-overview-panel {
-        flex: 0 0 46%;
+      .filter-icon {
+        position: absolute;
+        left: 10px;
+        color: var(--color-text-muted);
+      }
+      .filter-input {
+        width: 100%;
+        padding: 7px 10px 7px 30px;
+        border: 1px solid var(--color-line);
+        border-radius: 6px;
+        color: var(--color-text);
+        background: var(--color-panel-soft);
+        font-size: 12px;
+        outline: none;
 
-        .overview-controls {
-          display: flex;
-          align-items: center;
-          gap: 8px;
-
-          .overview-period-select {
-            padding: 5px 10px;
-            border: 1px solid var(--color-line);
-            border-radius: 6px;
-            color: var(--color-text);
-            background: var(--color-panel-soft);
-            font-size: 12px;
-            outline: none;
-            cursor: pointer;
-
-            &:focus {
-              border-color: #7c3aed;
-            }
-          }
-          .date-range-badge {
-            display: inline-flex;
-            align-items: center;
-            padding: 5px 10px;
-            border: 1px solid var(--color-line);
-            border-radius: 6px;
-            color: var(--color-text-muted);
-            background: var(--color-panel-soft);
-            font-size: 11px;
-            white-space: nowrap;
-          }
+        &:focus {
+          border-color: #7c3aed;
         }
+      }
+      .filter-select {
+        width: 100%;
+        padding: 7px 10px;
+        border: 1px solid var(--color-line);
+        border-radius: 6px;
+        color: var(--color-text);
+        background: var(--color-panel-soft);
+        font-size: 12px;
+        outline: none;
+        cursor: pointer;
 
-        .overview-stats-grid {
-          display: grid;
-          grid-template-columns: repeat(2, 1fr);
-          gap: 12px;
-          margin-top: 14px;
+        &:focus {
+          border-color: #7c3aed;
+        }
+      }
+    }
+    .filter-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+  }
 
-          .overview-tile {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-            padding: 14px 16px;
-            border: 1px solid var(--color-line);
-            border-radius: 8px;
-            background: var(--color-panel-soft);
-            box-sizing: border-box;
+  .token-table-wrap {
+    overflow-x: auto;
 
-            .tile-label {
-              color: var(--color-text-muted);
-              font-size: 12px;
-            }
-            .tile-value {
-              color: var(--color-text);
-              font-size: 20px;
-            }
+    .token-table {
+      width: 100%;
+      border-collapse: collapse;
 
-            &.success .tile-value {
-              color: #10b981;
-            }
-            &.failure .tile-value {
-              color: #ef4444;
-            }
-            &.token .tile-value {
-              color: #7c3aed;
-            }
-          }
+      th {
+        padding: 9px 10px;
+        border-bottom: 1px solid var(--color-line);
+        text-align: left;
+        color: var(--color-text-muted);
+        font-size: 11px;
+
+        &.action-th {
+          text-align: right;
+        }
+      }
+      td {
+        padding: 12px 10px;
+        border-bottom: 1px solid var(--color-line);
+        color: var(--color-text);
+        font-size: 12px;
+
+        &.action-td {
+          text-align: right;
         }
       }
 
-      .usage-attribution-panel {
-        flex: 1;
-        min-width: 0;
+      .token-name-col {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
 
-        .attribution-table-wrap {
-          max-height: 220px;
-          overflow-y: auto;
+        .token-name {
+          font-size: 13px;
+        }
+        .token-desc {
+          color: var(--color-text-muted);
+          font-size: 11px;
+        }
+      }
 
-          .attribution-table {
-            width: 100%;
-            border-collapse: collapse;
+      .token-stats-col {
+        display: flex;
+        flex-direction: column;
+        gap: 3px;
 
-            th {
-              padding: 8px 10px;
-              border-bottom: 1px solid var(--color-line);
-              text-align: left;
-              color: var(--color-text-muted);
-              font-size: 11px;
-            }
-            td {
-              padding: 10px;
-              border-bottom: 1px solid var(--color-line);
-              color: var(--color-text);
-              font-size: 12px;
-            }
+        .stats-total {
+          display: inline-flex;
+          align-items: center;
+          gap: 4px;
+          color: var(--color-text);
+          font-size: 11px;
+        }
+        .stats-detail {
+          color: var(--color-text-muted);
+          font-size: 10px;
+        }
+      }
 
-            .cell-caller {
-              color: var(--color-text);
-            }
-            .target-badge {
-              display: inline-block;
-              padding: 2px 6px;
-              border-radius: 4px;
-              color: #7c3aed;
-              background: rgba(124, 58, 237, 0.08);
-              font-size: 11px;
-            }
-            .model-id-code {
-              color: #2563eb;
-              font-size: 11px;
-            }
+      .number-text {
+        color: var(--color-text);
+        font-size: 12px;
+      }
+      .time-text {
+        color: var(--color-text-muted);
+        font-size: 11px;
+      }
+
+      .token-status-pill {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        padding: 2px 7px;
+        border-radius: 12px;
+        color: var(--color-text-muted);
+        background: var(--color-panel-soft);
+        font-size: 11px;
+
+        &.enabled {
+          color: #10b981;
+          background: rgba(16, 185, 129, 0.08);
+
+          .status-dot {
+            background: #10b981;
           }
+        }
+        .status-dot {
+          width: 5px;
+          height: 5px;
+          border-radius: 50%;
+          background: currentColor;
+        }
+      }
+    }
+  }
+
+  .empty-state-box {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 36px 16px;
+    text-align: center;
+
+    .empty-icon {
+      color: var(--color-text-muted);
+      opacity: 0.5;
+      margin-bottom: 10px;
+    }
+    .empty-title {
+      margin: 0 0 6px;
+      color: var(--color-text);
+      font-size: 14px;
+    }
+    .empty-sub {
+      margin: 0 0 16px;
+      color: var(--color-text-muted);
+      font-size: 12px;
+    }
+  }
+
+  .empty-state {
+    padding: 20px;
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: 12px;
+    text-align: center;
+  }
+
+  .pagination-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-top: 14px;
+    padding-top: 12px;
+    border-top: 1px solid var(--color-line);
+
+    .total-text {
+      color: var(--color-text-muted);
+      font-size: 11px;
+    }
+    .page-controls {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+
+      .page-size {
+        color: var(--color-text-muted);
+        font-size: 11px;
+        margin-right: 6px;
+      }
+      .page-btn {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 26px;
+        height: 26px;
+        border: 1px solid var(--color-line);
+        border-radius: 5px;
+        color: var(--color-text);
+        background: var(--color-panel);
+        cursor: pointer;
+        font-size: 12px;
+
+        &:disabled {
+          opacity: 0.4;
+          cursor: default;
+        }
+        &:hover:not(:disabled) {
+          border-color: #7c3aed;
+          color: #7c3aed;
+        }
+      }
+      .page-num {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 26px;
+        height: 26px;
+        border-radius: 5px;
+        font-size: 12px;
+
+        &.active {
+          color: #fff;
+          background: #7c3aed;
         }
       }
     }
@@ -2763,27 +3357,178 @@ onMounted(load)
     }
   }
 
+  /* 请求详情弹框样式 */
   .request-detail-modal {
     :deep(.base-modal__panel) {
-      width: min(1000px, calc(100vw - 48px));
-      max-width: 1000px;
+      width: min(860px, calc(100vw - 48px));
+      max-width: 860px;
+      border-radius: 14px;
+    }
+
+    :deep(.base-modal__header) {
+      padding: 18px 22px 10px;
+      align-items: center;
+    }
+
+    .modal-header-left {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+
+      .modal-icon-badge {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        width: 38px;
+        height: 38px;
+        border-radius: 10px;
+        color: #7c3aed;
+        background: rgba(124, 58, 237, 0.1);
+        flex-shrink: 0;
+      }
+
+      .modal-header-titles {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+
+        .modal-main-title {
+          margin: 0;
+          font-size: 16px;
+          color: var(--color-text);
+          line-height: 1.3;
+        }
+
+        .modal-id-subtitle {
+          margin: 0;
+          font-size: 11px;
+          color: var(--color-text-muted);
+          font-family: Consolas, monospace;
+          line-height: 1.3;
+        }
+      }
+    }
+
+    .modal-close-icon-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      width: 30px;
+      height: 30px;
+      border: 1px solid var(--color-line);
+      border-radius: 6px;
+      background: var(--color-panel);
+      color: var(--color-text-muted);
+      cursor: pointer;
+      transition: all 0.15s;
+
+      &:hover {
+        color: var(--color-text);
+        border-color: var(--color-text-muted);
+      }
     }
 
     .request-detail-view {
       display: flex;
       flex-direction: column;
-      gap: 14px;
+      gap: 12px;
       min-height: 0;
 
-      .request-detail-meta {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 8px 20px;
+      .request-detail-meta-card {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 8px 24px;
+        padding: 12px 16px;
+        border: 1px solid var(--color-line);
+        border-radius: 10px;
+        background: var(--color-panel-soft);
 
-        .request-detail-meta-item {
-          color: var(--color-text-muted);
-          font-size: 12px;
-          overflow-wrap: anywhere;
+        .meta-column {
+          display: flex;
+          flex-direction: column;
+          gap: 8px;
+
+          .meta-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 11px;
+
+            .meta-label-group {
+              display: inline-flex;
+              align-items: center;
+              gap: 5px;
+              width: 72px;
+              flex-shrink: 0;
+              color: var(--color-text-muted);
+
+              .meta-icon {
+                color: var(--color-text-muted);
+                flex-shrink: 0;
+
+                &.ok-color {
+                  color: #10b981;
+                }
+                &.err-color {
+                  color: #ef4444;
+                }
+              }
+
+              .meta-label {
+                font-size: 11px;
+                color: var(--color-text-muted);
+              }
+            }
+
+            .meta-value {
+              display: inline-flex;
+              align-items: center;
+              gap: 6px;
+              color: var(--color-text);
+              font-size: 11px;
+              min-width: 0;
+              overflow-wrap: anywhere;
+
+              .method-tag {
+                color: var(--color-text);
+              }
+
+              .meta-arrow {
+                color: var(--color-text-muted);
+              }
+
+              .meta-provider-pill {
+                display: inline-flex;
+                align-items: center;
+                padding: 1px 7px;
+                border-radius: 4px;
+                color: #7c3aed;
+                background: rgba(124, 58, 237, 0.1);
+                font-size: 11px;
+              }
+
+              .meta-status-pill {
+                display: inline-flex;
+                align-items: center;
+                padding: 1px 7px;
+                border-radius: 4px;
+                font-size: 11px;
+
+                &.ok {
+                  color: #10b981;
+                  background: rgba(16, 185, 129, 0.12);
+                }
+                &.err {
+                  color: #ef4444;
+                  background: rgba(239, 68, 68, 0.12);
+                }
+                &.muted {
+                  color: var(--color-text-muted);
+                  background: var(--color-panel);
+                }
+              }
+            }
+          }
         }
       }
 
@@ -2791,18 +3536,25 @@ onMounted(load)
         display: flex;
         gap: 6px;
         border-bottom: 1px solid var(--color-line);
+        margin-top: 4px;
 
         .request-detail-tab {
-          padding: 8px 12px;
+          padding: 8px 14px;
           border: 0;
           border-bottom: 2px solid transparent;
           color: var(--color-text-muted);
           background: transparent;
           cursor: pointer;
+          font-size: 12px;
+          transition: all 0.15s;
 
           &.active {
             border-bottom-color: #7c3aed;
             color: #7c3aed;
+          }
+
+          &:hover:not(.active) {
+            color: var(--color-text);
           }
         }
       }
@@ -2810,13 +3562,14 @@ onMounted(load)
       .request-detail-body {
         margin: 0;
         min-height: 160px;
-        max-height: 50vh;
+        max-height: 48vh;
         padding: 14px;
         overflow: auto;
         border: 1px solid var(--color-line);
         border-radius: 8px;
         color: var(--color-text);
         background: var(--color-panel-soft);
+        font-family: Consolas, "Fira Code", monospace;
         font-size: 12px;
         line-height: 1.6;
         white-space: pre-wrap;
@@ -2825,22 +3578,40 @@ onMounted(load)
 
       .request-detail-hint {
         margin: 0;
+        padding: 24px;
         color: var(--color-text-muted);
         font-size: 12px;
         line-height: 1.6;
+        text-align: center;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
       }
 
       .request-detail-error {
         margin: 0;
+        padding: 8px 12px;
+        border-radius: 6px;
+        border: 1px solid rgba(239, 68, 68, 0.3);
         color: #ef4444;
-        font-size: 12px;
+        background: rgba(239, 68, 68, 0.06);
+        font-size: 11px;
         overflow-wrap: anywhere;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+
+        .error-icon {
+          flex-shrink: 0;
+        }
       }
 
       .request-detail-actions {
         display: flex;
         justify-content: flex-end;
-        gap: 8px;
+        gap: 10px;
+        padding-top: 8px;
       }
     }
   }

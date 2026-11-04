@@ -63,6 +63,12 @@
           />
           <ImageIcon v-else :size="20" class="tools-view-image-badge-icon" />
         </div>
+        <div
+          v-else-if="activeTool === 'multi-protocol-gateway'"
+          class="tools-view-gateway-badge"
+        >
+          <Layers :size="20" class="tools-view-gateway-badge-icon" />
+        </div>
         <div class="tools-view-detail-title">
           <span data-emphasis class="tools-view-detail-name">{{
             activeToolMeta?.label || "工具"
@@ -162,6 +168,31 @@
             />
           </button>
         </div>
+        <div
+          v-if="activeTool === 'multi-protocol-gateway'"
+          class="tools-view-gateway-actions"
+        >
+          <span
+            class="tools-view-gateway-status-pill"
+            :class="{ active: isGatewayActive }"
+          >
+            <span class="status-dot"></span>
+            {{ isGatewayActive ? "服务运行中" : "服务未开启" }}
+          </span>
+          <button
+            class="tools-view-icon-btn"
+            type="button"
+            title="刷新网关状态"
+            aria-label="刷新网关状态"
+            :disabled="gatewayRef?.busy || isGatewayLoading"
+            @click="refreshGateway"
+          >
+            <RefreshCw
+              :size="15"
+              :class="{ spinning: isGatewayLoading }"
+            />
+          </button>
+        </div>
         <button
           v-if="standalone"
           class="tools-view-open-main"
@@ -196,8 +227,10 @@
       <NetworkQualityView v-else-if="activeTool === 'network-quality'" />
       <MultiProtocolGateway
         v-else-if="activeTool === 'multi-protocol-gateway'"
+        ref="gatewayRef"
         :providers="providers"
         :codex-accounts="codexAccounts"
+        @status-change="gatewayStatus = $event"
       />
       <CodexPetManager v-else-if="activeTool === 'codex-pets'" />
       <PortMonitor
@@ -238,6 +271,7 @@ import {
   Database,
   GitBranchIcon,
   Image as ImageIcon,
+  Layers,
   Moon,
   PanelsTopLeft,
   RefreshCw,
@@ -323,6 +357,24 @@ const gitToolStatus = ref([])
 const imageWorkbenchRef = ref(null)
 const portMonitorRef = ref(null)
 const portAutoRefresh = ref(false)
+const gatewayRef = ref(null)
+const gatewayStatus = ref({ enabled: false, loading: false, busy: false })
+
+const isGatewayActive = computed(() => {
+  return Boolean(
+    gatewayStatus.value?.enabled ?? gatewayRef.value?.gateway?.enabled
+  )
+})
+
+const isGatewayLoading = computed(() => {
+  return Boolean(
+    gatewayStatus.value?.loading ?? gatewayRef.value?.loading
+  )
+})
+
+function refreshGateway() {
+  gatewayRef.value?.load?.()
+}
 
 function getGitStatusIcon(label) {
   if (label === "当前分支" || label === "本地分支") return GitBranchIcon
@@ -350,6 +402,7 @@ function openTool(toolId) {
 
 function closeTool() {
   activeTool.value = ""
+  gatewayStatus.value = { enabled: false, loading: false, busy: false }
 }
 
 // 工具详情独占工作区，退出详情或组件卸载时恢复全局侧栏。
@@ -563,6 +616,24 @@ onMounted(() => {
 
   .tools-view-image-badge {
     background: #3b82f6;
+  }
+
+  .tools-view-gateway-badge {
+    background: rgba(167, 139, 250, 0.16);
+
+    .tools-view-gateway-badge-icon {
+      color: #a78bfa;
+    }
+  }
+
+  .tools-view-gateway-status-pill {
+    background: var(--color-panel);
+    border-color: var(--color-line);
+
+    &.active {
+      background: rgba(16, 185, 129, 0.12);
+      border-color: rgba(16, 185, 129, 0.25);
+    }
   }
 
   .image-generation-modes {
@@ -936,6 +1007,59 @@ onMounted(() => {
     .tools-view-image-badge-icon {
       color: #ffffff;
       stroke-width: 2.1;
+    }
+  }
+
+  .tools-view-gateway-badge {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
+    background: rgba(124, 58, 237, 0.1);
+    border-radius: 10px;
+    margin: 0 6px 0 2px;
+
+    .tools-view-gateway-badge-icon {
+      color: #7c3aed;
+      stroke-width: 2.1;
+    }
+  }
+
+  .tools-view-gateway-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+
+    .tools-view-gateway-status-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 5px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--color-line);
+      background: var(--color-panel);
+      color: var(--color-text-muted);
+      font-size: 12px;
+      white-space: nowrap;
+
+      &.active {
+        color: #10b981;
+        background: rgba(16, 185, 129, 0.08);
+        border-color: rgba(16, 185, 129, 0.2);
+
+        .status-dot {
+          background: #10b981;
+        }
+      }
+
+      .status-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--color-text-muted);
+      }
     }
   }
 
