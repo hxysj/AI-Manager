@@ -4,6 +4,7 @@ import { request } from '../request'
 export const multiProtocolGatewayApi = {
   getState: () => request('gateway:state'),
   getUsage: () => request('gateway:usage'),
+  getLogDetail: payload => request('gateway:log-detail', payload),
   saveConfig: payload => request('gateway:save-config', payload),
   enable: payload => request('gateway:enable', payload),
   disable: () => request('gateway:disable'),

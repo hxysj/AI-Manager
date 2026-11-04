@@ -5,6 +5,7 @@ use tokio::sync::mpsc;
 
 enum Delta {
     Text(String),
+    Reasoning(String),
     Tool(usize, Value),
 }
 
@@ -13,6 +14,8 @@ pub(super) struct Parser {
     pub response: ModelResponse,
     done: bool,
     calls: BTreeMap<usize, usize>,
+    pub upstream_body: LogBody,
+    pub client_body: LogBody,
 }
 
 impl Parser {
@@ -22,6 +25,8 @@ impl Parser {
             response: ModelResponse::default(),
             done: false,
             calls: BTreeMap::new(),
+            upstream_body: LogBody::default(),
+            client_body: LogBody::default(),
         }
     }
 
@@ -29,6 +34,13 @@ impl Parser {
         if !text.is_empty() {
             self.response.text.push_str(text);
             deltas.push(Delta::Text(text.to_string()));
+        }
+    }
+
+    fn reasoning(&mut self, text: &str, deltas: &mut Vec<Delta>) {
+        if !text.is_empty() {
+            self.response.reasoning.push_str(text);
+            deltas.push(Delta::Reasoning(text.to_string()));
         }
     }
 
@@ -95,15 +107,25 @@ impl Parser {
                     .into_iter()
                     .flatten()
                     .any(|item| {
-                        // 空 reasoning 项只携带上游内部状态，没有需要投影到客户端的内容。
-                        (!matches!(item["type"].as_str(), Some("message" | "function_call"))
-                            && !(item["type"] == "reasoning"
-                                && item["summary"].as_array().is_some_and(Vec::is_empty)))
-                            || item["content"]
+                        // 可见思考和拒绝文本参与转换；加密思考状态不当作正文输出。
+                        !matches!(
+                            item["type"].as_str(),
+                            Some("message" | "function_call" | "reasoning")
+                        ) || item["content"]
+                            .as_array()
+                            .into_iter()
+                            .flatten()
+                            .any(|part| {
+                                !matches!(
+                                    part["type"].as_str(),
+                                    Some("output_text" | "refusal" | "reasoning_text")
+                                )
+                            })
+                            || item["summary"]
                                 .as_array()
                                 .into_iter()
                                 .flatten()
-                                .any(|part| part["type"] != "output_text")
+                                .any(|part| part["type"] != "summary_text")
                     }),
                 UpstreamFormat::Anthropic => value["content"]
                     .as_array()
@@ -126,6 +148,12 @@ impl Parser {
         }
         let parsed = parse_upstream_response(value, self.format).map_err(|_| "上游响应结构无效")?;
         let mut deltas = Vec::new();
+        if let Some(suffix) = parsed.reasoning.strip_prefix(&self.response.reasoning) {
+            let suffix = suffix.to_string();
+            self.reasoning(&suffix, &mut deltas);
+        } else {
+            return Err("上游最终思考与增量思考不一致".into());
+        }
         if let Some(suffix) = parsed.text.strip_prefix(&self.response.text) {
             let suffix = suffix.to_string();
             self.text(&suffix, &mut deltas);
@@ -229,6 +257,15 @@ impl Parser {
                     "response.output_text.delta" => {
                         self.text(string(event.get("delta")), &mut deltas)
                     }
+                    "response.reasoning_summary_text.delta" | "response.reasoning_text.delta" => {
+                        self.reasoning(string(event.get("delta")), &mut deltas)
+                    }
+                    "response.refusal.delta" => self.text(string(event.get("delta")), &mut deltas),
+                    "response.reasoning_summary_part.added"
+                    | "response.reasoning_summary_part.done"
+                    | "response.reasoning_summary_text.done"
+                    | "response.reasoning_text.done"
+                    | "response.refusal.done" => {}
                     "response.output_item.added" if event["item"]["type"] == "function_call" => {
                         let item = &event["item"];
                         self.tool(
@@ -243,7 +280,10 @@ impl Parser {
                     "response.output_item.added"
                         if !native && event["item"]["type"] != "message" =>
                     {
-                        return Err("此上游输出项需要使用 Responses 客户端".into())
+                        return Err(format!(
+                            "暂不支持转换 Responses 输出项：{}",
+                            event["item"]["type"]
+                        ))
                     }
                     "response.function_call_arguments.delta" => self.tool(
                         event["output_index"].as_u64().unwrap_or(0) as usize,
@@ -261,7 +301,7 @@ impl Parser {
                             || kind.contains("reasoning")
                             || kind.contains("audio")) =>
                     {
-                        return Err("此上游内容需要使用 Responses 客户端".into())
+                        return Err(format!("暂不支持转换 Responses 事件：{kind}"))
                     }
                     _ => {}
                 }
@@ -449,6 +489,7 @@ pub(super) async fn consume(
             break;
         };
         let chunk = chunk.map_err(|_| "上游连接中断")?;
+        parser.upstream_body.push(&chunk);
         if let Some(tracking) = tracking {
             tracking.observe(&chunk);
         }
@@ -489,15 +530,20 @@ pub(super) async fn consume(
         let deltas = parser.snapshot(&value, native)?;
         if let Some((sender, encoder)) = &mut output {
             // 上游忽略 stream 返回 JSON 时仍用完整生命周期输出，无法提前产生内容。
-            send(sender, encoder.begin()).await?;
+            send(sender, &mut parser.client_body, encoder.begin()).await?;
             for delta in deltas {
-                send(sender, encoder.delta(delta)).await?;
+                send(sender, &mut parser.client_body, encoder.delta(delta)).await?;
             }
         }
     }
     if let Some((sender, encoder)) = &mut output {
         if !native || !is_sse {
-            send(sender, encoder.finish(&parser.response)).await?;
+            send(
+                sender,
+                &mut parser.client_body,
+                encoder.finish(&parser.response),
+            )
+            .await?;
         }
     }
     Ok(())
@@ -529,6 +575,7 @@ async fn relay_frame(
         if native {
             send(
                 sender,
+                &mut parser.client_body,
                 String::from_utf8(frame.to_vec()).map_err(|_| "上游 SSE 编码无效")?,
             )
             .await?;
@@ -536,9 +583,9 @@ async fn relay_frame(
             if !parser.response.upstream_model.is_empty() {
                 encoder.model = parser.response.upstream_model.clone();
             }
-            send(sender, encoder.begin()).await?;
+            send(sender, &mut parser.client_body, encoder.begin()).await?;
             for delta in deltas {
-                send(sender, encoder.delta(delta)).await?;
+                send(sender, &mut parser.client_body, encoder.delta(delta)).await?;
             }
         }
     }
@@ -547,9 +594,11 @@ async fn relay_frame(
 
 async fn send(
     sender: &mpsc::Sender<Result<Frame<Bytes>, Infallible>>,
+    body: &mut LogBody,
     data: String,
 ) -> Result<(), String> {
     if !data.is_empty() {
+        body.push(data.as_bytes());
         sender
             .send(Ok(Frame::data(Bytes::from(data))))
             .await
@@ -625,6 +674,12 @@ impl Encoder {
 
     fn delta(&mut self, delta: Delta) -> String {
         match delta {
+            Delta::Reasoning(text) => match self.protocol {
+                Protocol::Chat => self.chat(json!({"reasoning_content":text}), Value::Null),
+                Protocol::Gemini => self.event(json!({"candidates":[{"index":0,"content":{"role":"model","parts":[{"text":text,"thought":true}]}}],"modelVersion":self.model})),
+                // 需要内容块生命周期的协议在完成时输出独立的思考块。
+                Protocol::Responses | Protocol::Claude => String::new(),
+            },
             Delta::Text(text) => match self.protocol {
                 Protocol::Chat => self.chat(json!({"content":text}), Value::Null),
                 Protocol::Responses => self.event(json!({"type":"response.output_text.delta","item_id":self.message_id,"output_index":0,"content_index":0,"delta":text})),
@@ -675,6 +730,15 @@ impl Encoder {
                     .enumerate()
                     .skip(1)
                 {
+                    if item["type"] == "reasoning" {
+                        result.push_str(&self.event(json!({"type":"response.output_item.added","output_index":index,"item":{"id":item["id"],"type":"reasoning","summary":[]}})));
+                        result.push_str(&self.event(json!({"type":"response.reasoning_summary_part.added","item_id":item["id"],"output_index":index,"summary_index":0,"part":{"type":"summary_text","text":""}})));
+                        result.push_str(&self.event(json!({"type":"response.reasoning_summary_text.delta","item_id":item["id"],"output_index":index,"summary_index":0,"delta":response.reasoning})));
+                        result.push_str(&self.event(json!({"type":"response.reasoning_summary_text.done","item_id":item["id"],"output_index":index,"summary_index":0,"text":response.reasoning})));
+                        result.push_str(&self.event(json!({"type":"response.reasoning_summary_part.done","item_id":item["id"],"output_index":index,"summary_index":0,"part":item["summary"][0]})));
+                        result.push_str(&self.event(json!({"type":"response.output_item.done","output_index":index,"item":item})));
+                        continue;
+                    }
                     item["id"] = json!(format!("fc_{}_{}", self.id, index - 1));
                     result.push_str(&self.event(json!({"type":"response.function_call_arguments.done","item_id":item["id"],"output_index":index,"arguments":item["arguments"],"name":item["name"]})));
                     result.push_str(&self.event(json!({"type":"response.output_item.done","output_index":index,"item":item})));
@@ -685,12 +749,20 @@ impl Encoder {
             Protocol::Claude => {
                 let snapshot = response_value(self.protocol, response, &self.model);
                 let mut result = self.event(json!({"type":"content_block_stop","index":0}));
+                let tool_offset = if response.reasoning.is_empty() {
+                    1
+                } else {
+                    result.push_str(&self.event(json!({"type":"content_block_start","index":1,"content_block":{"type":"thinking","thinking":""}})));
+                    result.push_str(&self.event(json!({"type":"content_block_delta","index":1,"delta":{"type":"thinking_delta","thinking":response.reasoning}})));
+                    result.push_str(&self.event(json!({"type":"content_block_stop","index":1})));
+                    2
+                };
                 for (index, call) in response.tool_calls.iter().enumerate() {
-                    result.push_str(&self.event(json!({"type":"content_block_start","index":index+1,"content_block":{"type":"tool_use","id":call["id"],"name":call["function"]["name"],"input":{}}})));
-                    result.push_str(&self.event(json!({"type":"content_block_delta","index":index+1,"delta":{"type":"input_json_delta","partial_json":call["function"]["arguments"]}})));
-                    result.push_str(
-                        &self.event(json!({"type":"content_block_stop","index":index+1})),
-                    );
+                    let index = index + tool_offset;
+                    result.push_str(&self.event(json!({"type":"content_block_start","index":index,"content_block":{"type":"tool_use","id":call["id"],"name":call["function"]["name"],"input":{}}})));
+                    result.push_str(&self.event(json!({"type":"content_block_delta","index":index,"delta":{"type":"input_json_delta","partial_json":call["function"]["arguments"]}})));
+                    result
+                        .push_str(&self.event(json!({"type":"content_block_stop","index":index})));
                 }
                 result.push_str(&self.event(json!({"type":"message_delta","delta":{"stop_reason":snapshot["stop_reason"],"stop_sequence":null},"usage":snapshot["usage"]})));
                 result.push_str(&self.event(json!({"type":"message_stop"})));
@@ -746,11 +818,43 @@ mod tests {
                 false
             )
             .is_err());
-        assert!(Parser::new(UpstreamFormat::OpenAiResponses)
+        let mut parser = Parser::new(UpstreamFormat::OpenAiResponses);
+        assert!(parser
             .event(
                 &json!({"type":"response.reasoning_summary_text.delta","delta":"可见思考"}),
                 false
             )
-            .is_err());
+            .is_ok());
+        assert_eq!(parser.response.reasoning, "可见思考");
+        assert!(parser.snapshot(&json!({"status":"completed","output":[{"type":"reasoning","summary":[{"type":"summary_text","text":"不同思考"}]}]}), false).err().unwrap().contains("思考"));
+    }
+
+    #[test]
+    fn responses_refusal_is_text_and_unsupported_events_keep_their_type() {
+        let mut parser = Parser::new(UpstreamFormat::OpenAiResponses);
+        parser
+            .event(
+                &json!({"type":"response.refusal.delta","delta":"无法协助该请求"}),
+                false,
+            )
+            .unwrap();
+        parser
+            .event(
+                &json!({"type":"response.refusal.done","refusal":"无法协助该请求"}),
+                false,
+            )
+            .unwrap();
+        parser.event(&json!({"type":"response.completed","response":{"status":"completed","output":[{"type":"message","content":[{"type":"refusal","refusal":"无法协助该请求"}]}],"usage":{"input_tokens":3,"output_tokens":2}}}), false).unwrap();
+        assert_eq!(parser.response.text, "无法协助该请求");
+        assert_eq!(parser.response.input_tokens, 3);
+        assert!(parser.done);
+        assert!(parser
+            .event(
+                &json!({"type":"response.output_audio.delta","delta":"bytes"}),
+                false
+            )
+            .err()
+            .unwrap()
+            .contains("response.output_audio.delta"));
     }
 }

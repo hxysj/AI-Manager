@@ -44,7 +44,7 @@ fn reply(format: UpstreamFormat) -> Value {
             json!({"model":"reported-model","choices":[{"index":0,"message":{"role":"assistant","content":" 中文🙂 ","tool_calls":[{"id":"call_test","type":"function","function":{"name":"lookup","arguments":"{\"city\":\"杭州\"}"}}]},"finish_reason":"tool_calls"}],"usage":{"prompt_tokens":12,"completion_tokens":6}})
         }
         UpstreamFormat::OpenAiResponses => {
-            json!({"id":"resp_original","object":"response","model":"reported-model","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":" 中文🙂 "}]},{"type":"function_call","call_id":"call_test","name":"lookup","arguments":"{\"city\":\"杭州\"}"}],"usage":{"input_tokens":12,"output_tokens":6}})
+            json!({"id":"resp_original","object":"response","model":"reported-model","status":"completed","output":[{"id":"rs_test","type":"reasoning","summary":[{"type":"summary_text","text":"可见思考🙂"}],"encrypted_content":"opaque-reasoning"},{"type":"message","role":"assistant","content":[{"type":"output_text","text":" 中文🙂 "}]},{"type":"function_call","call_id":"call_test","name":"lookup","arguments":"{\"city\":\"杭州\"}"}],"usage":{"input_tokens":12,"output_tokens":6}})
         }
         UpstreamFormat::Anthropic => {
             json!({"id":"msg_original","type":"message","role":"assistant","model":"reported-model","content":[{"type":"text","text":" 中文🙂 "},{"type":"tool_use","id":"call_test","name":"lookup","input":{"city":"杭州"}}],"stop_reason":"tool_use","usage":{"input_tokens":12,"output_tokens":6}})
@@ -65,9 +65,14 @@ fn sse_reply(format: UpstreamFormat) -> String {
         ],
         UpstreamFormat::OpenAiResponses => vec![
             json!({"type":"response.created","response":{"model":"reported-model"}}),
+            json!({"type":"response.output_item.added","output_index":0,"item":{"id":"rs_test","type":"reasoning","summary":[]}}),
+            json!({"type":"response.reasoning_summary_part.added","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":""}}),
+            json!({"type":"response.reasoning_summary_text.delta","output_index":0,"summary_index":0,"delta":"可见思考🙂"}),
+            json!({"type":"response.reasoning_summary_text.done","output_index":0,"summary_index":0,"text":"可见思考🙂"}),
+            json!({"type":"response.reasoning_summary_part.done","output_index":0,"summary_index":0,"part":{"type":"summary_text","text":"可见思考🙂"}}),
             json!({"type":"response.output_text.delta","delta":" 中文🙂 "}),
-            json!({"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"call_test","name":"lookup","arguments":""}}),
-            json!({"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"city\":\"杭州\"}"}),
+            json!({"type":"response.output_item.added","output_index":2,"item":{"type":"function_call","call_id":"call_test","name":"lookup","arguments":""}}),
+            json!({"type":"response.function_call_arguments.delta","output_index":2,"delta":"{\"city\":\"杭州\"}"}),
             json!({"type":"response.completed","response":reply(format)}),
         ],
         UpstreamFormat::Anthropic => vec![
@@ -279,6 +284,12 @@ fn protocol_matrix_preserves_tools_usage_model_and_streams() {
                         assert!(text.contains("reported-model"), "{text}");
                         assert!(text.contains('6'), "{text}");
                         assert!(!text.contains("gateway_error"), "{text}");
+                        if format == UpstreamFormat::OpenAiResponses {
+                            assert!(text.contains("可见思考🙂"), "{text}");
+                            if protocol != Protocol::Responses {
+                                assert!(!text.contains("opaque-reasoning"), "{text}");
+                            }
+                        }
                     } else {
                         let value = response.json::<Value>().await.unwrap();
                         let parsed = parse_upstream_response(
@@ -304,6 +315,9 @@ fn protocol_matrix_preserves_tools_usage_model_and_streams() {
                         );
                         assert_eq!(parsed.input_tokens, 12);
                         assert_eq!(parsed.output_tokens, 6);
+                        if format == UpstreamFormat::OpenAiResponses {
+                            assert_eq!(parsed.reasoning, "可见思考🙂");
+                        }
                     }
                     let (path, headers, body) = captures.recv().await.unwrap();
                     assert!(!headers
@@ -327,9 +341,128 @@ fn protocol_matrix_preserves_tools_usage_model_and_streams() {
             assert_eq!(state["logs"][0]["upstreamModel"], "reported-model");
             assert_eq!(state["logs"][0]["providerId"], "provider-test");
             assert!(!state.to_string().contains("private-upstream-key"));
+            for log in state["logs"].as_array().unwrap() {
+                assert_eq!(log["clientIp"], "127.0.0.1");
+                assert!(log.get("requestBody").is_none());
+                assert!(log.get("responseBody").is_none());
+                let detail = read_log_detail(&fixture.paths, &json!({"logId":log["id"]})).unwrap();
+                let request: Value =
+                    serde_json::from_str(detail["requestBody"].as_str().unwrap()).unwrap();
+                assert!(request.is_object());
+                let forwarded: Value =
+                    serde_json::from_str(detail["upstreamRequestBody"].as_str().unwrap()).unwrap();
+                if format != UpstreamFormat::Gemini {
+                    assert_eq!(forwarded["model"], "real-model");
+                }
+                assert!(detail["upstreamResponseBody"]
+                    .as_str()
+                    .unwrap()
+                    .contains("reported-model"));
+                assert!(detail["responseBody"]
+                    .as_str()
+                    .unwrap()
+                    .contains("reported-model"));
+                assert!(!detail.to_string().contains("private-upstream-key"));
+                assert!(!detail.to_string().contains(&token));
+                assert!(gateway_log_dir(&fixture.paths)
+                    .join(format!("{}.json", log["id"].as_str().unwrap()))
+                    .is_file());
+            }
+            let index = std::fs::read_to_string(gateway_log_dir(&fixture.paths).join("index.json"))
+                .unwrap();
+            assert!(!index.contains("requestBody"));
+            assert!(!index.contains("可见思考"));
             fixture.registry.stop().await;
             task.abort();
         }
+    });
+}
+
+#[test]
+fn request_details_keep_large_bodies_outside_the_summary_store() {
+    run(async {
+        let fixture = Fixture::new();
+        let question = format!("请求开始{}请求末尾", "完整中文🙂".repeat(20_000));
+        let answer = format!("响应开始{}响应末尾", "完整响应🙂".repeat(20_000));
+        assert!(question.len() > 128 * 1024);
+        assert!(answer.len() > 128 * 1024);
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let expected_question = question.clone();
+        let upstream_answer = answer.clone();
+        let task = tokio::spawn(async move {
+            let mut connections = tokio::task::JoinSet::new();
+            while let Ok((socket, _)) = listener.accept().await {
+                let question = expected_question.clone();
+                let answer = upstream_answer.clone();
+                connections.spawn(async move {
+                    let service = service_fn(move |request: Request<Incoming>| {
+                        let question = question.clone();
+                        let answer = answer.clone();
+                        async move {
+                            let bytes = request.into_body().collect().await.unwrap().to_bytes();
+                            let value: Value = serde_json::from_slice(&bytes).unwrap();
+                            assert_eq!(value["messages"][0]["content"], question);
+                            Ok::<_, Infallible>(json_response(StatusCode::OK, json!({
+                                "model":"large-reported-model",
+                                "choices":[{"index":0,"message":{"role":"assistant","content":answer},"finish_reason":"stop"}],
+                                "usage":{"prompt_tokens":42,"completion_tokens":84}
+                            })))
+                        }
+                    });
+                    let _ = http1::Builder::new().serve_connection(TokioIo::new(socket), service).await;
+                });
+            }
+        });
+        let (base, token) = setup(&fixture, &url, UpstreamFormat::OpenAiChat).await;
+        let client = Client::builder().no_proxy().build().unwrap();
+        for streaming in [false, true] {
+            let request = json!({"model":"alias","stream":streaming,"messages":[{"role":"user","content":question}]});
+            let response = client
+                .post(format!("{base}/v1/chat/completions"))
+                .bearer_auth(&token)
+                .header("x-forwarded-for", "203.0.113.9")
+                .json(&request)
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), 200);
+            let received = response.text().await.unwrap();
+            assert!(received.contains("响应末尾"));
+            let state = read_state(&fixture.paths).unwrap();
+            let summary = &state["logs"][0];
+            assert_eq!(summary["clientIp"], "127.0.0.1");
+            assert!(summary.get("requestBody").is_none());
+            let detail = read_log_detail(&fixture.paths, &json!({"logId":summary["id"]})).unwrap();
+            assert_eq!(
+                serde_json::from_str::<Value>(detail["requestBody"].as_str().unwrap()).unwrap(),
+                request
+            );
+            let forwarded: Value =
+                serde_json::from_str(detail["upstreamRequestBody"].as_str().unwrap()).unwrap();
+            assert_eq!(forwarded["messages"][0]["content"], question);
+            let upstream: Value =
+                serde_json::from_str(detail["upstreamResponseBody"].as_str().unwrap()).unwrap();
+            assert_eq!(upstream["choices"][0]["message"]["content"], answer);
+            assert_eq!(detail["responseBody"], received);
+            assert_eq!(detail["upstreamModel"], "large-reported-model");
+            assert_eq!(detail["inputTokens"], 42);
+            assert!(!detail.to_string().contains(&token));
+        }
+        let index =
+            std::fs::read_to_string(gateway_log_dir(&fixture.paths).join("index.json")).unwrap();
+        assert!(!index.contains("请求开始"));
+        assert!(!index.contains("响应开始"));
+        assert!(
+            read_log_detail(&fixture.paths, &json!({"logId":"../storage/ai-manager.db"})).is_err()
+        );
+        assert!(read_log_detail(
+            &fixture.paths,
+            &json!({"logId":uuid::Uuid::new_v4().to_string()})
+        )
+        .is_err());
+        fixture.registry.stop().await;
+        task.abort();
     });
 }
 
@@ -524,6 +657,16 @@ fn auth_routing_http_errors_and_port_conflict_are_honest() {
             read_state(&fixture.paths).unwrap()["logs"][0]["statusCode"],
             429
         );
+        let failed = read_state(&fixture.paths).unwrap()["logs"][0].clone();
+        let detail = read_log_detail(&fixture.paths, &json!({"logId":failed["id"]})).unwrap();
+        assert!(detail["upstreamResponseBody"]
+            .as_str()
+            .unwrap()
+            .contains("upstream-secret"));
+        assert!(!detail["responseBody"]
+            .as_str()
+            .unwrap()
+            .contains("upstream-secret"));
         let occupied = TcpListener::bind("127.0.0.1:0").await.unwrap();
         assert!(save_config(
             &fixture.registry,
@@ -674,7 +817,7 @@ fn concurrent_usage_does_not_overwrite_token_management() {
             tasks.spawn(async move {
                 update_usage(
                     &context,
-                    json!({"tokenId":id,"ok":true,"inputTokens":3,"outputTokens":2}),
+                    json!({"id":uuid::Uuid::new_v4().to_string(),"tokenId":id,"ok":true,"inputTokens":3,"outputTokens":2}),
                 )
                 .await
                 .unwrap();

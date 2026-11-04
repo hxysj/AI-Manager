@@ -159,6 +159,7 @@ struct CanonicalRequest {
 #[derive(Default)]
 struct ModelResponse {
     text: String,
+    reasoning: String,
     tool_calls: Vec<Value>,
     finish_reason: String,
     input_tokens: u64,
@@ -167,6 +168,25 @@ struct ModelResponse {
     usage_known: bool,
     upstream_model: String,
     native: Option<Value>,
+}
+
+#[derive(Default)]
+struct LogBody {
+    bytes: Vec<u8>,
+}
+
+impl LogBody {
+    fn push(&mut self, bytes: &[u8]) {
+        self.bytes.extend_from_slice(bytes);
+    }
+
+    fn save(&self, record: &mut Value, field: &str) {
+        log_body(record, field, &self.bytes);
+    }
+}
+
+fn log_body(record: &mut Value, field: &str, bytes: &[u8]) {
+    record[field] = json!(String::from_utf8_lossy(bytes));
 }
 
 struct GatewayFailure {
@@ -204,7 +224,7 @@ pub fn read_state(paths: &AppPaths) -> Result<Value, ManagerError> {
     state["byToken"] = json!(aggregate_logs(&logs, "tokenId"));
     state["byProvider"] = json!(aggregate_logs(&logs, "providerId"));
     state["byModel"] = json!(aggregate_logs(&logs, "physicalModel"));
-    state["logs"] = json!(logs.iter().take(100).cloned().collect::<Vec<_>>());
+    state["logs"] = json!(logs.iter().take(100).map(log_summary).collect::<Vec<_>>());
     Ok(state)
 }
 
@@ -374,15 +394,47 @@ pub fn usage(paths: &AppPaths) -> Result<Value, ManagerError> {
         "byToken": aggregate_logs(&logs, "tokenId"),
         "byProvider": aggregate_logs(&logs, "providerId"),
         "byModel": aggregate_logs(&logs, "physicalModel"),
-        "recent": logs.into_iter().take(200).collect::<Vec<_>>()
+        "recent": logs.iter().take(200).map(log_summary).collect::<Vec<_>>()
     }))
+}
+
+fn log_summary(log: &Value) -> Value {
+    let mut summary = log.clone();
+    if let Some(item) = summary.as_object_mut() {
+        for field in [
+            "requestBody",
+            "upstreamRequestBody",
+            "upstreamResponseBody",
+            "responseBody",
+        ] {
+            item.remove(field);
+        }
+    }
+    summary
+}
+
+pub fn read_log_detail(paths: &AppPaths, payload: &Value) -> Result<Value, ManagerError> {
+    let id = string_value(payload.get("logId"));
+    let id = uuid::Uuid::parse_str(&id)
+        .map_err(|_| ManagerError::System("无效的请求记录 ID".into()))?
+        .to_string();
+    let file = gateway_log_dir(paths).join(format!("{id}.json"));
+    match std::fs::read_to_string(file) {
+        Ok(content) => return Ok(serde_json::from_str(&content)?),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(error.into()),
+    }
+    read_logs(paths)?
+        .into_iter()
+        .find(|log| log["id"].as_str() == Some(id.as_str()))
+        .ok_or_else(|| ManagerError::System("请求记录不存在或已清理".into()))
 }
 
 fn spawn_listener(listener: TcpListener, context: GatewayContext) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
         let mut connections = tokio::task::JoinSet::new();
         loop {
-            let Ok((stream, _)) = listener.accept().await else {
+            let Ok((stream, peer)) = listener.accept().await else {
                 break;
             };
             while connections.try_join_next().is_some() {}
@@ -390,7 +442,7 @@ fn spawn_listener(listener: TcpListener, context: GatewayContext) -> tokio::task
             connections.spawn(async move {
                 let service = service_fn(move |request| {
                     let context = context.clone();
-                    async move { Ok::<_, Infallible>(handle_request(request, context).await) }
+                    async move { Ok::<_, Infallible>(handle_request(request, context, peer).await) }
                 });
                 let _ = http1::Builder::new()
                     .serve_connection(TokioIo::new(stream), service)
@@ -403,6 +455,7 @@ fn spawn_listener(listener: TcpListener, context: GatewayContext) -> tokio::task
 async fn handle_request(
     request: Request<Incoming>,
     context: GatewayContext,
+    peer: SocketAddr,
 ) -> Response<GatewayBody> {
     let path = request.uri().path().to_string();
     if request.method() == Method::GET && path == "/health" {
@@ -441,6 +494,7 @@ async fn handle_request(
     let mut record = json!({
         "id": uuid::Uuid::new_v4().to_string(), "createdAt": now_millis(),
         "requestSource": "multi-protocol-gateway", "protocol": protocol_name(route.protocol),
+        "clientIp": peer.ip().to_string(), "requestPath": path, "requestMethod": "POST",
         "tokenId": token["id"], "tokenName": token["name"],
         "requestedModel": route.requested_model, "physicalModel": "", "upstreamModel": "",
         "inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "usageKnown": false
@@ -454,6 +508,7 @@ async fn handle_request(
                 message: "请求体过大或读取失败".into(),
             })?
             .to_bytes();
+        log_body(&mut record, "requestBody", &body);
         let payload: Value = serde_json::from_slice(&body)
             .ok()
             .filter(Value::is_object)
@@ -491,7 +546,7 @@ async fn handle_request(
             &target,
             &physical_model,
             &canonical,
-            record.clone(),
+            &mut record,
             started,
         )
         .await
@@ -528,6 +583,13 @@ async fn finish_usage(
     record["latencyMs"] = json!(started.elapsed().as_millis() as u64);
     if let Some(error) = error {
         record["errorMessage"] = json!(error);
+        if record.get("responseBody").is_none() {
+            log_body(
+                &mut record,
+                "responseBody",
+                error_body(error).to_string().as_bytes(),
+            );
+        }
     }
     if let Some(response) = response {
         record["inputTokens"] = json!(response.input_tokens);
@@ -849,7 +911,7 @@ async fn send_to_target(
     target: &GatewayTarget,
     physical_model: &str,
     request: &CanonicalRequest,
-    record: Value,
+    record: &mut Value,
     started: Instant,
 ) -> Result<Response<GatewayBody>, GatewayFailure> {
     let auth = target_auth(context, target).await?;
@@ -861,6 +923,14 @@ async fn send_to_target(
                 message: error.to_string(),
             },
         )?;
+    record["upstreamProtocol"] = json!(match format {
+        UpstreamFormat::OpenAiChat => "chat",
+        UpstreamFormat::OpenAiResponses => "responses",
+        UpstreamFormat::Anthropic => "claude",
+        UpstreamFormat::Gemini => "gemini",
+    });
+    record["upstreamPath"] = json!(url::Url::parse(&url).ok().map(|url| url.path().to_string()));
+    log_body(record, "upstreamRequestBody", body.to_string().as_bytes());
     if let Some(tracking) = &mut tracking {
         tracking.start();
     }
@@ -875,6 +945,7 @@ async fn send_to_target(
             message: "无法连接上游，请检查目标地址、网络与代理配置".into(),
         })?;
     let status = upstream.status();
+    record["upstreamStatusCode"] = json!(status.as_u16());
     let is_sse = upstream
         .headers()
         .get("content-type")
@@ -887,6 +958,13 @@ async fn send_to_target(
         if let Some(tracking) = &mut tracking {
             tracking.fail("http");
         }
+        use futures_util::StreamExt;
+        let mut body = LogBody::default();
+        let mut chunks = upstream.bytes_stream();
+        while let Some(Ok(chunk)) = chunks.next().await {
+            body.push(&chunk);
+        }
+        body.save(record, "upstreamResponseBody");
         return Err(GatewayFailure {
             status,
             message: format!(
@@ -900,6 +978,7 @@ async fn send_to_target(
         let context = context.clone();
         let request = request.clone();
         let model = physical_model.to_string();
+        let mut record = record.clone();
         let (sender, receiver) = tokio::sync::mpsc::channel::<Result<Frame<Bytes>, Infallible>>(16);
         tokio::spawn(async move {
             let mut parser = stream::Parser::new(format);
@@ -923,10 +1002,14 @@ async fn send_to_target(
             }
             // 客户端已经收到 200 时，记录生成失败并发送协议内错误事件。
             if let Some(error) = &error {
-                let _ = sender
-                    .send(Ok(Frame::data(Bytes::from(encoder.error(error)))))
-                    .await;
+                let data = encoder.error(error);
+                parser.client_body.push(data.as_bytes());
+                let _ = sender.send(Ok(Frame::data(Bytes::from(data)))).await;
             }
+            parser
+                .upstream_body
+                .save(&mut record, "upstreamResponseBody");
+            parser.client_body.save(&mut record, "responseBody");
             finish_usage(
                 &context,
                 record,
@@ -961,6 +1044,7 @@ async fn send_to_target(
         &mut tracking,
     )
     .await;
+    parser.upstream_body.save(record, "upstreamResponseBody");
     if let Err(message) = result {
         if let Some(tracking) = &mut tracking {
             tracking.fail("response");
@@ -968,7 +1052,7 @@ async fn send_to_target(
         // 保留已经收到的部分用量，但只在这里记一次失败。
         finish_usage(
             context,
-            record,
+            record.clone(),
             Some(&parser.response),
             StatusCode::BAD_GATEWAY,
             Some(&message),
@@ -988,9 +1072,10 @@ async fn send_to_target(
         } else {
             response_value(request.protocol, &parser.response, physical_model)
         };
+    log_body(record, "responseBody", body.to_string().as_bytes());
     finish_usage(
         context,
-        record,
+        record.clone(),
         Some(&parser.response),
         status,
         None,
@@ -1695,6 +1780,7 @@ fn parse_upstream_response(
                 usage_known: value["usage"].is_object(),
                 upstream_model: string_value(value.get("model")),
                 text: content_text(message.get("content")),
+                reasoning: string_value(message.get("reasoning_content")),
                 tool_calls: message["tool_calls"]
                     .as_array()
                     .cloned()
@@ -1709,6 +1795,7 @@ fn parse_upstream_response(
         }
         UpstreamFormat::OpenAiResponses => {
             let mut text = String::new();
+            let mut reasoning = String::new();
             let mut calls = Vec::new();
             for item in value["output"].as_array().into_iter().flatten() {
                 match string_value(item.get("type")).as_str() {
@@ -1723,6 +1810,10 @@ fn parse_upstream_response(
                             "arguments": string_or(item.get("arguments"), "{}")
                         }
                     })),
+                    "reasoning" => {
+                        reasoning.push_str(&response_item_text(item.get("summary")));
+                        reasoning.push_str(&response_item_text(item.get("content")));
+                    }
                     _ => {}
                 }
             }
@@ -1731,6 +1822,7 @@ fn parse_upstream_response(
                 usage_known: value["usage"].is_object(),
                 upstream_model: string_value(value.get("model")),
                 text,
+                reasoning,
                 tool_calls: calls,
                 finish_reason: if value["status"] == "incomplete" {
                     "length".into()
@@ -1746,10 +1838,12 @@ fn parse_upstream_response(
         }
         UpstreamFormat::Anthropic => {
             let mut text = String::new();
+            let mut reasoning = String::new();
             let mut calls = Vec::new();
             for block in value["content"].as_array().into_iter().flatten() {
                 match string_value(block.get("type")).as_str() {
                     "text" => text.push_str(block["text"].as_str().unwrap_or("")),
+                    "thinking" => reasoning.push_str(block["thinking"].as_str().unwrap_or("")),
                     "tool_use" => calls.push(json!({
                         "id": string_value(block.get("id")),
                         "type": "function",
@@ -1766,6 +1860,7 @@ fn parse_upstream_response(
                 usage_known: value["usage"].is_object(),
                 upstream_model: string_value(value.get("model")),
                 text,
+                reasoning,
                 tool_calls: calls,
                 finish_reason: string_or(value.get("stop_reason"), "end_turn"),
                 input_tokens: value["usage"]["input_tokens"].as_u64().unwrap_or(0),
@@ -1781,6 +1876,7 @@ fn parse_upstream_response(
                 .and_then(|items| items.first())
                 .ok_or_else(|| ManagerError::System("Gemini 上游缺少 candidates".into()))?;
             let mut text = String::new();
+            let mut reasoning = String::new();
             let mut calls = Vec::new();
             for part in candidate["content"]["parts"]
                 .as_array()
@@ -1788,7 +1884,11 @@ fn parse_upstream_response(
                 .flatten()
             {
                 if let Some(value) = part.get("text").and_then(Value::as_str) {
-                    text.push_str(value);
+                    if part["thought"] == true {
+                        reasoning.push_str(value);
+                    } else {
+                        text.push_str(value);
+                    }
                 }
                 if let Some(call) = part.get("functionCall") {
                     calls.push(json!({
@@ -1806,6 +1906,7 @@ fn parse_upstream_response(
                 usage_known: value["usageMetadata"].is_object(),
                 upstream_model: string_value(value.get("modelVersion")),
                 text,
+                reasoning,
                 tool_calls: calls,
                 finish_reason: string_or(candidate.get("finishReason"), "STOP"),
                 input_tokens: value["usageMetadata"]["promptTokenCount"]
@@ -1832,6 +1933,9 @@ fn response_value(protocol: Protocol, response: &ModelResponse, model: &str) -> 
     match protocol {
         Protocol::Chat => {
             let mut message = json!({"role":"assistant", "content": response.text});
+            if !response.reasoning.is_empty() {
+                message["reasoning_content"] = json!(response.reasoning);
+            }
             if !response.tool_calls.is_empty() {
                 message["tool_calls"] = json!(response.tool_calls);
             }
@@ -1845,11 +1949,17 @@ fn response_value(protocol: Protocol, response: &ModelResponse, model: &str) -> 
             for call in &response.tool_calls {
                 output.push(json!({"type":"function_call","id":format!("fc_{}",uuid::Uuid::new_v4().simple()),"call_id":call["id"],"name":call["function"]["name"],"arguments":call["function"]["arguments"],"status":"completed"}));
             }
+            if !response.reasoning.is_empty() {
+                output.push(json!({"id":format!("rs_{}", uuid::Uuid::new_v4().simple()),"type":"reasoning","summary":[{"type":"summary_text","text":response.reasoning}]}));
+            }
             json!({"id":format!("resp_{}",uuid::Uuid::new_v4().simple()),"object":"response","created_at":chrono::Utc::now().timestamp(),"status":if finish == "length" {"incomplete"} else {"completed"},
                 "incomplete_details":if finish == "length" {json!({"reason":"max_output_tokens"})} else {Value::Null},"model":model,"output":output,"usage":{"input_tokens":response.input_tokens,"output_tokens":response.output_tokens,"total_tokens":response.input_tokens+response.output_tokens,"input_tokens_details":{"cached_tokens":response.cache_read_tokens}}})
         }
         Protocol::Claude => {
             let mut content = Vec::new();
+            if !response.reasoning.is_empty() {
+                content.push(json!({"type":"thinking","thinking":response.reasoning}));
+            }
             if !response.text.is_empty() {
                 content.push(json!({"type":"text","text":response.text}));
             }
@@ -1861,6 +1971,9 @@ fn response_value(protocol: Protocol, response: &ModelResponse, model: &str) -> 
         }
         Protocol::Gemini => {
             let mut parts = Vec::new();
+            if !response.reasoning.is_empty() {
+                parts.push(json!({"text":response.reasoning,"thought":true}));
+            }
             if !response.text.is_empty() {
                 parts.push(json!({"text":response.text}));
             }
@@ -1961,11 +2074,19 @@ async fn update_usage(context: &GatewayContext, record: Value) -> Result<(), Man
         token["lastUsedAt"] = json!(now_millis());
     }
     write_config(&context.paths, &normalize_config(&config)).await?;
+    // 每条请求独立保存完整正文，摘要索引不携带正文，也不写入总 SQLite。
+    let directory = gateway_log_dir(&context.paths);
+    tokio::fs::create_dir_all(&directory).await?;
+    codex_models::write_atomic(
+        &directory.join(format!("{}.json", record["id"].as_str().unwrap())),
+        &serde_json::to_string(&record)?,
+    )
+    .await?;
     let mut logs = read_logs(&context.paths)?;
-    logs.insert(0, record);
+    logs.insert(0, log_summary(&record));
     logs.truncate(MAX_LOGS);
     codex_models::write_atomic(
-        std::path::Path::new(&context.paths.storage_files.gateway_request_logs),
+        &directory.join("index.json"),
         &format!("{}\n", serde_json::to_string(&logs)?),
     )
     .await
@@ -2046,7 +2167,14 @@ async fn write_config(paths: &AppPaths, config: &Value) -> Result<(), ManagerErr
 }
 
 fn read_logs(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
-    match std::fs::read_to_string(&paths.storage_files.gateway_request_logs) {
+    let file = gateway_log_dir(paths).join("index.json");
+    // 兼容功能启用前已有的摘要；新记录统一写入独立日志目录。
+    let file = if file.exists() {
+        file
+    } else {
+        std::path::PathBuf::from(&paths.storage_files.gateway_request_logs)
+    };
+    match std::fs::read_to_string(file) {
         Ok(content) => Ok(serde_json::from_str::<Value>(&content)?
             .as_array()
             .cloned()
@@ -2054,6 +2182,10 @@ fn read_logs(paths: &AppPaths) -> Result<Vec<Value>, ManagerError> {
         Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
         Err(error) => Err(ManagerError::Io(error)),
     }
+}
+
+fn gateway_log_dir(paths: &AppPaths) -> std::path::PathBuf {
+    std::path::Path::new(&paths.logs_dir).join("multi-protocol-gateway")
 }
 
 fn normalize_config(input: &Value) -> Value {
@@ -2187,10 +2319,11 @@ fn append_gemini_path(base: &str, model: &str) -> String {
 }
 
 fn error_response(status: StatusCode, message: &str) -> Response<GatewayBody> {
-    json_response(
-        status,
-        json!({"error": {"type": "gateway_error", "message": message}}),
-    )
+    json_response(status, error_body(message))
+}
+
+fn error_body(message: &str) -> Value {
+    json!({"error": {"type": "gateway_error", "message": message}})
 }
 
 fn json_response(status: StatusCode, body: Value) -> Response<GatewayBody> {
@@ -2206,7 +2339,13 @@ fn response_item_text(value: Option<&Value>) -> String {
         Some(Value::String(value)) => value.clone(),
         Some(Value::Array(items)) => items
             .iter()
-            .map(|item| item["text"].as_str().unwrap_or("").to_string())
+            .map(|item| {
+                item["text"]
+                    .as_str()
+                    .or_else(|| item["refusal"].as_str())
+                    .unwrap_or("")
+                    .to_string()
+            })
             .filter(|item| !item.is_empty())
             .collect::<Vec<_>>()
             .join(""),

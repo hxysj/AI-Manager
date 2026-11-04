@@ -55,6 +55,30 @@ const tokenSecret = "sk-test-0123456789abcdef0123456789ab"
 let tokenReadGate
 let tokenReadError
 let saveConfigError
+let logDetailGate
+let logDetailError
+const detailFixture = {
+  id: "request-one",
+  createdAt: Date.now(),
+  clientIp: "192.168.1.28",
+  requestPath: "/v1/chat/completions",
+  protocol: "chat",
+  upstreamProtocol: "responses",
+  providerName: "Antigravity",
+  requestBody: JSON.stringify({
+    model: "alias",
+    messages: [{ role: "user", content: "你好 <script>原样文本</script>" }]
+  }),
+  upstreamRequestBody: JSON.stringify({
+    model: "real-model",
+    input: [{ role: "user", content: "你好" }]
+  }),
+  upstreamResponseBody:
+    'event: response.output_text.delta\ndata: {"delta":"响应中文🙂"}\n\n',
+  responseBody: JSON.stringify({
+    choices: [{ message: { content: "响应中文🙂" } }]
+  })
+}
 let persisted = {
   enabled: false,
   host: "127.0.0.1",
@@ -71,6 +95,12 @@ let persisted = {
 const calls = []
 const api = {
   getState: async () => structuredClone(persisted),
+  getLogDetail: async (payload) => {
+    calls.push(["log-detail", payload])
+    if (logDetailGate) await logDetailGate
+    if (logDetailError) throw logDetailError
+    return { ...structuredClone(detailFixture), id: payload.logId }
+  },
   createToken: async (payload) => {
     calls.push(["create", payload])
     persisted.tokens.push({
@@ -441,6 +471,90 @@ Object.defineProperty(globalThis, "navigator", {
   value: { clipboard: { writeText: async (text) => copied.push(text) } }
 })
 try {
+  // 请求正文由详情接口读取，支持 IP 搜索、四段内容、原文复制和异步关闭。
+  persisted.logs = [
+    {
+      id: detailFixture.id,
+      createdAt: detailFixture.createdAt,
+      clientIp: detailFixture.clientIp,
+      protocol: "chat",
+      ok: true,
+      statusCode: 200
+    }
+  ]
+  await setup.load()
+  setup.activeTab.value = "logs"
+  assert.ok((await renderGateway()).includes("192.168.1.28"))
+  setup.logSearch.value = "192.168.1.28"
+  assert.equal(setup.filteredLogs.value.length, 1)
+  setup.logSearch.value = "203.0.113.1"
+  assert.equal(setup.filteredLogs.value.length, 0)
+  setup.logSearch.value = ""
+  const detailButton = gatewayNodes().find(
+    (node) => node.props?.["aria-label"] === "查看请求 request-one 的详情"
+  )
+  assert.ok(detailButton)
+  await detailButton.props.onClick()
+  assert.equal(setup.viewingRequest.value.id, "request-one")
+  assert.equal(setup.requestDetailLoading.value, false)
+  assert.deepEqual(calls.at(-1), ["log-detail", { logId: "request-one" }])
+  assert.equal(
+    setup.requestDetailBody.value,
+    JSON.stringify(JSON.parse(detailFixture.responseBody), null, 2)
+  )
+  const detailModal = () =>
+    gatewayNodes().find(
+      (node) => node.type === modalComponent && node.props?.title === "请求详情"
+    )
+  for (const section of setup.requestDetailSections) {
+    const button = gatewayNodes(detailModal()).find(
+      (node) =>
+        node.props?.class?.includes?.("request-detail-tab") &&
+        node.children?.trim?.() === section.label
+    )
+    assert.ok(button)
+    button.props.onClick()
+    assert.equal(setup.requestDetailTab.value, section.id)
+    assert.ok(setup.requestDetailBody.value.length > 0)
+  }
+  setup.requestDetailTab.value = "requestBody"
+  const detailHtml = await renderGateway()
+  assert.ok(detailHtml.includes("&lt;script&gt;"))
+  assert.ok(!detailHtml.includes("<script>原样文本"))
+  const copyDetail = gatewayNodes(detailModal()).find(
+    (node) =>
+      node.type === "button" &&
+      Array.isArray(node.children) &&
+      node.children.some(
+        (child) =>
+          typeof child.children === "string" &&
+          child.children.includes("复制当前内容")
+      )
+  )
+  assert.ok(copyDetail)
+  await copyDetail.props.onClick()
+  assert.equal(copied.at(-1), setup.requestDetailBody.value)
+  setup.closeRequestDetail()
+  assert.equal(setup.viewingRequest.value, null)
+  // 独立保存延迟，模拟关闭弹框后接口才返回。
+  let releaseDetail
+  logDetailGate = new Promise((resolve) => {
+    releaseDetail = resolve
+  })
+  const pendingDetail = setup.openRequestDetail({ id: "request-old" })
+  assert.equal(setup.requestDetailLoading.value, true)
+  setup.closeRequestDetail()
+  releaseDetail()
+  await pendingDetail
+  logDetailGate = null
+  assert.equal(setup.viewingRequest.value, null)
+  logDetailError = new Error("请求详情读取失败")
+  await setup.openRequestDetail({ id: "missing" })
+  assert.equal(setup.requestDetailError.value, "请求详情读取失败")
+  assert.equal(setup.requestDetailLoading.value, false)
+  logDetailError = null
+  setup.closeRequestDetail()
+
   // 列表默认遮挡完整 Key；复制直接取得原文，预览可收起且不进入网关公共状态。
   setup.tokenDraft.name = "预览调用方"
   await setup.createToken()

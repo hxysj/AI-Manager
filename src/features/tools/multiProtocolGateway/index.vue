@@ -540,7 +540,7 @@
               <input
                 v-model.trim="logSearch"
                 class="log-search-input"
-                placeholder="搜索请求 (请求 ID、路由、模型等)"
+                placeholder="搜索请求 ID、IP、模型或调用方"
               />
             </div>
             <button
@@ -559,11 +559,13 @@
             <thead class="request-head">
               <tr>
                 <th>时间 / 调用方</th>
+                <th>请求 IP</th>
                 <th>协议</th>
                 <th>请求 → 路由 → 上游报告</th>
                 <th>最终目标</th>
                 <th>输入 / 输出</th>
                 <th>状态 / 耗时</th>
+                <th>操作</th>
               </tr>
             </thead>
             <tbody class="request-body">
@@ -579,6 +581,9 @@
                   <span class="cell-detail">{{
                     log.tokenName || "直接调用"
                   }}</span>
+                </td>
+                <td>
+                  <span class="log-time">{{ log.clientIp || "未记录" }}</span>
                 </td>
                 <td>
                   <span class="protocol-tag" :class="log.protocol">{{
@@ -631,6 +636,18 @@
                     {{ log.errorMessage }}
                   </span>
                 </td>
+                <td>
+                  <div class="table-actions">
+                    <button
+                      class="action-btn"
+                      type="button"
+                      :aria-label="`查看请求 ${log.id} 的详情`"
+                      @click="openRequestDetail(log)"
+                    >
+                      <Eye :size="13" /> 详情
+                    </button>
+                  </div>
+                </td>
               </tr>
             </tbody>
           </table>
@@ -665,6 +682,95 @@
         </div>
       </section>
     </section>
+
+    <!-- 请求正文按需读取，避免刷新列表时传输全部对话。 -->
+    <BaseModal
+      v-if="viewingRequest"
+      class="request-detail-modal"
+      title="请求详情"
+      :description="viewingRequest.id"
+      @close="closeRequestDetail"
+    >
+      <div class="request-detail-view">
+        <div class="request-detail-meta">
+          <span class="request-detail-meta-item">
+            请求 IP：{{ viewingRequest.clientIp || "未记录" }}
+          </span>
+          <span class="request-detail-meta-item">
+            入口：{{ viewingRequest.requestMethod || "POST" }}
+            {{ viewingRequest.requestPath || "未记录" }}
+          </span>
+          <span class="request-detail-meta-item">
+            协议：{{ viewingRequest.protocol || "—" }} →
+            {{ viewingRequest.upstreamProtocol || "未记录" }}
+          </span>
+          <span class="request-detail-meta-item">
+            Provider：{{ viewingRequest.providerName || "未路由" }}
+          </span>
+          <span class="request-detail-meta-item">
+            模型：{{ viewingRequest.requestedModel || "—" }} →
+            {{ viewingRequest.physicalModel || "—" }}
+          </span>
+          <span class="request-detail-meta-item">
+            上游报告：{{ viewingRequest.upstreamModel || "未报告" }}
+          </span>
+          <span class="request-detail-meta-item">
+            状态：{{ viewingRequest.statusCode || "—" }} ·
+            {{ viewingRequest.latencyMs || 0 }} ms
+          </span>
+          <span class="request-detail-meta-item">
+            上游状态：{{ viewingRequest.upstreamStatusCode || "未记录" }} ·
+            {{ viewingRequest.upstreamPath || "—" }}
+          </span>
+        </div>
+        <p v-if="viewingRequest.errorMessage" class="request-detail-error">
+          {{ viewingRequest.errorMessage }}
+        </p>
+        <nav class="request-detail-tabs" aria-label="请求内容">
+          <button
+            v-for="section in requestDetailSections"
+            :key="section.id"
+            class="request-detail-tab"
+            :class="{ active: requestDetailTab === section.id }"
+            type="button"
+            @click="requestDetailTab = section.id"
+          >
+            {{ section.label }}
+          </button>
+        </nav>
+        <p v-if="requestDetailLoading" class="request-detail-hint">
+          正在读取请求内容…
+        </p>
+        <p v-else-if="requestDetailError" class="request-detail-error">
+          {{ requestDetailError }}
+        </p>
+        <template v-else>
+          <pre v-if="requestDetailBody !== null" class="request-detail-body">{{
+            requestDetailBody
+          }}</pre>
+          <p v-else class="request-detail-hint">
+            此记录未保存该项内容。旧记录无法补回，尚未请求上游时也没有上游内容。
+          </p>
+        </template>
+        <div class="request-detail-actions">
+          <button
+            class="tool-button"
+            type="button"
+            :disabled="
+              requestDetailLoading ||
+              !!requestDetailError ||
+              requestDetailBody === null
+            "
+            @click="copyText(requestDetailBody)"
+          >
+            <Copy :size="13" /> 复制当前内容
+          </button>
+          <button class="tool-button" type="button" @click="closeRequestDetail">
+            关闭
+          </button>
+        </div>
+      </div>
+    </BaseModal>
 
     <!-- 监听配置弹框 -->
     <BaseModal
@@ -1123,6 +1229,26 @@ const pageSize = 10
 const logTimeFilter = ref("7d")
 const logSearch = ref("")
 const logPage = ref(1)
+const viewingRequest = ref(null)
+const requestDetailLoading = ref(false)
+const requestDetailError = ref("")
+const requestDetailTab = ref("responseBody")
+const requestDetailSections = [
+  { id: "requestBody", label: "请求内容" },
+  { id: "upstreamRequestBody", label: "转发请求" },
+  { id: "upstreamResponseBody", label: "上游响应" },
+  { id: "responseBody", label: "响应内容" }
+]
+let requestDetailVersion = 0
+const requestDetailBody = computed(() => {
+  const value = viewingRequest.value?.[requestDetailTab.value]
+  if (typeof value !== "string") return null
+  try {
+    return JSON.stringify(JSON.parse(value), null, 2)
+  } catch {
+    return value
+  }
+})
 
 const defaultBaseUrl = computed(() => {
   const host = draft.host === "0.0.0.0" ? "0.0.0.0" : draft.host || "127.0.0.1"
@@ -1381,6 +1507,8 @@ const filteredLogs = computed(() => {
     const q = logSearch.value.toLowerCase()
     list = list.filter(
       (l) =>
+        l.id?.toLowerCase().includes(q) ||
+        l.clientIp?.toLowerCase().includes(q) ||
         l.requestedModel?.toLowerCase().includes(q) ||
         l.physicalModel?.toLowerCase().includes(q) ||
         l.tokenName?.toLowerCase().includes(q) ||
@@ -1611,6 +1739,31 @@ async function toggleTokenPreview(token) {
   const version = tokenPreviewVersion
   const apiKey = await readTokenKey(token)
   if (apiKey && version === tokenPreviewVersion) tokenValues[token.id] = apiKey
+}
+
+async function openRequestDetail(log) {
+  const version = ++requestDetailVersion
+  viewingRequest.value = { ...log }
+  requestDetailTab.value = "responseBody"
+  requestDetailError.value = ""
+  requestDetailLoading.value = true
+  try {
+    const detail = await multiProtocolGatewayApi.getLogDetail({ logId: log.id })
+    if (version === requestDetailVersion) viewingRequest.value = detail
+  } catch (error) {
+    if (version === requestDetailVersion) {
+      requestDetailError.value = error.message || "读取请求详情失败"
+    }
+  } finally {
+    if (version === requestDetailVersion) requestDetailLoading.value = false
+  }
+}
+
+function closeRequestDetail() {
+  // 关闭或切换记录后，忽略尚未返回的旧详情请求。
+  requestDetailVersion++
+  viewingRequest.value = null
+  requestDetailLoading.value = false
 }
 
 function exportLogs() {
@@ -2606,6 +2759,88 @@ onMounted(load)
           border-color: #ef4444;
           background: rgba(239, 68, 68, 0.08);
         }
+      }
+    }
+  }
+
+  .request-detail-modal {
+    :deep(.base-modal__panel) {
+      width: min(1000px, calc(100vw - 48px));
+      max-width: 1000px;
+    }
+
+    .request-detail-view {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      min-height: 0;
+
+      .request-detail-meta {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px 20px;
+
+        .request-detail-meta-item {
+          color: var(--color-text-muted);
+          font-size: 12px;
+          overflow-wrap: anywhere;
+        }
+      }
+
+      .request-detail-tabs {
+        display: flex;
+        gap: 6px;
+        border-bottom: 1px solid var(--color-line);
+
+        .request-detail-tab {
+          padding: 8px 12px;
+          border: 0;
+          border-bottom: 2px solid transparent;
+          color: var(--color-text-muted);
+          background: transparent;
+          cursor: pointer;
+
+          &.active {
+            border-bottom-color: #7c3aed;
+            color: #7c3aed;
+          }
+        }
+      }
+
+      .request-detail-body {
+        margin: 0;
+        min-height: 160px;
+        max-height: 50vh;
+        padding: 14px;
+        overflow: auto;
+        border: 1px solid var(--color-line);
+        border-radius: 8px;
+        color: var(--color-text);
+        background: var(--color-panel-soft);
+        font-size: 12px;
+        line-height: 1.6;
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+
+      .request-detail-hint {
+        margin: 0;
+        color: var(--color-text-muted);
+        font-size: 12px;
+        line-height: 1.6;
+      }
+
+      .request-detail-error {
+        margin: 0;
+        color: #ef4444;
+        font-size: 12px;
+        overflow-wrap: anywhere;
+      }
+
+      .request-detail-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
       }
     }
   }
