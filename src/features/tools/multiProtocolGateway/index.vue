@@ -19,7 +19,10 @@
     <p v-if="loadError" class="gateway-error" role="alert">{{ loadError }}</p>
 
     <!-- 接入地址 -->
-    <section v-if="activeTab === 'connections'" class="gateway-content connections-view">
+    <section
+      v-if="activeTab === 'connections'"
+      class="gateway-content connections-view"
+    >
       <!-- 统一模型网关控制卡片 -->
       <section class="gateway-service-card">
         <div class="service-left">
@@ -149,7 +152,10 @@
     </section>
 
     <!-- 调用 Token -->
-    <section v-else-if="activeTab === 'tokens'" class="gateway-content tokens-view">
+    <section
+      v-else-if="activeTab === 'tokens'"
+      class="gateway-content tokens-view"
+    >
       <section class="gateway-panel">
         <div class="panel-heading">
           <div class="heading-title-group">
@@ -407,166 +413,440 @@
 
     <!-- 用量与追踪 -->
     <section v-else class="gateway-content usage-logs-view">
-      <div class="usage-top-row">
-        <!-- 用量概览 -->
-        <section class="gateway-panel usage-overview-panel">
-          <div class="panel-heading">
-            <div class="heading-title-group">
-              <BarChart3 :size="16" class="heading-icon" />
-              <h3 class="panel-title">用量概览</h3>
-            </div>
-            <div class="overview-controls">
+      <!-- 第一行：用量调度全景 + 账号/模型/用户 排行卡片 (Image 8) -->
+      <div class="usage-dashboard-layout">
+        <!-- 用量调度全景 -->
+        <section class="usage-card usage-summary-card">
+          <div class="usage-card-heading">
+            <h3 class="usage-card-title">用量调度全景</h3>
+            <div class="usage-period-control">
+              <span>周期：</span>
               <select v-model="logTimeFilter" class="overview-period-select">
-                <option value="24h">近 24 小时</option>
-                <option value="7d">近 7 天</option>
-                <option value="30d">近 30 天</option>
-                <option value="all">全部时间</option>
+                <option value="24h">24 小时</option>
+                <option value="7d">7 天</option>
+                <option value="30d">30 天</option>
+                <option value="all">全部</option>
               </select>
-              <span class="date-range-badge">
-                <Calendar :size="12" class="calendar-icon" />
-                {{ formattedDateRange }}
-              </span>
             </div>
           </div>
-
-          <div class="overview-stats-grid">
-            <div class="overview-tile requests">
-              <div class="tile-icon-box requests">
-                <Layers :size="18" />
+          <div class="usage-summary-body">
+            <div class="usage-summary-copy">
+              <span class="usage-metric-label">总消耗量</span>
+              <div class="usage-total-line">
+                <strong>{{ formatCompact(overviewStats.totalTokens) }}</strong>
+                <span>Tokens</span>
               </div>
-              <div class="tile-meta-box">
-                <span class="tile-label">总请求</span>
-                <span class="tile-value">{{
-                  formatNumber(overviewStats.totalRequests)
-                }}</span>
+              <div class="usage-breakdown-line">
                 <span
-                  class="tile-trend"
-                  :class="statTrends.totalRequests.isPositive ? 'positive' : 'negative'"
+                  >入: {{ formatCompact(overviewStats.inputTokens) }} ({{
+                    formatPercent(overviewStats.inputShare)
+                  }})</span
                 >
-                  {{ statTrends.totalRequests.text }}
+                <i>/</i>
+                <span
+                  >出: {{ formatCompact(overviewStats.outputTokens) }} ({{
+                    formatPercent(overviewStats.outputShare)
+                  }})</span
+                >
+                <span
+                  class="usage-thinking-pill"
+                  :class="{ empty: !overviewStats.reasoningTokens }"
+                >
+                  思: {{ formatCompact(overviewStats.reasoningTokens) }} ({{
+                    formatPercent(overviewStats.reasoningShare)
+                  }})
                 </span>
+              </div>
+              <div v-if="topModelRows.length" class="usage-model-list">
+                <div
+                  v-for="(item, index) in topModelRows"
+                  :key="item.key"
+                  class="usage-model-row"
+                >
+                  <span
+                    class="usage-model-dot"
+                    :class="`tone-${index + 1}`"
+                  ></span>
+                  <code>{{ item.name }}</code>
+                  <span class="model-tokens">{{
+                    formatCompact(item.totalTokens)
+                  }}</span>
+                  <strong class="model-share">{{
+                    formatPercent(item.share)
+                  }}</strong>
+                </div>
+              </div>
+              <p v-else class="usage-empty-inline">暂无已报告 Token 用量</p>
+            </div>
+
+            <div class="usage-token-orbit" aria-label="Token 消耗总览">
+              <svg
+                class="sunburst-svg"
+                viewBox="0 0 180 180"
+                aria-hidden="true"
+              >
+                <defs>
+                  <linearGradient
+                    id="sunburst-glow"
+                    x1="0%"
+                    y1="0%"
+                    x2="100%"
+                    y2="100%"
+                  >
+                    <stop offset="0%" stop-color="#10b981" />
+                    <stop offset="50%" stop-color="#06b6d4" />
+                    <stop offset="100%" stop-color="#3b82f6" />
+                  </linearGradient>
+                </defs>
+                <g class="sunburst-rays">
+                  <line
+                    v-for="(ray, idx) in sunburstRays"
+                    :key="idx"
+                    :x1="ray.x1"
+                    :y1="ray.y1"
+                    :x2="ray.x2"
+                    :y2="ray.y2"
+                    stroke="url(#sunburst-glow)"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    opacity="0.85"
+                  />
+                </g>
+              </svg>
+              <div class="usage-token-orbit-core">
+                <strong>{{ formatCompact(overviewStats.totalTokens) }}</strong>
+                <span>SUMMARY</span>
               </div>
             </div>
 
-            <div class="overview-tile success">
-              <div class="tile-icon-box success">
-                <CheckCircle2 :size="18" />
-              </div>
-              <div class="tile-meta-box">
-                <span class="tile-label">成功</span>
-                <span class="tile-value">{{
-                  formatNumber(overviewStats.successRequests)
-                }}</span>
-                <span
-                  class="tile-trend"
-                  :class="statTrends.successRequests.isPositive ? 'positive' : 'negative'"
+            <div class="usage-summary-side">
+              <div class="summary-metric-block">
+                <div class="metric-top-row">
+                  <span class="usage-metric-label">预估支出</span>
+                  <button
+                    type="button"
+                    class="pricing-matrix-link"
+                    @click="showPricingModal = true"
+                  >
+                    定价矩阵 ↗
+                  </button>
+                </div>
+                <div class="metric-value-row">
+                  <strong class="cost-accent"
+                    >${{ overviewStats.estimatedCostFormatted }}</strong
+                  >
+                </div>
+                <small class="cost-subtext"
+                  >均次 ~${{ overviewStats.costPerReqFormatted }} / req</small
                 >
-                  {{ statTrends.successRequests.text }}
-                </span>
               </div>
-            </div>
 
-            <div class="overview-tile failure">
-              <div class="tile-icon-box failure">
-                <XCircle :size="18" />
+              <div class="summary-metric-block">
+                <div class="metric-top-row">
+                  <span class="usage-metric-label">缓存节省</span>
+                </div>
+                <div class="metric-value-row">
+                  <strong class="savings-accent"
+                    >+${{ overviewStats.estimatedSavingsFormatted }}</strong
+                  >
+                  <span class="cache-hit-pill"
+                    >{{ formatPercent(overviewStats.cacheRate) }} 命中</span
+                  >
+                </div>
               </div>
-              <div class="tile-meta-box">
-                <span class="tile-label">失败</span>
-                <span class="tile-value">{{
-                  formatNumber(overviewStats.failureRequests)
-                }}</span>
-                <span
-                  class="tile-trend"
-                  :class="statTrends.failureRequests.isPositive ? 'positive' : 'negative'"
-                >
-                  {{ statTrends.failureRequests.text }}
-                </span>
-              </div>
-            </div>
 
-            <div class="overview-tile token">
-              <div class="tile-icon-box token">
-                <Database :size="18" />
-              </div>
-              <div class="tile-meta-box">
-                <span class="tile-label">总 Token</span>
-                <span class="tile-value">{{
-                  formatNumber(overviewStats.totalTokens)
+              <div
+                class="gateway-live-indicator"
+                :class="{ active: gateway.enabled }"
+              >
+                <span class="live-dot"></span>
+                <span>{{
+                  gateway.enabled ? "网关调用正常" : "网关服务未开启"
                 }}</span>
-                <span
-                  class="tile-trend"
-                  :class="statTrends.totalTokens.isPositive ? 'positive' : 'negative'"
-                >
-                  {{ statTrends.totalTokens.text }}
-                </span>
               </div>
             </div>
           </div>
         </section>
 
-        <!-- 用量归属 -->
-        <section class="gateway-panel usage-attribution-panel">
-          <div class="panel-heading">
-            <div class="heading-title-group">
-              <Layers :size="16" class="heading-icon" />
-              <h3 class="panel-title">用量归属</h3>
-            </div>
-            <span class="panel-detail"
-              >明细保留最近 5000 条，调用 Token 总计持续累加。</span
+        <!-- 排行卡片 (账号 / 模型 / 用户 - Image 8) -->
+        <section class="usage-card usage-ranking-card">
+          <div class="usage-ranking-tabs" role="tablist">
+            <button
+              v-for="tab in usageRankingTabs"
+              :key="tab.id"
+              type="button"
+              class="usage-ranking-tab"
+              :class="{ active: usageRankingTab === tab.id }"
+              @click="usageRankingTab = tab.id"
             >
+              {{ tab.label }}
+            </button>
           </div>
 
-          <div
-            v-if="usageAttributionRows.length > 0"
-            class="attribution-table-wrap"
-          >
-            <table class="attribution-table">
-              <thead>
-                <tr>
-                  <th>调用方</th>
-                  <th>底层目标</th>
-                  <th>真实模型</th>
-                  <th>请求数</th>
-                  <th>输入 Token</th>
-                  <th>输出 Token</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="item in usageAttributionRows" :key="item.key">
-                  <td>
-                    <span class="cell-caller">{{ item.caller }}</span>
-                  </td>
-                  <td>
-                    <span class="target-badge">{{ item.target }}</span>
-                  </td>
-                  <td>
-                    <code class="model-id-code">{{ item.model }}</code>
-                  </td>
-                  <td>{{ formatNumber(item.requestCount) }}</td>
-                  <td>{{ formatNumber(item.inputTokens) }}</td>
-                  <td>{{ formatNumber(item.outputTokens) }}</td>
-                </tr>
-              </tbody>
-            </table>
+          <div v-if="usageRankingRows.length" class="usage-ranking-list">
+            <div
+              v-for="(item, index) in usageRankingRows"
+              :key="item.key"
+              class="usage-ranking-row"
+            >
+              <div class="usage-ranking-main">
+                <div class="usage-ranking-line">
+                  <div class="ranking-name-col">
+                    <span
+                      class="usage-ranking-number"
+                      :class="{ 'rank-1': index === 0 }"
+                    >
+                      {{ index + 1 }}
+                    </span>
+                    <span class="ranking-entity-name" :title="item.name">{{
+                      item.name
+                    }}</span>
+                    <span v-if="index === 0" class="ranking-pill-primary"
+                      >主力</span
+                    >
+                  </div>
+                  <strong class="ranking-tokens">{{
+                    formatCompact(item.totalTokens)
+                  }}</strong>
+                </div>
+
+                <div class="usage-ranking-progress">
+                  <span
+                    :style="{ width: `${Math.max(item.share, 4)}%` }"
+                  ></span>
+                </div>
+
+                <div class="usage-ranking-meta">
+                  <span
+                    >占比: {{ formatPercent(item.share) }} ({{
+                      item.requestCount
+                    }}
+                    次)</span
+                  >
+                  <span>~${{ item.costFormatted }}</span>
+                </div>
+              </div>
+            </div>
           </div>
-          <p v-else class="empty-state">暂无归属数据。</p>
+          <p v-else class="usage-empty-inline">暂无调用记录</p>
+
+          <div class="usage-ranking-footer">
+            <span>{{ rankingFooterNote }}</span>
+            <span class="ranking-live-status"> <i></i> 已激活 </span>
+          </div>
+        </section>
+      </div>
+
+      <!-- 第二行：活跃度 91 天全景 (Image 7) + 24小时活跃律动 + 效能指数 · J23 -->
+      <div class="usage-insight-grid activity-efficiency-grid">
+        <!-- 活跃度 91 天全景 (Image 7) -->
+        <section class="usage-card usage-heatmap-card">
+          <div class="usage-card-heading compact">
+            <div class="usage-heading-inline">
+              <Calendar :size="15" class="heatmap-icon" />
+              <h3 class="usage-card-title">活跃度</h3>
+              <span class="usage-card-note">91 天全景</span>
+            </div>
+            <span class="heatmap-streak-pill">
+              <Flame :size="12" /> 连续 {{ heatmapSummary.streak }} 天
+            </span>
+          </div>
+
+          <div class="usage-heatmap-body">
+            <div class="heatmap-left-col">
+              <div class="heatmap-grid" aria-label="91 天活跃全景">
+                <span
+                  v-for="day in heatmapDays"
+                  :key="day.date"
+                  class="heatmap-cell"
+                  :class="`level-${day.level}`"
+                  :title="`${day.date} · ${formatCompact(day.tokens)} Token · ${day.requests} 次`"
+                ></span>
+              </div>
+              <div class="heatmap-legend-line">
+                <div class="heatmap-legend">
+                  <span>少</span>
+                  <span class="legend-cell level-0"></span>
+                  <span class="legend-cell level-1"></span>
+                  <span class="legend-cell level-2"></span>
+                  <span class="legend-cell level-3"></span>
+                  <span class="legend-cell level-4"></span>
+                  <span>多</span>
+                </div>
+                <span class="heatmap-legend-note">连续周期沉淀</span>
+              </div>
+            </div>
+
+            <div class="heatmap-right-col">
+              <div class="heatmap-stat-item">
+                <span class="stat-label">13周累计活跃</span>
+                <div class="stat-value-line">
+                  <strong>{{
+                    formatCompact(heatmapSummary.totalTokens)
+                  }}</strong>
+                  <span>Tokens</span>
+                </div>
+              </div>
+
+              <div class="heatmap-stat-row">
+                <span class="stat-sub-label">活跃天数</span>
+                <strong class="stat-sub-val"
+                  >{{ heatmapSummary.activeDays }} ({{
+                    heatmapSummary.activeDaysRate
+                  }}%)</strong
+                >
+              </div>
+
+              <div class="heatmap-stat-row">
+                <span class="stat-sub-label"
+                  >峰值日 {{ heatmapSummary.peakDayLabel }}</span
+                >
+                <strong class="stat-sub-val peak">
+                  {{ formatCompact(heatmapSummary.peakDayTokens) }}
+                </strong>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- 24小时活跃律动 -->
+        <section class="usage-card usage-rhythm-card">
+          <div class="usage-card-heading compact">
+            <div class="usage-heading-inline">
+              <Clock :size="15" class="rhythm-icon" />
+              <h3 class="usage-card-title">24小时活跃律动</h3>
+            </div>
+            <span class="usage-card-note">
+              均次负载: {{ formatCompact(overviewStats.averageTokens) }} | 峰值:
+              {{ hourlyPeak.label }}
+            </span>
+          </div>
+          <div class="usage-rhythm-body">
+            <div class="rhythm-chart" aria-label="24 小时节奏活动">
+              <div
+                v-for="item in hourlyActivity"
+                :key="item.hour"
+                class="rhythm-bar-col"
+                :title="`${item.label} · ${item.requests} 次 · ${formatCompact(item.tokens)} Token`"
+              >
+                <span
+                  class="rhythm-bar"
+                  :class="{ active: item.requests > 0, peak: item.peak }"
+                  :style="{
+                    height:
+                      item.requests > 0
+                        ? `${Math.max(item.height, 22)}%`
+                        : '4px'
+                  }"
+                ></span>
+              </div>
+            </div>
+          </div>
+          <div class="usage-card-footline">
+            <span>⚖ 入出倍率: {{ inputOutputRatio }}</span>
+            <span class="trough-info">低谷: {{ hourlyLow.label }}</span>
+          </div>
+        </section>
+
+        <!-- 效能指数 · J23 -->
+        <section class="usage-card usage-efficiency-card">
+          <div class="usage-card-heading compact">
+            <div class="usage-heading-inline">
+              <Flame :size="15" class="efficiency-icon" />
+              <h3 class="usage-card-title">效能指数 · J23</h3>
+              <span class="usage-card-note">缓存节省效能</span>
+            </div>
+            <div class="usage-efficiency-actions">
+              <div class="efficiency-badges">
+                <span class="efficiency-pill thinking"
+                  >~{{ formatCompact(overviewStats.averageThinking) }} 思 /
+                  req</span
+                >
+                <span class="efficiency-pill throughput">⚡ 0 延时吞吐</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="usage-gauge-body">
+            <div class="semicircle-gauge-container">
+              <svg
+                class="semicircle-gauge-svg"
+                viewBox="0 0 260 145"
+                aria-hidden="true"
+              >
+                <g class="gauge-ticks">
+                  <line
+                    v-for="(tick, idx) in gaugeTicks"
+                    :key="idx"
+                    :x1="tick.x1"
+                    :y1="tick.y1"
+                    :x2="tick.x2"
+                    :y2="tick.y2"
+                    :stroke="tick.active ? tick.color : 'var(--color-line)'"
+                    :stroke-width="tick.active ? 3.5 : 2"
+                    stroke-linecap="round"
+                    :opacity="tick.active ? 1 : 0.28"
+                  />
+                </g>
+              </svg>
+              <div class="gauge-overlay-content">
+                <div class="gauge-hit-badge">
+                  命中率: {{ formatPercent(overviewStats.cacheRate) }}
+                </div>
+                <div class="gauge-main-number">
+                  <strong>{{
+                    formatCompact(overviewStats.cacheReadTokens)
+                  }}</strong>
+                </div>
+                <span class="gauge-sub-caption">复用 TOKEN 规模</span>
+              </div>
+            </div>
+          </div>
+          <div class="usage-card-footline">
+            <span
+              >未缓存输入:
+              {{ formatCompact(overviewStats.uncachedInput) }}</span
+            >
+            <span class="savings-highlight"
+              >+${{ overviewStats.estimatedSavingsFormatted }} 节省</span
+            >
+          </div>
         </section>
       </div>
 
       <!-- 最近请求 -->
-      <section class="gateway-panel recent-requests-panel">
+      <section class="gateway-panel usage-card recent-requests-panel">
         <div class="panel-heading">
           <div class="heading-title-group">
             <ListFilter :size="16" class="heading-icon" />
             <h3 class="panel-title">最近请求</h3>
+            <span class="panel-detail">用户按调用 Token 统计</span>
           </div>
           <div class="logs-toolbar">
+            <div class="log-view-tabs" role="tablist">
+              <button
+                type="button"
+                class="log-view-tab"
+                :class="{ active: logViewTab === 'requests' }"
+                @click="logViewTab = 'requests'"
+              >
+                调用记录 ({{ (gateway.logs || []).length }})
+              </button>
+              <button
+                type="button"
+                class="log-view-tab"
+                :class="{ active: logViewTab === 'ip' }"
+                @click="logViewTab = 'ip'"
+              >
+                IP 访问统计 ({{ ipStatsRows.length }})
+              </button>
+            </div>
             <div class="log-search-wrap">
               <Search :size="13" class="filter-icon" />
               <input
                 v-model.trim="logSearch"
                 class="log-search-input"
-                placeholder="搜索请求 ID、IP、模型或调用方..."
+                placeholder="搜索请求 ID、IP、模型或调用 Token..."
               />
               <button
                 v-if="logSearch"
@@ -602,7 +882,6 @@
           </div>
         </div>
 
-        <!-- 筛选下拉面板 -->
         <div v-if="showLogFilters" class="logs-filter-drawer">
           <div class="filter-drawer-row">
             <div class="filter-drawer-group">
@@ -690,137 +969,198 @@
           </div>
         </div>
 
-        <div v-if="filteredLogs.length > 0" class="request-table-wrap">
-          <table class="request-table">
-            <thead class="request-head">
-              <tr>
-                <th>时间 / 调用方</th>
-                <th>来源 IP</th>
-                <th>协议</th>
-                <th>请求 → 路由 → 上游报告</th>
-                <th>最终目标</th>
-                <th>输入 / 输出</th>
-                <th>状态 / 耗时</th>
-                <th>操作</th>
-              </tr>
-            </thead>
-            <tbody class="request-body">
-              <tr
-                v-for="log in paginatedLogs"
-                :key="log.id"
-                class="request-row"
-              >
-                <td>
-                  <span class="log-time">{{
-                    formatDateTime(log.createdAt)
-                  }}</span>
-                  <span class="cell-detail">{{
-                    log.tokenName || "直接调用"
-                  }}</span>
-                </td>
-                <td>
-                  <span class="log-ip" :class="{ muted: !log.clientIp }">{{
-                    log.clientIp || "未记录"
-                  }}</span>
-                </td>
-                <td>
-                  <span class="protocol-tag" :class="log.protocol">{{
-                    log.protocol || "chat"
-                  }}</span>
-                </td>
-                <td>
-                  <div class="routing-chain">
-                    <code class="cell-model">{{
-                      log.requestedModel || "—"
-                    }}</code>
-                    <span class="cell-arrow">→</span>
-                    <span class="cell-target">{{
-                      log.physicalModel || "—"
+        <template v-if="logViewTab === 'requests'">
+          <div v-if="filteredLogs.length > 0" class="request-table-wrap">
+            <table class="request-table">
+              <thead class="request-head">
+                <tr>
+                  <th>时间 / 调用 Token</th>
+                  <th>来源 IP</th>
+                  <th>协议</th>
+                  <th>请求 → 路由 → 上游报告</th>
+                  <th>最终目标</th>
+                  <th>输入 / 输出 / 缓存</th>
+                  <th>状态 / 耗时</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody class="request-body">
+                <tr
+                  v-for="log in paginatedLogs"
+                  :key="log.id"
+                  class="request-row"
+                >
+                  <td>
+                    <span class="log-time">{{
+                      formatDateTime(log.createdAt)
+                    }}</span>
+                    <span class="cell-detail request-token-name">{{
+                      log.tokenName || "直接调用"
                     }}</span>
                     <span
-                      class="upstream-report"
-                      :class="{ ok: log.ok, error: !log.ok }"
+                      v-if="log.tokenId"
+                      class="cell-detail request-token-id"
+                      >{{ log.tokenId }}</span
                     >
-                      {{ log.statusCode || (log.ok ? 200 : 500) }}
-                    </span>
-                  </div>
-                </td>
-                <td>
-                  <span class="log-provider-name">{{
-                    log.providerName || "未路由"
-                  }}</span>
-                  <span class="cell-detail">{{ log.providerId || "—" }}</span>
-                </td>
-                <td>
-                  <span v-if="log.usageKnown" class="token-in-out">
-                    {{ formatNumber(log.inputTokens) }} /
-                    {{ formatNumber(log.outputTokens) }}
-                  </span>
-                  <span v-else class="cell-muted">未报告</span>
-                </td>
-                <td>
-                  <div class="status-cell-wrap" :class="{ failed: !log.ok }">
-                    <span class="status-text">
-                      <component
-                        :is="log.ok ? CheckCircle2 : XCircle"
-                        :size="13"
-                        class="status-icon"
-                      />
-                      {{ log.ok ? "成功" : "失败" }} {{ log.statusCode }}
-                    </span>
-                    <span class="cell-detail">{{ log.latencyMs || 0 }} ms</span>
-                    <span v-if="log.errorMessage" class="cell-error">
-                      {{ log.errorMessage }}
-                    </span>
-                  </div>
-                </td>
-                <td>
-                  <div class="table-actions">
-                    <button
-                      class="action-btn"
-                      type="button"
-                      :aria-label="`查看请求 ${log.id} 的详情`"
-                      @click="openRequestDetail(log)"
-                    >
-                      <Eye :size="13" /> 详情
-                    </button>
-                  </div>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
-        <p v-else class="empty-state">暂无请求记录。</p>
-
-        <!-- 日志分页 -->
-        <div v-if="filteredLogs.length > 0" class="pagination-footer">
-          <span class="total-text"
-            >共 {{ filteredLogs.length }} 条记录，显示第
-            {{ (logPage - 1) * pageSize + 1 }} -
-            {{ Math.min(logPage * pageSize, filteredLogs.length) }} 条</span
-          >
-          <div class="page-controls">
-            <span class="page-size">10 条/页</span>
-            <button
-              class="page-btn"
-              :disabled="logPage <= 1"
-              @click="logPage--"
-            >
-              &lt;
-            </button>
-            <span class="page-num active">{{ logPage }}</span>
-            <button
-              class="page-btn"
-              :disabled="logPage * pageSize >= filteredLogs.length"
-              @click="logPage++"
-            >
-              &gt;
-            </button>
+                  </td>
+                  <td>
+                    <span class="log-ip" :class="{ muted: !log.clientIp }">{{
+                      log.clientIp || "未记录"
+                    }}</span>
+                  </td>
+                  <td>
+                    <span class="protocol-tag" :class="log.protocol">{{
+                      log.protocol || "chat"
+                    }}</span>
+                  </td>
+                  <td>
+                    <div class="routing-chain">
+                      <code class="cell-model">{{
+                        log.requestedModel || "—"
+                      }}</code>
+                      <span class="cell-arrow">→</span>
+                      <span class="cell-target">{{
+                        log.physicalModel || "—"
+                      }}</span>
+                      <span
+                        class="upstream-report"
+                        :class="{ ok: log.ok, error: !log.ok }"
+                        >{{ log.statusCode || (log.ok ? 200 : 500) }}</span
+                      >
+                    </div>
+                  </td>
+                  <td>
+                    <span class="log-provider-name">{{
+                      log.providerName || "未路由"
+                    }}</span>
+                    <span class="cell-detail">{{ log.providerId || "—" }}</span>
+                  </td>
+                  <td>
+                    <template v-if="log.usageKnown">
+                      <span class="token-in-out"
+                        >{{ formatNumber(log.inputTokens) }} /
+                        {{ formatNumber(log.outputTokens) }}</span
+                      >
+                      <span class="cell-detail cache-request-value"
+                        >缓存 {{ formatNumber(log.cacheReadTokens || 0) }}</span
+                      >
+                    </template>
+                    <span v-else class="cell-muted">未报告</span>
+                  </td>
+                  <td>
+                    <div class="status-cell-wrap" :class="{ failed: !log.ok }">
+                      <span class="status-text"
+                        ><component
+                          :is="log.ok ? CheckCircle2 : XCircle"
+                          :size="13"
+                          class="status-icon"
+                        />{{ log.ok ? "成功" : "失败" }}
+                        {{ log.statusCode }}</span
+                      >
+                      <span class="cell-detail"
+                        >{{ log.latencyMs || 0 }} ms</span
+                      >
+                      <span v-if="log.errorMessage" class="cell-error">{{
+                        log.errorMessage
+                      }}</span>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="table-actions">
+                      <button
+                        class="action-btn"
+                        type="button"
+                        :aria-label="`查看请求 ${log.id} 的详情`"
+                        @click="openRequestDetail(log)"
+                      >
+                        <Eye :size="13" /> 详情
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
           </div>
-        </div>
+          <p v-else class="empty-state">暂无请求记录。</p>
+
+          <div v-if="filteredLogs.length > 0" class="pagination-footer">
+            <span class="total-text"
+              >共 {{ filteredLogs.length }} 条记录，显示第
+              {{ (logPage - 1) * pageSize + 1 }} -
+              {{ Math.min(logPage * pageSize, filteredLogs.length) }} 条</span
+            >
+            <div class="page-controls">
+              <span class="page-size">10 条/页</span>
+              <button
+                class="page-btn"
+                :disabled="logPage <= 1"
+                @click="logPage--"
+              >
+                &lt;
+              </button>
+              <span class="page-num active">{{ logPage }}</span>
+              <button
+                class="page-btn"
+                :disabled="logPage * pageSize >= filteredLogs.length"
+                @click="logPage++"
+              >
+                &gt;
+              </button>
+            </div>
+          </div>
+        </template>
+        <template v-else-if="logViewTab === 'ip'">
+          <div v-if="ipStatsRows.length > 0" class="request-table-wrap">
+            <table class="request-table ip-stats-table">
+              <thead class="request-head">
+                <tr>
+                  <th style="width: 50px">排名</th>
+                  <th>IP 来源地址</th>
+                  <th>总 Token 消耗</th>
+                  <th>请求次数</th>
+                  <th>缓存复用</th>
+                  <th>用量占比</th>
+                </tr>
+              </thead>
+              <tbody class="request-body">
+                <tr
+                  v-for="(item, index) in ipStatsRows"
+                  :key="item.key"
+                  class="request-row"
+                >
+                  <td>
+                    <span class="usage-ranking-number">{{ index + 1 }}</span>
+                  </td>
+                  <td>
+                    <code class="ip-addr-code">{{ item.name }}</code>
+                  </td>
+                  <td>
+                    <strong>{{ formatCompact(item.totalTokens) }}</strong>
+                  </td>
+                  <td>
+                    <span>{{ formatNumber(item.requestCount) }} 次</span>
+                  </td>
+                  <td>
+                    <span>{{ formatCompact(item.cacheReadTokens) }} 缓存</span>
+                  </td>
+                  <td>
+                    <div class="usage-ip-bar-wrap">
+                      <span class="usage-ip-bar"
+                        ><i
+                          :style="{ width: `${Math.max(item.share, 4)}%` }"
+                        ></i
+                      ></span>
+                      <small>{{ formatPercent(item.share) }}</small>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p v-else class="empty-state">暂无 IP 访问记录。</p>
+        </template>
       </section>
     </section>
-
     <!-- 请求正文按需读取，避免刷新列表时传输全部对话。 -->
     <BaseModal
       v-if="viewingRequest"
@@ -858,7 +1198,9 @@
                 <MapPin :size="13" class="meta-icon" />
                 <span class="meta-label">请求 IP</span>
               </span>
-              <span class="meta-value">{{ viewingRequest.clientIp || "未记录" }}</span>
+              <span class="meta-value">{{
+                viewingRequest.clientIp || "未记录"
+              }}</span>
             </div>
             <div class="meta-row">
               <span class="meta-label-group">
@@ -866,7 +1208,9 @@
                 <span class="meta-label">入口</span>
               </span>
               <span class="meta-value">
-                <strong class="method-tag">{{ viewingRequest.requestMethod || "POST" }}</strong>
+                <strong class="method-tag">{{
+                  viewingRequest.requestMethod || "POST"
+                }}</strong>
                 {{ viewingRequest.requestPath || "未记录" }}
               </span>
             </div>
@@ -930,7 +1274,9 @@
                 <Clock :size="13" class="meta-icon" />
                 <span class="meta-label">耗时</span>
               </span>
-              <span class="meta-value">{{ viewingRequest.latencyMs || 0 }} ms</span>
+              <span class="meta-value"
+                >{{ viewingRequest.latencyMs || 0 }} ms</span
+              >
             </div>
             <div class="meta-row">
               <span class="meta-label-group">
@@ -938,10 +1284,7 @@
                 <span class="meta-label">上游状态</span>
               </span>
               <span class="meta-value">
-                <span
-                  class="meta-status-pill"
-                  :class="upstreamStatusClass"
-                >
+                <span class="meta-status-pill" :class="upstreamStatusClass">
                   {{ viewingRequest.upstreamStatusCode || "未记录" }}
                 </span>
               </span>
@@ -951,7 +1294,9 @@
                 <Link2 :size="13" class="meta-icon" />
                 <span class="meta-label">路径</span>
               </span>
-              <span class="meta-value">{{ viewingRequest.upstreamPath || "—" }}</span>
+              <span class="meta-value">{{
+                viewingRequest.upstreamPath || "—"
+              }}</span>
             </div>
           </div>
         </div>
@@ -1381,12 +1726,74 @@
         </button>
       </div>
     </BaseModal>
+
+    <!-- 定价矩阵弹框 -->
+    <BaseModal
+      v-if="showPricingModal"
+      title="模型计费与定价矩阵"
+      description="从系统用量计费配置中动态读取的真实费率规则，用于网关调用预估支出与上下文缓存节省额度"
+      @close="showPricingModal = false"
+    >
+      <div class="pricing-matrix-modal">
+        <div class="pricing-table-wrap">
+          <table v-if="pricingMatrixRows.length" class="pricing-table">
+            <thead>
+              <tr>
+                <th>模型体系</th>
+                <th>输入定价</th>
+                <th>输出定价</th>
+                <th>缓存读取</th>
+                <th>缓存节省率</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="item in pricingMatrixRows" :key="item.model">
+                <td>
+                  <strong>{{ item.model }}</strong>
+                  <small>{{ item.provider }}</small>
+                </td>
+                <td>{{ item.currency }}{{ item.input }} / M</td>
+                <td>{{ item.currency }}{{ item.output }} / M</td>
+                <td>{{ item.currency }}{{ item.cacheRead }} / M</td>
+                <td class="saving-cell">-{{ item.discount }}%</td>
+              </tr>
+            </tbody>
+          </table>
+          <div v-else class="pricing-empty-state">
+            <p>系统尚未配置模型定价规则</p>
+            <span>可在「用量统计」管理面板中配置模型计费价格与汇率</span>
+          </div>
+        </div>
+        <div class="pricing-notes">
+          <p>
+            •
+            <strong>预估支出</strong
+            >：按每次请求实际模型匹配系统定价规则与输入/输出 Token 计算。
+          </p>
+          <p>
+            • <strong>缓存节省</strong>：按命中上下文缓存的 Token
+            规模与标准输入单价差额进行冲抵计算。
+          </p>
+        </div>
+        <div class="modal-footer-actions">
+          <div></div>
+          <button
+            class="tool-button primary"
+            type="button"
+            @click="showPricingModal = false"
+          >
+            完成
+          </button>
+        </div>
+      </div>
+    </BaseModal>
   </section>
 </template>
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from "vue"
 import {
+  Activity,
   AlertCircle,
   ArrowUpRight,
   BarChart3,
@@ -1401,6 +1808,7 @@ import {
   Eye,
   EyeOff,
   Filter,
+  Flame,
   GitFork,
   Info,
   KeyRound,
@@ -1418,14 +1826,16 @@ import {
   Search,
   ServerCog,
   SlidersHorizontal,
+  Sparkles,
   Square,
   Trash2,
   X,
-  XCircle
+  XCircle,
+  Zap
 } from "lucide-vue-next"
 import BaseModal from "@/components/BaseModal.vue"
 import GatewayConnectionPanel from "@/features/tools/multiProtocolGateway/components/GatewayConnectionPanel.vue"
-import { multiProtocolGatewayApi } from "@/api"
+import { multiProtocolGatewayApi, usageApi } from "@/api"
 import { formatDateTime } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"
 
@@ -1508,6 +1918,56 @@ const logPage = ref(1)
 const showLogFilters = ref(false)
 const logFilterStatus = ref("all")
 const logFilterProtocol = ref("all")
+const usageRankingTab = ref("provider")
+const usageRankingTabs = [
+  { id: "provider", label: "账号" },
+  { id: "model", label: "模型" },
+  { id: "user", label: "用户" }
+]
+const efficiencyTab = ref("gauge")
+const logViewTab = ref("requests")
+const showPricingModal = ref(false)
+
+const systemPricing = ref({ exchangeRate: 7.2, items: [] })
+
+async function loadPricingConfig() {
+  try {
+    if (typeof usageApi?.getUsagePricing !== "function") return
+    const res = await usageApi.getUsagePricing()
+    if (res?.data) {
+      systemPricing.value = {
+        exchangeRate: Number(res.data.exchangeRate || 7.2),
+        items: Array.isArray(res.data.items) ? res.data.items : []
+      }
+    }
+  } catch (err) {
+    console.warn("加载系统定价配置失败:", err)
+  }
+}
+
+const pricingMatrixRows = computed(() => {
+  const items = systemPricing.value?.items || []
+  return items.map((item) => {
+    const input = Number(item.inputCostPerMillion) || 0
+    const output = Number(item.outputCostPerMillion) || 0
+    const cacheRead = Number(item.cacheReadCostPerMillion) || 0
+    const discount =
+      input > 0 && cacheRead > 0
+        ? Math.round(((input - cacheRead) / input) * 100)
+        : input > 0 && cacheRead === 0
+          ? 100
+          : 0
+    return {
+      model: item.modelId || "未命名模型",
+      provider: item.modelCategory || "通用",
+      currency: item.currency === "CNY" ? "¥" : "$",
+      input: input.toFixed(2),
+      output: output.toFixed(2),
+      cacheRead: cacheRead.toFixed(4).replace(/\.?0+$/, "") || "0",
+      discount: String(discount)
+    }
+  })
+})
 
 const viewingRequest = ref(null)
 const requestDetailLoading = ref(false)
@@ -1698,188 +2158,524 @@ const timeFilteredLogs = computed(() => {
   return logs
 })
 
-const overviewStats = computed(() => {
-  if (logTimeFilter.value === "all" || !gateway.value.logs?.length) {
-    const u = gateway.value.usage || {}
-    return {
-      totalRequests: u.requestCount || 0,
-      successRequests:
-        u.successCount ||
-        Math.max(0, (u.requestCount || 0) - (u.failureCount || 0)),
-      failureRequests: u.failureCount || 0,
-      totalTokens: (u.inputTokens || 0) + (u.outputTokens || 0),
-      inputTokens: u.inputTokens || 0,
-      outputTokens: u.outputTokens || 0
-    }
-  }
-  let total = 0
-  let success = 0
-  let failure = 0
-  let inTokens = 0
-  let outTokens = 0
-  for (const log of timeFilteredLogs.value) {
-    total++
-    if (log.ok) success++
-    else failure++
-    inTokens += log.inputTokens || 0
-    outTokens += log.outputTokens || 0
-  }
-  return {
-    totalRequests: total,
-    successRequests: success,
-    failureRequests: failure,
-    totalTokens: inTokens + outTokens,
-    inputTokens: inTokens,
-    outputTokens: outTokens
-  }
-})
+function calculateLogCost(log, pricingItems) {
+  const inTok = Number(log.inputTokens) || 0
+  const outTok = Number(log.outputTokens) || 0
+  const cachedTok = Number(log.cacheReadTokens) || 0
 
-const previousPeriodLogs = computed(() => {
-  const logs = gateway.value.logs || []
-  const now = Date.now()
-  let duration = 7 * 24 * 3600 * 1000
-  if (logTimeFilter.value === "24h") duration = 24 * 3600 * 1000
-  else if (logTimeFilter.value === "30d") duration = 30 * 24 * 3600 * 1000
-  else if (logTimeFilter.value === "all") return []
+  const logModel = (log.upstreamModel || log.physicalModel || log.model || "")
+    .trim()
+    .toLowerCase()
 
-  const periodEnd = now - duration
-  const periodStart = now - 2 * duration
-  return logs.filter((l) => {
-    const time = l.createdAt || 0
-    return time >= periodStart && time < periodEnd
+  const matchedPricing = (pricingItems || []).find((p) => {
+    const pModel = (p.modelId || "").trim().toLowerCase()
+    return (
+      pModel &&
+      (logModel === pModel ||
+        logModel.includes(pModel) ||
+        pModel.includes(logModel))
+    )
   })
-})
 
-const previousOverviewStats = computed(() => {
-  let total = 0
-  let success = 0
-  let failure = 0
-  let inTokens = 0
-  let outTokens = 0
-  for (const log of previousPeriodLogs.value) {
-    total++
-    if (log.ok) success++
-    else failure++
-    inTokens += log.inputTokens || 0
-    outTokens += log.outputTokens || 0
-  }
-  return {
-    totalRequests: total,
-    successRequests: success,
-    failureRequests: failure,
-    totalTokens: inTokens + outTokens,
-    inputTokens: inTokens,
-    outputTokens: outTokens
-  }
-})
-
-const trendPeriodLabel = computed(() => {
-  if (logTimeFilter.value === "24h") return "上24小时"
-  if (logTimeFilter.value === "30d") return "上30天"
-  if (logTimeFilter.value === "all") return "上一周期"
-  return "上7天"
-})
-
-const statTrends = computed(() => {
-  const cur = overviewStats.value
-  const prev = previousOverviewStats.value
-  const label = trendPeriodLabel.value
-
-  function formatTrendMetric(curVal, prevVal, isFailure = false) {
-    if (prevVal === 0 && curVal === 0) {
-      return {
-        text: `持平 较${label} (0)`,
-        isPositive: true
-      }
+  let cost = 0
+  let savings = 0
+  if (matchedPricing) {
+    const inPrice = Number(matchedPricing.inputCostPerMillion) || 0
+    const outPrice = Number(matchedPricing.outputCostPerMillion) || 0
+    const cacheReadPrice = Number(matchedPricing.cacheReadCostPerMillion) || 0
+    cost = (inTok * inPrice + outTok * outPrice) / 1000000
+    if (cachedTok > 0) {
+      savings = (cachedTok * Math.max(0, inPrice - cacheReadPrice)) / 1000000
     }
-    if (prevVal === 0 && curVal > 0) {
-      return {
-        text: `▲ +100% 较${label} (0)`,
-        isPositive: !isFailure
-      }
-    }
-    const diff = curVal - prevVal
-    const pct = (Math.abs(diff) / prevVal) * 100
-    const pctStr = pct % 1 === 0 ? pct.toFixed(0) : pct.toFixed(1)
-    if (diff > 0) {
-      return {
-        text: `▲ +${pctStr}% 较${label} (${formatNumber(prevVal)})`,
-        isPositive: !isFailure
-      }
-    } else if (diff < 0) {
-      return {
-        text: `▼ -${pctStr}% 较${label} (${formatNumber(prevVal)})`,
-        isPositive: isFailure
-      }
-    } else {
-      return {
-        text: `— 0% 较${label} (${formatNumber(prevVal)})`,
-        isPositive: true
-      }
-    }
+  } else if (log.totalCostUsd) {
+    cost = Number(log.totalCostUsd) || 0
   }
+  return { cost, savings }
+}
 
-  return {
-    totalRequests: formatTrendMetric(cur.totalRequests, prev.totalRequests, false),
-    successRequests: formatTrendMetric(cur.successRequests, prev.successRequests, false),
-    failureRequests: formatTrendMetric(cur.failureRequests, prev.failureRequests, true),
-    totalTokens: formatTrendMetric(cur.totalTokens, prev.totalTokens, false)
-  }
-})
+function usageFromLogs(logs, fallback = {}) {
+  let totalRequests = 0
+  let successRequests = 0
+  let failureRequests = 0
+  let inputTokens = 0
+  let outputTokens = 0
+  let cacheReadTokens = 0
+  let cacheInputTokens = 0
+  let cacheHitRequestCount = 0
+  let cacheMeasuredRequestCount = 0
+  let reasoningTokens = 0
+  let estimatedCost = 0
+  let estimatedSavings = 0
 
-const formattedDateRange = computed(() => {
-  const now = new Date()
-  const endStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-${String(now.getDate()).padStart(2, "0")}`
-  const days =
-    logTimeFilter.value === "24h"
-      ? 1
-      : logTimeFilter.value === "30d"
-        ? 30
-        : logTimeFilter.value === "all"
-          ? 365
-          : 7
-  const start = new Date(now.getTime() - days * 24 * 3600 * 1000)
-  const startStr = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, "0")}-${String(start.getDate()).padStart(2, "0")}`
-  return `${startStr} ~ ${endStr}`
-})
+  const pricingItems = systemPricing.value?.items || []
 
-const usageAttributionRows = computed(() => {
-  const logs = gateway.value.logs || []
-  if (!logs.length) {
-    const byProv = gateway.value.byProvider || []
-    return byProv.map((p) => ({
-      key: p.key,
-      caller: p.name || p.key,
-      target: p.name || p.key,
-      model: "—",
-      requestCount: p.requestCount || 0,
-      inputTokens: p.inputTokens || 0,
-      outputTokens: p.outputTokens || 0
-    }))
-  }
-  const map = new Map()
   for (const log of logs) {
-    const caller = log.tokenName || "直接调用"
-    const target = log.providerName || "未路由"
-    const model = log.physicalModel || log.requestedModel || "—"
-    const key = `${caller}__${target}__${model}`
+    totalRequests++
+    if (log.ok) successRequests++
+    else failureRequests++
+    const inTok = Number(log.inputTokens) || 0
+    const outTok = Number(log.outputTokens) || 0
+    const cachedTok = Number(log.cacheReadTokens) || 0
+    inputTokens += inTok
+    outputTokens += outTok
+
+    const rTokens = Number(log.reasoningTokens) || 0
+    if (rTokens > 0) {
+      reasoningTokens += rTokens
+    } else if (log.reasoning && typeof log.reasoning === "string") {
+      reasoningTokens += Math.ceil(log.reasoning.length / 4)
+    }
+
+    if (log.usageKnown) {
+      cacheReadTokens += cachedTok
+      cacheInputTokens += Number(log.cacheInputTokens) || inTok || 0
+      cacheMeasuredRequestCount++
+      if (cachedTok > 0) cacheHitRequestCount++
+    }
+
+    // 根据真实模型匹配定价项计算真实支出与节省
+    const { cost: logCost, savings: logSavings } = calculateLogCost(
+      log,
+      pricingItems
+    )
+    estimatedCost += logCost
+    estimatedSavings += logSavings
+  }
+
+  if (!logs.length && fallback) {
+    totalRequests = Number(fallback.requestCount) || 0
+    successRequests = Number(fallback.successCount) || 0
+    failureRequests = Number(fallback.failureCount) || 0
+    inputTokens = Number(fallback.inputTokens) || 0
+    outputTokens = Number(fallback.outputTokens) || 0
+    cacheReadTokens = Number(fallback.cacheReadTokens) || 0
+    cacheInputTokens = Number(fallback.cacheInputTokens) || 0
+    cacheHitRequestCount = Number(fallback.cacheHitRequestCount) || 0
+    cacheMeasuredRequestCount = Number(fallback.cacheMeasuredRequestCount) || 0
+    reasoningTokens = Number(fallback.reasoningTokens) || 0
+    if (fallback.estimatedCost) {
+      estimatedCost = Number(fallback.estimatedCost) || 0
+    }
+    if (fallback.estimatedSavings) {
+      estimatedSavings = Number(fallback.estimatedSavings) || 0
+    }
+  }
+
+  const totalTokens = inputTokens + outputTokens
+  const cacheRate =
+    cacheInputTokens > 0 ? (cacheReadTokens / cacheInputTokens) * 100 : 0
+  const reasoningShare =
+    outputTokens > 0 ? (reasoningTokens / outputTokens) * 100 : 0
+  const averageThinking =
+    totalRequests > 0 ? reasoningTokens / totalRequests : 0
+  const costPerReq = totalRequests > 0 ? estimatedCost / totalRequests : 0
+  const uncachedInput = Math.max(
+    0,
+    (cacheInputTokens || inputTokens) - cacheReadTokens
+  )
+
+  const estimatedCostFormatted =
+    estimatedCost >= 100 ? estimatedCost.toFixed(1) : estimatedCost.toFixed(2)
+  const costPerReqFormatted =
+    costPerReq >= 0.1 ? costPerReq.toFixed(2) : costPerReq.toFixed(3)
+  const estimatedSavingsFormatted =
+    estimatedSavings >= 100
+      ? estimatedSavings.toFixed(1)
+      : estimatedSavings.toFixed(2)
+
+  return {
+    totalRequests,
+    successRequests,
+    failureRequests,
+    totalTokens,
+    inputTokens,
+    outputTokens,
+    cacheReadTokens,
+    cacheInputTokens,
+    cacheHitRequestCount,
+    cacheMeasuredRequestCount,
+    cacheRate,
+    reasoningTokens,
+    reasoningShare,
+    averageThinking,
+    estimatedCost,
+    estimatedCostFormatted,
+    costPerReq,
+    costPerReqFormatted,
+    estimatedSavings,
+    estimatedSavingsFormatted,
+    uncachedInput,
+    inputShare: totalTokens ? (inputTokens / totalTokens) * 100 : 0,
+    outputShare: totalTokens ? (outputTokens / totalTokens) * 100 : 0,
+    averageTokens: totalRequests ? totalTokens / totalRequests : 0
+  }
+}
+
+function groupUsageRows(logs, field) {
+  const map = new Map()
+  const pricingItems = systemPricing.value?.items || []
+
+  for (const log of logs) {
+    let key, name
+    if (field === "provider" || field === "providerId") {
+      key = log.providerId || log.providerName || "unknown-provider"
+      name = log.providerName || log.providerId || "未路由"
+    } else if (field === "model" || field === "physicalModel") {
+      key =
+        log.physicalModel || log.requestedModel || log.model || "unknown-model"
+      name = log.physicalModel || log.requestedModel || log.model || "未报告"
+    } else if (field === "user" || field === "tokenId") {
+      if (log.tokenName) {
+        key = `token_${log.tokenId || log.tokenName}`
+        name = log.tokenName
+      } else if (log.tokenId) {
+        key = `token_${log.tokenId}`
+        name = log.tokenId
+      } else if (log.clientIp) {
+        key = `ip_${log.clientIp}`
+        name = log.clientIp
+      } else {
+        key = "direct"
+        name = "直接调用"
+      }
+    } else if (field === "clientIp") {
+      key = log.clientIp || "unknown"
+      name = log.clientIp || "未知 IP"
+    } else {
+      key = log[field] || "unknown"
+      name = log[field] || "未知"
+    }
+
     if (!map.has(key)) {
       map.set(key, {
         key,
-        caller,
-        target,
-        model,
+        name,
         requestCount: 0,
         inputTokens: 0,
-        outputTokens: 0
+        outputTokens: 0,
+        totalTokens: 0,
+        cacheReadTokens: 0,
+        cacheInputTokens: 0,
+        cost: 0
       })
     }
     const item = map.get(key)
+    const inTok = Number(log.inputTokens) || 0
+    const outTok = Number(log.outputTokens) || 0
+    const cachedTok = Number(log.cacheReadTokens) || 0
+
     item.requestCount++
-    item.inputTokens += log.inputTokens || 0
-    item.outputTokens += log.outputTokens || 0
+    item.inputTokens += inTok
+    item.outputTokens += outTok
+    item.totalTokens += inTok + outTok
+
+    if (log.usageKnown) {
+      item.cacheReadTokens += cachedTok
+      item.cacheInputTokens += Number(log.cacheInputTokens) || inTok || 0
+    }
+
+    const { cost } = calculateLogCost(log, pricingItems)
+    item.cost += cost
   }
+
+  const total = Array.from(map.values()).reduce(
+    (sum, item) => sum + item.totalTokens,
+    0
+  )
   return Array.from(map.values())
+    .map((item) => ({
+      ...item,
+      share: total ? (item.totalTokens / total) * 100 : 0,
+      costFormatted:
+        item.cost >= 100 ? item.cost.toFixed(1) : item.cost.toFixed(2)
+    }))
+    .sort((a, b) => b.totalTokens - a.totalTokens)
+}
+
+function rowsFromAggregate(items) {
+  const total = (items || []).reduce(
+    (sum, item) =>
+      sum + (Number(item.inputTokens) || 0) + (Number(item.outputTokens) || 0),
+    0
+  )
+  return (items || [])
+    .map((item) => {
+      const inputTokens = Number(item.inputTokens) || 0
+      const outputTokens = Number(item.outputTokens) || 0
+      const totalTokens = inputTokens + outputTokens
+      return {
+        key: item.key,
+        name: item.name || item.key || "未记录",
+        requestCount: Number(item.requestCount) || 0,
+        inputTokens,
+        outputTokens,
+        totalTokens: inputTokens + outputTokens,
+        cacheReadTokens: Number(item.cacheReadTokens) || 0,
+        cacheInputTokens: Number(item.cacheInputTokens) || 0,
+        share: total ? ((inputTokens + outputTokens) / total) * 100 : 0,
+        cost: 0,
+        costFormatted: "0.00"
+      }
+    })
+    .sort((a, b) => b.totalTokens - a.totalTokens)
+}
+
+const overviewStats = computed(() => {
+  const hasLogWindow =
+    logTimeFilter.value !== "all" && gateway.value.logs?.length
+  const summary = hasLogWindow
+    ? usageFromLogs(timeFilteredLogs.value)
+    : usageFromLogs([], gateway.value.usage || {})
+  return summary
+})
+
+const usageModelRows = computed(() => {
+  if (logTimeFilter.value === "all")
+    return rowsFromAggregate(gateway.value.byModel)
+  return groupUsageRows(timeFilteredLogs.value, "physicalModel")
+})
+
+const topModelRows = computed(() => usageModelRows.value.slice(0, 3))
+
+const usageRankingRows = computed(() => {
+  const aggregateMap = {
+    provider: "byProvider",
+    model: "byModel",
+    user: "byToken"
+  }
+  if (logTimeFilter.value === "all") {
+    if (timeFilteredLogs.value.length > 0) {
+      return groupUsageRows(
+        timeFilteredLogs.value,
+        usageRankingTab.value
+      ).slice(0, 6)
+    }
+    return rowsFromAggregate(
+      gateway.value[aggregateMap[usageRankingTab.value]]
+    ).slice(0, 6)
+  }
+  return groupUsageRows(timeFilteredLogs.value, usageRankingTab.value).slice(
+    0,
+    6
+  )
+})
+
+const rankingFooterNote = computed(() => {
+  if (usageRankingTab.value === "provider") return "网关防刷隔离"
+  if (usageRankingTab.value === "model") return "按模型调度用量排行"
+  return "按 Token 记录调用用户"
+})
+
+const ipStatsRows = computed(() => {
+  if (logTimeFilter.value === "all") {
+    return rowsFromAggregate(gateway.value.byIp).slice(0, 6)
+  }
+  return groupUsageRows(timeFilteredLogs.value, "clientIp").slice(0, 6)
+})
+
+const sunburstRays = computed(() => {
+  const count = 52
+  const center = 90
+  const rInner = 58
+  const rOuter = 78
+  const rays = []
+  for (let i = 0; i < count; i++) {
+    const angle = (i * 2 * Math.PI) / count
+    const cos = Math.cos(angle)
+    const sin = Math.sin(angle)
+    rays.push({
+      x1: +(center + rInner * cos).toFixed(2),
+      y1: +(center + rInner * sin).toFixed(2),
+      x2: +(center + rOuter * cos).toFixed(2),
+      y2: +(center + rOuter * sin).toFixed(2)
+    })
+  }
+  return rays
+})
+
+const gaugeTicks = computed(() => {
+  const count = 33
+  const centerX = 130
+  const centerY = 125
+  const rInner = 86
+  const rOuter = 104
+  const ticks = []
+  const cacheRate = overviewStats.value.cacheRate || 0
+
+  for (let i = 0; i < count; i++) {
+    const fraction = i / (count - 1)
+    const angle = Math.PI * (1 - fraction)
+    const cos = Math.cos(angle)
+    const sin = Math.sin(angle)
+    const pct = fraction * 100
+
+    let color = "#10b981"
+    if (pct > 65 && pct <= 82) {
+      color = "#f59e0b"
+    } else if (pct > 82) {
+      color = "#f97316"
+    }
+
+    const active = cacheRate > 0 ? pct <= cacheRate : false
+
+    ticks.push({
+      x1: +(centerX + rInner * cos).toFixed(2),
+      y1: +(centerY - rInner * sin).toFixed(2),
+      x2: +(centerX + rOuter * cos).toFixed(2),
+      y2: +(centerY - rOuter * sin).toFixed(2),
+      color,
+      active
+    })
+  }
+  return ticks
+})
+
+const hourlyActivity = computed(() => {
+  const now = Date.now()
+  const hour = 3600 * 1000
+  const currentHour = Math.floor(now / hour) * hour
+  const logs = (gateway.value.logs || []).filter(
+    (log) => (log.createdAt || 0) >= currentHour - 23 * hour
+  )
+  const items = Array.from({ length: 24 }, (_, index) => {
+    const start = currentHour - (23 - index) * hour
+    const end = start + hour
+    const bucket = logs.filter(
+      (log) => log.createdAt >= start && log.createdAt < end
+    )
+    return {
+      hour: start,
+      label: `${new Date(start).getHours().toString().padStart(2, "0")}:00`,
+      requests: bucket.length,
+      tokens: bucket.reduce(
+        (sum, log) =>
+          sum +
+          (Number(log.inputTokens) || 0) +
+          (Number(log.outputTokens) || 0),
+        0
+      ),
+      height: 5
+    }
+  })
+  const max = Math.max(...items.map((item) => item.requests), 1)
+  const peak = Math.max(...items.map((item) => item.requests))
+  return items.map((item) => ({
+    ...item,
+    height: item.requests ? 12 + (item.requests / max) * 88 : 5,
+    peak: item.requests === peak && peak > 0
+  }))
+})
+
+const hourlyPeak = computed(() =>
+  hourlyActivity.value.reduce(
+    (peak, item) => (item.requests > peak.requests ? item : peak),
+    { label: "—", requests: 0 }
+  )
+)
+
+const hourlyLow = computed(() =>
+  hourlyActivity.value.reduce(
+    (low, item) => (item.requests < low.requests ? item : low),
+    hourlyActivity.value[0] || { label: "—", requests: 0 }
+  )
+)
+
+const inputOutputRatio = computed(() => {
+  const output = overviewStats.value.outputTokens
+  if (!output) return "—"
+  return `${(overviewStats.value.inputTokens / output).toFixed(1)} : 1`
+})
+
+const hourly24TotalTokens = computed(() => {
+  return hourlyActivity.value.reduce((sum, h) => sum + h.tokens, 0)
+})
+
+const unitCostPerMillion = computed(() => {
+  const total = overviewStats.value.totalTokens
+  if (!total) return "0.00"
+  const cost = overviewStats.value.estimatedCost
+  return ((cost / total) * 1000000).toFixed(2)
+})
+
+const heatmapDays = computed(() => {
+  const oneDay = 24 * 3600 * 1000
+  const todayEnd = new Date().setHours(23, 59, 59, 999)
+  const logs = gateway.value.logs || []
+
+  const days = []
+  for (let i = 90; i >= 0; i--) {
+    const dayStart = todayEnd - (i + 1) * oneDay + 1
+    const dayEnd = todayEnd - i * oneDay
+    const dateObj = new Date(dayStart)
+    const y = dateObj.getFullYear()
+    const m = (dateObj.getMonth() + 1).toString().padStart(2, "0")
+    const d = dateObj.getDate().toString().padStart(2, "0")
+    const dateStr = `${y}-${m}-${d}`
+
+    const dayLogs = logs.filter(
+      (l) => (l.createdAt || 0) >= dayStart && (l.createdAt || 0) <= dayEnd
+    )
+    const tokens = dayLogs.reduce(
+      (sum, l) =>
+        sum + (Number(l.inputTokens) || 0) + (Number(l.outputTokens) || 0),
+      0
+    )
+    const requests = dayLogs.length
+
+    days.push({
+      date: dateStr,
+      tokens,
+      requests,
+      level: 0
+    })
+  }
+
+  const maxTokens = Math.max(...days.map((d) => d.tokens), 0)
+  return days.map((day) => {
+    let level = 0
+    if (day.tokens > 0) {
+      if (!maxTokens || day.tokens <= maxTokens * 0.25) level = 1
+      else if (day.tokens <= maxTokens * 0.5) level = 2
+      else if (day.tokens <= maxTokens * 0.75) level = 3
+      else level = 4
+    }
+    return { ...day, level }
+  })
+})
+
+const heatmapSummary = computed(() => {
+  const days = heatmapDays.value
+  const totalTokens = days.reduce((sum, d) => sum + d.tokens, 0)
+  const activeDays = days.filter((d) => d.requests > 0 || d.tokens > 0).length
+  const activeDaysRate = Math.round((activeDays / 91) * 100)
+  const peakDayTokens = Math.max(...days.map((d) => d.tokens), 0)
+
+  let peakDayLabel = "--"
+  if (peakDayTokens > 0) {
+    const peakDay = days.find((d) => d.tokens === peakDayTokens)
+    if (peakDay) {
+      peakDayLabel = peakDay.date.slice(5)
+    }
+  }
+
+  let streak = 0
+  for (let i = days.length - 1; i >= 0; i--) {
+    if (days[i].requests > 0 || days[i].tokens > 0) {
+      streak++
+    } else {
+      if (i === days.length - 1) continue
+      break
+    }
+  }
+
+  return {
+    totalTokens,
+    activeDays,
+    activeDaysRate,
+    peakDayTokens,
+    peakDayLabel,
+    streak
+  }
 })
 
 const activeLogFilterCount = computed(() => {
@@ -1903,7 +2699,9 @@ const filteredLogs = computed(() => {
     list = list.filter((l) => !l.ok)
   }
   if (logFilterProtocol.value !== "all") {
-    list = list.filter((l) => (l.protocol || "chat") === logFilterProtocol.value)
+    list = list.filter(
+      (l) => (l.protocol || "chat") === logFilterProtocol.value
+    )
   }
   if (logSearch.value) {
     const q = logSearch.value.toLowerCase()
@@ -1931,6 +2729,24 @@ function formatNumber(num) {
   return new Intl.NumberFormat("zh-CN").format(Number(num) || 0)
 }
 
+function formatCompact(num) {
+  const value = Number(num) || 0
+  if (Math.abs(value) >= 1_000_000_000)
+    return `${(value / 1_000_000_000).toFixed(1).replace(/\.0$/, "")}B`
+  if (Math.abs(value) >= 1_000_000)
+    return `${(value / 1_000_000).toFixed(1).replace(/\.0$/, "")}M`
+  if (Math.abs(value) >= 1_000)
+    return `${(value / 1_000).toFixed(1).replace(/\.0$/, "")}K`
+  return formatNumber(value)
+}
+
+function formatPercent(value) {
+  const number = Number(value) || 0
+  if (number === 0) return "0%"
+  if (number >= 99.95) return "100%"
+  return `${number.toFixed(number >= 10 ? 0 : 1)}%`
+}
+
 function applyState(result, resetDraft = false) {
   hideTokenPreviews()
   gateway.value = result
@@ -1952,7 +2768,11 @@ async function load() {
   loading.value = true
   loadError.value = ""
   try {
-    applyState(await multiProtocolGatewayApi.getState(), true)
+    const [state] = await Promise.all([
+      multiProtocolGatewayApi.getState(),
+      loadPricingConfig()
+    ])
+    applyState(state, true)
   } catch (error) {
     loadError.value = error.message || String(error)
   } finally {
@@ -2560,199 +3380,960 @@ onMounted(load)
     }
   }
 
-  /* 用量与追踪页签: 顶部概览与归属两栏布局 */
-  .usage-top-row {
-    display: flex;
-    gap: 16px;
+  .gateway-card,
+  .usage-card {
+    border: 1px solid var(--color-line);
+    border-radius: 12px;
+    background: var(--color-panel);
+    box-sizing: border-box;
+  }
+
+  .usage-dashboard-layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1.65fr) minmax(320px, 1.1fr);
+    gap: 14px;
     align-items: stretch;
+  }
 
-    .usage-overview-panel {
-      flex: 0 0 45%;
-      min-width: 360px;
+  .usage-summary-card {
+    min-height: 250px;
+    padding: 18px 22px;
 
-      .overview-controls {
-        display: flex;
-        align-items: center;
-        gap: 8px;
+    .usage-summary-body {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) 180px minmax(180px, 0.9fr);
+      align-items: center;
+      gap: 20px;
+      min-height: 200px;
+    }
+  }
 
-        .overview-period-select {
-          padding: 5px 9px;
-          border: 1px solid var(--color-line);
-          border-radius: 6px;
+  .usage-ranking-card {
+    display: flex;
+    flex-direction: column;
+    padding: 16px 18px;
+    min-height: 250px;
+
+    .usage-ranking-tabs {
+      display: flex;
+      align-items: center;
+      padding: 3px;
+      border-radius: 8px;
+      background: var(--color-panel-soft);
+      border: 1px solid var(--color-line);
+      margin-bottom: 12px;
+      gap: 2px;
+
+      .usage-ranking-tab {
+        flex: 1;
+        padding: 5px 0;
+        border: none;
+        border-radius: 6px;
+        background: transparent;
+        color: var(--color-text-muted);
+        font-size: 12px;
+        cursor: pointer;
+        text-align: center;
+        transition: all 0.15s ease;
+
+        &:hover {
           color: var(--color-text);
-          background: var(--color-panel-soft);
-          font-size: 11px;
-          outline: none;
-          cursor: pointer;
-
-          &:focus {
-            border-color: #7c3aed;
-          }
         }
-        .date-range-badge {
-          display: inline-flex;
-          align-items: center;
-          gap: 5px;
-          padding: 5px 9px;
-          border: 1px solid var(--color-line);
-          border-radius: 6px;
-          color: var(--color-text-muted);
-          background: var(--color-panel-soft);
-          font-size: 11px;
-          white-space: nowrap;
 
-          .calendar-icon {
-            opacity: 0.8;
-          }
-        }
-      }
-
-      .overview-stats-grid {
-        display: grid;
-        grid-template-columns: repeat(2, 1fr);
-        gap: 12px;
-        margin-top: 4px;
-
-        .overview-tile {
-          display: flex;
-          align-items: center;
-          gap: 12px;
-          padding: 13px 15px;
-          border: 1px solid var(--color-line);
-          border-radius: 10px;
-          background: var(--color-panel-soft);
-          box-sizing: border-box;
-          transition: all 0.15s;
-
-          &:hover {
-            border-color: var(--color-line-strong);
-          }
-
-          .tile-icon-box {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            width: 38px;
-            height: 38px;
-            border-radius: 50%;
-            flex-shrink: 0;
-
-            &.requests {
-              color: #7c3aed;
-              background: rgba(124, 58, 237, 0.1);
-            }
-            &.success {
-              color: #10b981;
-              background: rgba(16, 185, 129, 0.1);
-            }
-            &.failure {
-              color: #ef4444;
-              background: rgba(239, 68, 68, 0.1);
-            }
-            &.token {
-              color: #7c3aed;
-              background: rgba(124, 58, 237, 0.1);
-            }
-          }
-
-          .tile-meta-box {
-            display: flex;
-            flex-direction: column;
-            gap: 2px;
-            min-width: 0;
-            flex: 1;
-
-            .tile-label {
-              color: var(--color-text-muted);
-              font-size: 11px;
-            }
-
-            .tile-value {
-              color: var(--color-text);
-              font-size: 20px;
-              line-height: 1.2;
-            }
-
-            .tile-trend {
-              font-size: 10px;
-              white-space: nowrap;
-              margin-top: 2px;
-
-              &.positive {
-                color: #10b981;
-              }
-              &.negative {
-                color: #ef4444;
-              }
-            }
-          }
-
-          &.success .tile-value {
-            color: #10b981;
-          }
-          &.failure .tile-value {
-            color: #ef4444;
-          }
-          &.token .tile-value {
-            color: #7c3aed;
-          }
+        &.active {
+          color: var(--color-text);
+          background: var(--color-panel);
+          box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
         }
       }
     }
 
-    .usage-attribution-panel {
+    .usage-ranking-list {
+      display: flex;
+      flex-direction: column;
+      gap: 11px;
       flex: 1;
       min-width: 0;
 
-      .attribution-table-wrap {
-        max-height: 195px;
-        overflow-y: auto;
+      .usage-ranking-row {
+        display: flex;
+        flex-direction: column;
+        min-width: 0;
 
-        .attribution-table {
+        .usage-ranking-main {
+          display: flex;
+          flex-direction: column;
+          gap: 4px;
+          min-width: 0;
+        }
+
+        .usage-ranking-line {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          min-width: 0;
+
+          .ranking-name-col {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            min-width: 0;
+            flex: 1;
+          }
+
+          .usage-ranking-number {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            width: 18px;
+            height: 18px;
+            border-radius: 4px;
+            background: var(--color-panel-soft);
+            color: var(--color-text-muted);
+            font-size: 11px;
+            flex-shrink: 0;
+
+            &.rank-1 {
+              background: #f59e0b;
+              color: #ffffff;
+              box-shadow: 0 1px 4px rgba(245, 158, 11, 0.35);
+            }
+          }
+
+          .ranking-entity-name {
+            color: var(--color-text);
+            font-size: 12px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          }
+
+          .ranking-pill-primary {
+            display: inline-flex;
+            align-items: center;
+            padding: 1px 5px;
+            border-radius: 4px;
+            font-size: 10px;
+            color: #d97706;
+            background: rgba(245, 158, 11, 0.12);
+            border: 1px solid rgba(245, 158, 11, 0.25);
+            flex-shrink: 0;
+          }
+
+          .ranking-tokens {
+            color: #2563eb;
+            font-size: 12px;
+            white-space: nowrap;
+            flex-shrink: 0;
+          }
+        }
+
+        .usage-ranking-progress {
           width: 100%;
-          border-collapse: collapse;
+          height: 4px;
+          border-radius: 2px;
+          background: var(--color-panel-soft);
+          overflow: hidden;
 
-          th {
-            padding: 8px 10px;
-            border-bottom: 1px solid var(--color-line);
-            text-align: left;
+          span {
+            display: block;
+            height: 100%;
+            border-radius: 2px;
+            background: #2563eb;
+            transition: width 0.3s ease;
+          }
+        }
+
+        .usage-ranking-meta {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 8px;
+          color: var(--color-text-muted);
+          font-size: 10px;
+        }
+      }
+    }
+
+    .usage-ranking-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      margin-top: 12px;
+      padding-top: 8px;
+      border-top: 1px dashed var(--color-line);
+      color: var(--color-text-muted);
+      font-size: 11px;
+
+      .ranking-live-status {
+        display: inline-flex;
+        align-items: center;
+        gap: 5px;
+        color: #2563eb;
+
+        i {
+          width: 6px;
+          height: 6px;
+          border-radius: 50%;
+          background: #2563eb;
+          box-shadow: 0 0 6px rgba(37, 99, 235, 0.5);
+        }
+      }
+    }
+  }
+
+  .usage-card-heading {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--color-line);
+
+    &.compact {
+      align-items: center;
+      padding-bottom: 10px;
+    }
+
+    .usage-eyebrow {
+      display: block;
+      margin-bottom: 4px;
+      color: #0ea5e9;
+      font-size: 10px;
+      letter-spacing: 0.16em;
+    }
+
+    .usage-card-title {
+      margin: 0;
+      color: var(--color-text);
+      font-size: 15px;
+    }
+
+    .usage-period-control,
+    .usage-card-note,
+    .usage-cache-tag {
+      color: var(--color-text-muted);
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .usage-period-control {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+
+      .overview-period-select {
+        padding: 3px 6px;
+        border: 1px solid var(--color-line);
+        border-radius: 5px;
+        color: var(--color-text);
+        background: var(--color-panel-soft);
+        font-size: 11px;
+        outline: none;
+      }
+    }
+
+    .usage-heading-inline {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      color: #2563eb;
+    }
+  }
+
+  .usage-summary-copy {
+    min-width: 0;
+
+    .usage-metric-label {
+      display: block;
+      color: var(--color-text-muted);
+      font-size: 12px;
+    }
+
+    .usage-total-line {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin: 6px 0 8px;
+
+      strong {
+        color: var(--color-text);
+        font-size: 34px;
+        line-height: 1;
+        letter-spacing: -0.04em;
+      }
+
+      span {
+        color: var(--color-text-muted);
+        font-size: 12px;
+      }
+    }
+
+    .usage-breakdown-line {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 4px;
+      color: var(--color-text-muted);
+      font-size: 11px;
+
+      span {
+        color: #0ea5e9;
+      }
+
+      i {
+        color: var(--color-text-muted);
+        font-style: normal;
+        opacity: 0.6;
+      }
+
+      em {
+        padding: 3px 6px;
+        border-radius: 5px;
+        color: #8b5cf6;
+        background: rgba(139, 92, 246, 0.1);
+        font-style: normal;
+      }
+    }
+
+    .usage-model-list {
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      margin-top: 22px;
+
+      .usage-model-row {
+        display: grid;
+        grid-template-columns: 9px minmax(0, 1fr) auto auto;
+        align-items: center;
+        gap: 7px;
+        color: var(--color-text-muted);
+        font-size: 11px;
+
+        .usage-model-dot {
+          width: 7px;
+          height: 7px;
+          border-radius: 50%;
+          background: #10b981;
+
+          &.tone-2 {
+            background: #3b82f6;
+          }
+
+          &.tone-3 {
+            background: #8b5cf6;
+          }
+        }
+
+        code {
+          min-width: 0;
+          overflow: hidden;
+          color: var(--color-text);
+          font-family: Consolas, monospace;
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+
+        strong {
+          color: var(--color-text);
+          font-size: 10px;
+        }
+      }
+    }
+  }
+
+  .usage-token-orbit {
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 180px;
+    height: 180px;
+    margin: 0 auto;
+    flex-shrink: 0;
+
+    .sunburst-svg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+    }
+
+    .usage-token-orbit-core {
+      position: relative;
+      z-index: 2;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      width: 96px;
+      height: 96px;
+      border: 1px solid var(--color-line);
+      border-radius: 50%;
+      color: var(--color-text-muted);
+      background: var(--color-panel);
+      box-shadow: 0 2px 12px rgba(0, 0, 0, 0.08);
+
+      strong {
+        color: var(--color-text);
+        font-size: 19px;
+        line-height: 1.1;
+      }
+
+      span {
+        margin-top: 4px;
+        color: var(--color-text-muted);
+        font-size: 8px;
+        letter-spacing: 0.16em;
+      }
+    }
+  }
+
+  .usage-summary-side {
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 14px;
+    padding-left: 20px;
+    border-left: 1px solid var(--color-line);
+    min-height: 180px;
+
+    .summary-metric-block {
+      display: flex;
+      flex-direction: column;
+      gap: 3px;
+
+      .metric-top-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+
+        .usage-metric-label {
+          color: var(--color-text-muted);
+          font-size: 11px;
+        }
+
+        .pricing-matrix-link {
+          padding: 0;
+          border: none;
+          background: transparent;
+          color: #7c3aed;
+          font-size: 11px;
+          cursor: pointer;
+          text-decoration: none;
+          white-space: nowrap;
+          line-height: 1;
+
+          &:hover {
+            color: #6d28d9;
+            text-decoration: underline;
+          }
+        }
+      }
+
+      .metric-value-row {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        margin-top: 2px;
+
+        .cost-accent {
+          color: var(--color-text);
+          font-size: 24px;
+          line-height: 1.1;
+        }
+
+        .savings-accent {
+          color: #10b981;
+          font-size: 24px;
+          line-height: 1.1;
+        }
+
+        .cache-hit-pill {
+          display: inline-flex;
+          align-items: center;
+          padding: 2px 7px;
+          border-radius: 999px;
+          background: rgba(16, 185, 129, 0.1);
+          border: 1px solid rgba(16, 185, 129, 0.25);
+          color: #10b981;
+          font-size: 10px;
+        }
+      }
+
+      .cost-subtext {
+        color: var(--color-text-muted);
+        font-size: 11px;
+      }
+    }
+
+    .gateway-live-indicator {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding-top: 8px;
+      border-top: 1px dashed var(--color-line);
+      color: var(--color-text-muted);
+      font-size: 11px;
+
+      &.active {
+        color: #10b981;
+
+        .live-dot {
+          background: #10b981;
+          box-shadow: 0 0 6px rgba(16, 185, 129, 0.5);
+        }
+      }
+
+      .live-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--color-line);
+      }
+    }
+  }
+
+  .usage-card-footline {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    color: var(--color-text-muted);
+    font-size: 10px;
+  }
+
+  .usage-insight-grid {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 14px;
+    margin-top: 14px;
+
+    &.activity-efficiency-grid {
+      grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1fr);
+    }
+
+    .usage-card {
+      min-width: 0;
+      min-height: 220px;
+      padding: 14px 16px;
+    }
+  }
+
+  .usage-heatmap-card {
+    .heatmap-icon {
+      color: #2563eb;
+    }
+
+    .heatmap-streak-pill {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 7px;
+      border-radius: 999px;
+      font-size: 10px;
+      color: #ea580c;
+      background: rgba(234, 88, 12, 0.1);
+      border: 1px solid rgba(234, 88, 12, 0.22);
+    }
+
+    .usage-heatmap-body {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(115px, 0.85fr);
+      gap: 12px;
+      align-items: center;
+      padding-top: 8px;
+      min-height: 140px;
+    }
+
+    .heatmap-left-col {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .heatmap-grid {
+      display: grid;
+      grid-template-columns: repeat(13, 10px);
+      grid-template-rows: repeat(7, 10px);
+      grid-auto-flow: column;
+      gap: 4px;
+
+      .heatmap-cell {
+        width: 10px;
+        height: 10px;
+        border-radius: 2px;
+        background: var(--color-panel-soft);
+        transition:
+          transform 0.1s,
+          opacity 0.1s;
+
+        &:hover {
+          transform: scale(1.25);
+          z-index: 1;
+        }
+
+        &.level-0 {
+          background: var(--color-panel-soft);
+        }
+        &.level-1 {
+          background: #bfdbfe;
+        }
+        &.level-2 {
+          background: #60a5fa;
+        }
+        &.level-3 {
+          background: #2563eb;
+        }
+        &.level-4 {
+          background: #1e40af;
+        }
+      }
+    }
+
+    .heatmap-legend-line {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      color: var(--color-text-muted);
+      font-size: 10px;
+
+      .heatmap-legend {
+        display: flex;
+        align-items: center;
+        gap: 3px;
+
+        .legend-cell {
+          width: 8px;
+          height: 8px;
+          border-radius: 2px;
+
+          &.level-0 {
+            background: var(--color-panel-soft);
+          }
+          &.level-1 {
+            background: #bfdbfe;
+          }
+          &.level-2 {
+            background: #60a5fa;
+          }
+          &.level-3 {
+            background: #2563eb;
+          }
+          &.level-4 {
+            background: #1e40af;
+          }
+        }
+      }
+
+      .heatmap-legend-note {
+        color: var(--color-text-muted);
+        font-size: 10px;
+      }
+    }
+
+    .heatmap-right-col {
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 8px;
+      padding-left: 12px;
+      border-left: 1px solid var(--color-line);
+
+      .heatmap-stat-item {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+
+        .stat-label {
+          color: var(--color-text-muted);
+          font-size: 11px;
+        }
+
+        .stat-value-line {
+          display: flex;
+          align-items: baseline;
+          gap: 4px;
+
+          strong {
+            color: #2563eb;
+            font-size: 18px;
+            line-height: 1.2;
+          }
+
+          span {
             color: var(--color-text-muted);
             font-size: 11px;
           }
-          td {
-            padding: 9px 10px;
-            border-bottom: 1px solid var(--color-line);
-            color: var(--color-text);
-            font-size: 11px;
-          }
+        }
+      }
 
-          .cell-caller {
-            color: var(--color-text);
-          }
-          .target-badge {
-            display: inline-block;
-            padding: 2px 7px;
-            border-radius: 4px;
-            color: #7c3aed;
-            background: rgba(124, 58, 237, 0.08);
-            font-size: 11px;
-          }
-          .model-id-code {
-            color: #2563eb;
-            font-size: 11px;
-            font-family: Consolas, monospace;
+      .heatmap-stat-row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 6px;
+        font-size: 11px;
+
+        .stat-sub-label {
+          color: var(--color-text-muted);
+        }
+
+        .stat-sub-val {
+          color: var(--color-text);
+
+          &.peak {
+            color: #f59e0b;
           }
         }
       }
     }
   }
 
-  /* 最近请求工具栏与表格 */
+  .usage-rhythm-card {
+    .rhythm-icon {
+      color: #f59e0b;
+    }
+
+    .usage-rhythm-body {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      padding: 6px 0 8px;
+    }
+
+    .rhythm-chart {
+      display: flex;
+      align-items: flex-end;
+      gap: 4px;
+      height: 64px;
+      padding: 4px 0 10px;
+      border-bottom: 1px solid var(--color-line);
+
+      .rhythm-bar-col {
+        flex: 1;
+        height: 100%;
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+
+        .rhythm-bar {
+          width: 5px;
+          border-radius: 2px;
+          background: var(--color-line);
+          transition:
+            height 0.2s,
+            background 0.2s;
+
+          &.active {
+            background: linear-gradient(180deg, #818cf8, #6366f1);
+          }
+
+          &.peak {
+            background: linear-gradient(180deg, #f59e0b, #fbbf24);
+            box-shadow: 0 0 6px rgba(245, 158, 11, 0.4);
+          }
+        }
+      }
+    }
+
+    .rhythm-subcards {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+
+      .rhythm-subcard {
+        padding: 8px 12px;
+        border-radius: 7px;
+        background: var(--color-panel-soft);
+        border: 1px solid var(--color-line);
+
+        .subcard-label {
+          font-size: 11px;
+          color: var(--color-text-muted);
+        }
+
+        .subcard-value-line {
+          display: flex;
+          align-items: baseline;
+          gap: 4px;
+          margin-top: 3px;
+
+          strong {
+            font-size: 16px;
+            color: var(--color-text);
+
+            &.cost-green {
+              color: #10b981;
+            }
+          }
+
+          span {
+            font-size: 10px;
+            color: var(--color-text-muted);
+          }
+        }
+      }
+    }
+
+    .ready-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      color: #10b981;
+
+      &::before {
+        content: "";
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: #10b981;
+      }
+    }
+  }
+
+  .usage-efficiency-card {
+    .efficiency-icon {
+      color: #f97316;
+    }
+
+    .efficiency-badges {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+
+      .efficiency-pill {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 7px;
+        border-radius: 5px;
+        font-size: 10px;
+
+        &.thinking {
+          color: #a855f7;
+          border: 1px solid rgba(168, 85, 247, 0.25);
+          background: rgba(168, 85, 247, 0.08);
+        }
+
+        &.throughput {
+          color: #10b981;
+          border: 1px solid rgba(16, 185, 129, 0.25);
+          background: rgba(16, 185, 129, 0.08);
+        }
+      }
+    }
+
+    .usage-gauge-body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 150px;
+      padding: 10px 0 0;
+
+      .semicircle-gauge-container {
+        position: relative;
+        display: flex;
+        align-items: flex-end;
+        justify-content: center;
+        width: 240px;
+        height: 125px;
+
+        .semicircle-gauge-svg {
+          width: 100%;
+          height: 100%;
+          overflow: visible;
+        }
+
+        .gauge-overlay-content {
+          position: absolute;
+          bottom: 2px;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          gap: 2px;
+
+          .gauge-hit-badge {
+            padding: 2px 8px;
+            border-radius: 999px;
+            border: 1px solid rgba(14, 165, 233, 0.3);
+            background: rgba(14, 165, 233, 0.1);
+            color: #0ea5e9;
+            font-size: 10px;
+          }
+
+          .gauge-main-number {
+            strong {
+              font-size: 26px;
+              color: var(--color-text);
+              letter-spacing: -0.5px;
+            }
+          }
+
+          .gauge-sub-caption {
+            font-size: 10px;
+            color: var(--color-text-muted);
+            letter-spacing: 0.5px;
+          }
+        }
+      }
+    }
+
+    .savings-highlight {
+      color: #10b981;
+    }
+  }
+
+  .usage-empty-inline {
+    margin: auto 0;
+    color: var(--color-text-muted);
+    font-size: 11px;
+  }
+
+  /* 最近请求面板 */
   .recent-requests-panel {
+    margin-top: 14px;
+
     .logs-toolbar {
       display: flex;
       align-items: center;
       gap: 10px;
+
+      .log-view-tabs {
+        display: inline-flex;
+        align-items: center;
+        gap: 3px;
+        padding: 3px;
+        border: 1px solid var(--color-line);
+        border-radius: 6px;
+        background: var(--color-panel-soft);
+        flex-shrink: 0;
+
+        .log-view-tab {
+          padding: 4px 10px;
+          border: 0;
+          border-radius: 4px;
+          color: var(--color-text-muted);
+          background: transparent;
+          cursor: pointer;
+          font-size: 11px;
+          transition: all 0.15s ease;
+
+          &.active {
+            color: var(--color-text);
+            background: var(--color-panel);
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+          }
+
+          &:hover:not(.active) {
+            color: var(--color-text);
+          }
+        }
+      }
 
       .log-search-wrap {
         position: relative;
@@ -3036,6 +4617,54 @@ onMounted(load)
               overflow-wrap: anywhere;
             }
           }
+        }
+      }
+    }
+
+    .ip-stats-table {
+      .usage-ranking-number {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 20px;
+        height: 20px;
+        border-radius: 4px;
+        background: rgba(124, 58, 237, 0.1);
+        color: #7c3aed;
+        font-size: 11px;
+      }
+
+      .ip-addr-code {
+        font-family: Consolas, monospace;
+        color: var(--color-text);
+        font-size: 11px;
+      }
+
+      .usage-ip-bar-wrap {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        min-width: 120px;
+
+        .usage-ip-bar {
+          flex: 1;
+          height: 6px;
+          border-radius: 3px;
+          background: var(--color-line);
+          overflow: hidden;
+
+          i {
+            display: block;
+            height: 100%;
+            border-radius: inherit;
+            background: linear-gradient(90deg, #0ea5e9, #38bdf8);
+          }
+        }
+
+        small {
+          color: var(--color-text-muted);
+          font-size: 10px;
+          min-width: 32px;
         }
       }
     }
@@ -3873,6 +5502,99 @@ onMounted(load)
     justify-content: flex-end;
     gap: 8px;
     margin-top: 14px;
+  }
+
+  .pricing-matrix-modal {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+
+    .pricing-table-wrap {
+      overflow-x: auto;
+      border: 1px solid var(--color-line);
+      border-radius: 8px;
+      background: var(--color-panel);
+
+      .pricing-table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 12px;
+
+        th,
+        td {
+          padding: 8px 12px;
+          text-align: left;
+          border-bottom: 1px solid var(--color-line);
+        }
+
+        th {
+          color: var(--color-text-muted);
+          background: var(--color-panel-soft);
+          font-size: 11px;
+        }
+
+        td {
+          color: var(--color-text);
+
+          strong {
+            display: block;
+            color: var(--color-text);
+          }
+
+          small {
+            display: block;
+            color: var(--color-text-muted);
+            font-size: 10px;
+          }
+
+          &.saving-cell {
+            color: #10b981;
+          }
+        }
+
+        tbody tr:last-child td {
+          border-bottom: none;
+        }
+      }
+
+      .pricing-empty-state {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 6px;
+        padding: 36px 16px;
+        color: var(--color-text-muted);
+        text-align: center;
+
+        p {
+          margin: 0;
+          font-size: 13px;
+          color: var(--color-text);
+        }
+
+        span {
+          font-size: 11px;
+        }
+      }
+    }
+
+    .pricing-notes {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      font-size: 11px;
+      color: var(--color-text-muted);
+      line-height: 1.5;
+
+      p {
+        margin: 0;
+      }
+
+      strong {
+        color: var(--color-text);
+      }
+    }
   }
 
   :deep(.base-modal__panel) {

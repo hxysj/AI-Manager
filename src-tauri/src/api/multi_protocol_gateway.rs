@@ -165,6 +165,7 @@ struct ModelResponse {
     input_tokens: u64,
     output_tokens: u64,
     cache_read_tokens: u64,
+    cache_input_tokens: u64,
     usage_known: bool,
     upstream_model: String,
     native: Option<Value>,
@@ -224,6 +225,7 @@ pub fn read_state(paths: &AppPaths) -> Result<Value, ManagerError> {
     state["byToken"] = json!(aggregate_logs(&logs, "tokenId"));
     state["byProvider"] = json!(aggregate_logs(&logs, "providerId"));
     state["byModel"] = json!(aggregate_logs(&logs, "physicalModel"));
+    state["byIp"] = json!(aggregate_logs(&logs, "clientIp"));
     state["logs"] = json!(logs.iter().take(100).map(log_summary).collect::<Vec<_>>());
     Ok(state)
 }
@@ -304,6 +306,10 @@ pub async fn create_token(
         "failureCount": 0,
         "inputTokens": 0,
         "outputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheInputTokens": 0,
+        "cacheHitRequestCount": 0,
+        "cacheMeasuredRequestCount": 0,
         "lastUsedAt": 0
     });
     tokens.push(item.clone());
@@ -394,6 +400,7 @@ pub fn usage(paths: &AppPaths) -> Result<Value, ManagerError> {
         "byToken": aggregate_logs(&logs, "tokenId"),
         "byProvider": aggregate_logs(&logs, "providerId"),
         "byModel": aggregate_logs(&logs, "physicalModel"),
+        "byIp": aggregate_logs(&logs, "clientIp"),
         "recent": logs.iter().take(200).map(log_summary).collect::<Vec<_>>()
     }))
 }
@@ -497,7 +504,8 @@ async fn handle_request(
         "clientIp": peer.ip().to_string(), "requestPath": path, "requestMethod": "POST",
         "tokenId": token["id"], "tokenName": token["name"],
         "requestedModel": route.requested_model, "physicalModel": "", "upstreamModel": "",
-        "inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0, "usageKnown": false
+        "inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0,
+        "cacheInputTokens": 0, "usageKnown": false
     });
     let result = async {
         let body = http_body_util::Limited::new(request.into_body(), MAX_BODY_SIZE)
@@ -595,6 +603,7 @@ async fn finish_usage(
         record["inputTokens"] = json!(response.input_tokens);
         record["outputTokens"] = json!(response.output_tokens);
         record["cacheReadTokens"] = json!(response.cache_read_tokens);
+        record["cacheInputTokens"] = json!(response.cache_input_tokens);
         record["usageKnown"] = json!(response.usage_known);
         record["upstreamModel"] = json!(response.upstream_model);
     }
@@ -1791,6 +1800,7 @@ fn parse_upstream_response(
                 cache_read_tokens: value["usage"]["prompt_tokens_details"]["cached_tokens"]
                     .as_u64()
                     .unwrap_or(0),
+                cache_input_tokens: value["usage"]["prompt_tokens"].as_u64().unwrap_or(0),
             })
         }
         UpstreamFormat::OpenAiResponses => {
@@ -1834,6 +1844,7 @@ fn parse_upstream_response(
                 cache_read_tokens: value["usage"]["input_tokens_details"]["cached_tokens"]
                     .as_u64()
                     .unwrap_or(0),
+                cache_input_tokens: value["usage"]["input_tokens"].as_u64().unwrap_or(0),
             })
         }
         UpstreamFormat::Anthropic => {
@@ -1868,6 +1879,13 @@ fn parse_upstream_response(
                 cache_read_tokens: value["usage"]["cache_read_input_tokens"]
                     .as_u64()
                     .unwrap_or(0),
+                cache_input_tokens: value["usage"]["input_tokens"].as_u64().unwrap_or(0)
+                    + value["usage"]["cache_read_input_tokens"]
+                        .as_u64()
+                        .unwrap_or(0)
+                    + value["usage"]["cache_creation_input_tokens"]
+                        .as_u64()
+                        .unwrap_or(0),
             })
         }
         UpstreamFormat::Gemini => {
@@ -1916,6 +1934,9 @@ fn parse_upstream_response(
                     .as_u64()
                     .unwrap_or(0),
                 cache_read_tokens: value["usageMetadata"]["cachedContentTokenCount"]
+                    .as_u64()
+                    .unwrap_or(0),
+                cache_input_tokens: value["usageMetadata"]["promptTokenCount"]
                     .as_u64()
                     .unwrap_or(0),
             })
@@ -2098,7 +2119,11 @@ fn usage_summary(logs: &[Value]) -> Value {
         "successCount": 0,
         "failureCount": 0,
         "inputTokens": 0,
-        "outputTokens": 0
+        "outputTokens": 0,
+        "cacheReadTokens": 0,
+        "cacheInputTokens": 0,
+        "cacheHitRequestCount": 0,
+        "cacheMeasuredRequestCount": 0
     });
     for log in logs {
         result["requestCount"] = json!(number_value(result.get("requestCount"), 0) + 1);
@@ -2113,6 +2138,22 @@ fn usage_summary(logs: &[Value]) -> Value {
         result["outputTokens"] = json!(
             number_value(result.get("outputTokens"), 0) + number_value(log.get("outputTokens"), 0)
         );
+        if log["usageKnown"] == true {
+            result["cacheMeasuredRequestCount"] =
+                json!(number_value(result.get("cacheMeasuredRequestCount"), 0) + 1);
+            result["cacheInputTokens"] = json!(
+                number_value(result.get("cacheInputTokens"), 0)
+                    + number_value(log.get("cacheInputTokens"), 0)
+            );
+            result["cacheReadTokens"] = json!(
+                number_value(result.get("cacheReadTokens"), 0)
+                    + number_value(log.get("cacheReadTokens"), 0)
+            );
+            if number_value(log.get("cacheReadTokens"), 0) > 0 {
+                result["cacheHitRequestCount"] =
+                    json!(number_value(result.get("cacheHitRequestCount"), 0) + 1);
+            }
+        }
     }
     result
 }
@@ -2129,7 +2170,11 @@ fn aggregate_logs(logs: &[Value], field: &str) -> Vec<Value> {
                 "successCount": 0,
                 "failureCount": 0,
                 "inputTokens": 0,
-                "outputTokens": 0
+                "outputTokens": 0,
+                "cacheReadTokens": 0,
+                "cacheInputTokens": 0,
+                "cacheHitRequestCount": 0,
+                "cacheMeasuredRequestCount": 0
             })
         });
         item["requestCount"] = json!(number_value(item.get("requestCount"), 0) + 1);
@@ -2144,6 +2189,22 @@ fn aggregate_logs(logs: &[Value], field: &str) -> Vec<Value> {
         item["outputTokens"] = json!(
             number_value(item.get("outputTokens"), 0) + number_value(log.get("outputTokens"), 0)
         );
+        if log["usageKnown"] == true {
+            item["cacheMeasuredRequestCount"] =
+                json!(number_value(item.get("cacheMeasuredRequestCount"), 0) + 1);
+            item["cacheInputTokens"] = json!(
+                number_value(item.get("cacheInputTokens"), 0)
+                    + number_value(log.get("cacheInputTokens"), 0)
+            );
+            item["cacheReadTokens"] = json!(
+                number_value(item.get("cacheReadTokens"), 0)
+                    + number_value(log.get("cacheReadTokens"), 0)
+            );
+            if number_value(log.get("cacheReadTokens"), 0) > 0 {
+                item["cacheHitRequestCount"] =
+                    json!(number_value(item.get("cacheHitRequestCount"), 0) + 1);
+            }
+        }
     }
     map.into_values().collect()
 }
@@ -2189,6 +2250,14 @@ fn gateway_log_dir(paths: &AppPaths) -> std::path::PathBuf {
 }
 
 fn normalize_config(input: &Value) -> Value {
+    let mut totals = usage_summary(&[]);
+    if let Some(existing) = input.get("totals").and_then(Value::as_object) {
+        if let Some(target) = totals.as_object_mut() {
+            for (key, value) in existing {
+                target.insert(key.clone(), value.clone());
+            }
+        }
+    }
     json!({
         "enabled": input["enabled"].as_bool().unwrap_or(false),
         "host": string_or(input.get("host"), DEFAULT_HOST),
@@ -2197,7 +2266,7 @@ fn normalize_config(input: &Value) -> Value {
         "modelMappings": input.get("modelMappings").filter(|value| value.is_object()).cloned().unwrap_or_else(|| json!({})),
         "tokens": input.get("tokens").filter(|value| value.is_array()).cloned().unwrap_or_else(|| json!([])),
         "updatedAt": number_value(input.get("updatedAt"), 0),
-        "totals": input.get("totals").cloned().unwrap_or_else(|| usage_summary(&[]))
+        "totals": totals
     })
 }
 

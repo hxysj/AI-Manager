@@ -163,7 +163,16 @@ const localRequire = (name) => {
         mounted = callback
       }
     }
-  if (name === "@/api") return { multiProtocolGatewayApi: api }
+  if (name === "@/api")
+    return {
+      multiProtocolGatewayApi: api,
+      usageApi: {
+        getUsagePricing: async () => ({
+          status: "ok",
+          data: { exchangeRate: 7.2, items: [] }
+        })
+      }
+    }
   if (name === "@/utils/message")
     return {
       createMessage: {
@@ -394,6 +403,13 @@ for (const [tab, expected] of [
   const html = await renderToString(app)
   assert.deepEqual(failures, [])
   assert.ok(html.includes(expected))
+  if (tab === "logs") {
+    assert.ok(html.includes("用量调度全景"))
+    assert.ok(html.includes("缓存节省效能"))
+    assert.ok(html.includes("IP 访问统计"))
+    assert.ok(html.includes("用户按调用 Token 统计"))
+    assert.ok(html.includes("缓存"))
+  }
   assert.equal(html.includes("Multi-Protocol Support"), tab === "connections")
   assert.ok(!html.includes(tokenSecret))
 }

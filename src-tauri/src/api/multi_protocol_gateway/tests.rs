@@ -984,3 +984,65 @@ fn config_normalization_deduplicates_pool() {
     assert_eq!(config["port"], 8047);
     assert_eq!(config["tokens"], json!([]));
 }
+
+#[test]
+fn usage_aggregates_cache_tokens_and_client_ips() {
+    let logs = vec![
+        json!({
+            "id": "one",
+            "ok": true,
+            "usageKnown": true,
+            "inputTokens": 100,
+            "outputTokens": 20,
+            "cacheInputTokens": 100,
+            "cacheReadTokens": 40,
+            "tokenId": "token-a",
+            "tokenName": "桌面客户端",
+            "providerId": "provider-a",
+            "providerName": "Provider A",
+            "physicalModel": "model-a",
+            "clientIp": "192.168.1.20"
+        }),
+        json!({
+            "id": "two",
+            "ok": true,
+            "usageKnown": true,
+            "inputTokens": 80,
+            "outputTokens": 10,
+            "cacheInputTokens": 80,
+            "cacheReadTokens": 0,
+            "tokenId": "token-a",
+            "tokenName": "桌面客户端",
+            "providerId": "provider-a",
+            "providerName": "Provider A",
+            "physicalModel": "model-a",
+            "clientIp": "192.168.1.20"
+        }),
+        json!({
+            "id": "three",
+            "ok": false,
+            "usageKnown": false,
+            "inputTokens": 0,
+            "outputTokens": 0,
+            "tokenId": "token-b",
+            "tokenName": "脚本调用",
+            "clientIp": "10.0.0.8"
+        }),
+    ];
+    let summary = usage_summary(&logs);
+    assert_eq!(summary["requestCount"], 3);
+    assert_eq!(summary["successCount"], 2);
+    assert_eq!(summary["cacheReadTokens"], 40);
+    assert_eq!(summary["cacheInputTokens"], 180);
+    assert_eq!(summary["cacheHitRequestCount"], 1);
+    assert_eq!(summary["cacheMeasuredRequestCount"], 2);
+
+    let by_ip = aggregate_logs(&logs, "clientIp");
+    let lan_ip = by_ip
+        .iter()
+        .find(|item| item["key"] == "192.168.1.20")
+        .unwrap();
+    assert_eq!(lan_ip["requestCount"], 2);
+    assert_eq!(lan_ip["cacheReadTokens"], 40);
+    assert!(by_ip.iter().any(|item| item["key"] == "10.0.0.8"));
+}

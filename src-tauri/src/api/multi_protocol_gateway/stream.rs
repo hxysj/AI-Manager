@@ -87,6 +87,13 @@ impl Parser {
             self.response.output_tokens = value;
         }
         self.response.cache_read_tokens = self.response.cache_read_tokens.max(cache);
+        self.response.cache_input_tokens = if self.format == UpstreamFormat::Anthropic {
+            self.response.input_tokens
+                + self.response.cache_read_tokens
+                + usage["cache_creation_input_tokens"].as_u64().unwrap_or(0)
+        } else {
+            self.response.input_tokens
+        };
     }
 
     fn snapshot(&mut self, value: &Value, native: bool) -> Result<Vec<Delta>, String> {
