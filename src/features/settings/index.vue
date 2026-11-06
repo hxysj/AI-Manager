@@ -452,6 +452,7 @@
         class="settings-view__panel settings-agent-panel"
       >
         <div class="settings-agent-list">
+          <LocalModelExtension />
           <ScreenshotExtension
             :providers="providers"
             :codex-accounts="codexAccounts"
@@ -598,6 +599,7 @@ import { systemApi } from "@/api"
 import { desktopPets, getDesktopPet } from "@/constants/desktop-pets"
 import SystemSettings from "@/features/settings/components/SystemSettings.vue"
 import ScreenshotExtension from "@/features/settings/components/ScreenshotExtension.vue"
+import LocalModelExtension from "@/features/settings/components/LocalModelExtension.vue"
 import DesktopPetList from "@/features/settings/components/DesktopPetList.vue"
 import DesktopPetDetail from "@/features/settings/components/DesktopPetDetail.vue"
 import TranslationConfigModal from "./components/TranslationConfigModal.vue"

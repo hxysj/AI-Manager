@@ -1,7 +1,7 @@
 use crate::api::{
     app, app_logs, claude_desktop, codex_account, data, git_tool, google_account, image_workbench,
-    lan_share, multi_protocol_gateway, network_quality, proxy, repos, rules, runtime_provider,
-    screenshot, sessions, settings, skills, system, tools, translation, usage,
+    lan_share, local_models, multi_protocol_gateway, network_quality, proxy, repos, rules,
+    runtime_provider, screenshot, sessions, settings, skills, system, tools, translation, usage,
 };
 use crate::core::error::ManagerError;
 use crate::core::paths::{
@@ -36,6 +36,7 @@ pub struct AppState {
     manager: Mutex<ManagerState>,
     close_action: RwLock<String>,
     git_tool_lock: Mutex<()>,
+    local_models: local_models::LocalModelService,
 }
 
 impl AppState {
@@ -46,6 +47,7 @@ impl AppState {
             manager: Mutex::new(manager),
             close_action: RwLock::new(close_action),
             git_tool_lock: Mutex::new(()),
+            local_models: local_models::LocalModelService::default(),
         }
     }
 
@@ -55,6 +57,14 @@ impl AppState {
         channel: &str,
         payload: Option<Value>,
     ) -> Result<Value, ManagerError> {
+        // 模型下载只使用目录快照，不持有全局应用状态锁。
+        if let Some(action) = channel.strip_prefix("local-models:") {
+            let paths = self.manager.lock().await.paths.clone();
+            return self
+                .local_models
+                .dispatch(&app, &paths, action, payload.unwrap_or_else(|| json!({})))
+                .await;
+        }
         // Git 写操作串行执行；远程同步仅持有路径快照，不阻塞应用状态。
         if channel.starts_with("git-tool:") {
             let _git_guard = self.git_tool_lock.lock().await;
