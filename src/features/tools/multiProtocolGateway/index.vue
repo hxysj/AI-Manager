@@ -1427,6 +1427,7 @@
     <!-- 底层池弹框 -->
     <BaseModal
       v-if="showPoolModal"
+      class="pool-modal"
       title="底层池"
       description="选择参与反代的 Provider 或官方账号，模型将从所选来源的已有配置中读取。"
       @close="showPoolModal = false"
@@ -5241,6 +5242,20 @@ onMounted(load)
         justify-content: flex-end;
         gap: 10px;
         padding-top: 8px;
+      }
+    }
+  }
+
+  .pool-modal {
+    :deep(.base-modal__header) {
+      flex-shrink: 0;
+    }
+
+    .modal-form {
+      min-height: 0;
+
+      .modal-footer-actions {
+        flex-shrink: 0;
       }
     }
   }
