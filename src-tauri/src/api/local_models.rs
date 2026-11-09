@@ -15,6 +15,8 @@ use tokio::{
     sync::{watch, Mutex},
 };
 
+mod runtime;
+
 const MODEL_ID: &str = "minicpm-ocr-1.0";
 const REVISION: &str = "857af228a0b3cc79588bb90635bb6c00dd9542da";
 // 大小和 SHA-256 来自 OpenBMB 官方仓库，语言权重与视觉模块必须配套安装。
@@ -48,6 +50,7 @@ struct DownloadTask {
 #[derive(Clone, Default)]
 pub struct LocalModelService {
     tasks: Arc<Mutex<HashMap<PathBuf, DownloadTask>>>,
+    inference: Arc<Mutex<()>>,
 }
 
 fn failure(message: impl ToString) -> ManagerError {
@@ -138,6 +141,14 @@ impl LocalModelService {
     ) -> Result<Value, ManagerError> {
         if action == "list" {
             return self.list(paths).await;
+        }
+        if action == "installed" {
+            return self
+                .installed(paths, payload["capability"].as_str().unwrap_or(""))
+                .await;
+        }
+        if action == "generate" {
+            return self.generate(paths, payload).await;
         }
         if payload["id"].as_str() != Some(MODEL_ID) {
             return Err(failure("不支持的本地模型"));
@@ -231,6 +242,7 @@ impl LocalModelService {
     }
 
     async fn delete(&self, directory: &Path) -> Result<(), ManagerError> {
+        let _inference = self.inference.lock().await;
         // 与开始下载共用同一把锁，避免删除和下载在多窗口间交错。
         let mut tasks = self.tasks.lock().await;
         if tasks.get(directory).is_some_and(|task| active(&task.phase)) {
@@ -305,6 +317,7 @@ impl LocalModelService {
                 "description": "中英文文档识别，支持文字、表格、公式和图表。",
                 "format": "GGUF · Q4_K_M",
                 "license": "Apache-2.0",
+                "capabilities": ["ocr"],
                 "downloadBytes": total,
                 "usedBytes": used_bytes,
                 "downloadedBytes": transferred,
@@ -317,6 +330,56 @@ impl LocalModelService {
                 "files": files,
             }]
         }))
+    }
+
+    pub async fn installed(
+        &self,
+        paths: &AppPaths,
+        capability: &str,
+    ) -> Result<Value, ManagerError> {
+        let snapshot = self.list(paths).await?;
+        let models: Vec<Value> = snapshot["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|model| {
+                model["phase"] == "downloaded"
+                    && (capability.is_empty()
+                        || model["capabilities"]
+                            .as_array()
+                            .unwrap()
+                            .iter()
+                            .any(|value| value == capability))
+            })
+            .map(|model| {
+                json!({
+                    "id": model["id"], "name": model["name"], "capabilities": model["capabilities"]
+                })
+            })
+            .collect();
+        Ok(json!({ "models": models }))
+    }
+
+    pub async fn generate(&self, paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
+        if payload["id"].as_str() != Some(MODEL_ID) {
+            return Err(failure("不支持的本地模型"));
+        }
+        if payload["prompt"]
+            .as_str()
+            .is_none_or(|prompt| prompt.trim().is_empty() || prompt.len() > 32_768)
+            || payload["image"].as_str().is_none_or(|image| {
+                !image.starts_with("data:image/") || image.len() > 64 * 1024 * 1024
+            })
+        {
+            return Err(failure("本地 OCR 模型需要有效的识别提示和图片"));
+        }
+        // 下载、删除和识别共享文件访问锁；仅在调用时运行，完成或取消后释放模型。
+        let _inference = self.inference.lock().await;
+        let snapshot = self.list(paths).await?;
+        if snapshot["models"][0]["phase"] != "downloaded" {
+            return Err(failure("所选本地模型尚未完整下载或已被删除"));
+        }
+        runtime::generate(paths, &model_directory(paths)?, payload).await
     }
 
     async fn progress(
@@ -343,6 +406,7 @@ impl LocalModelService {
         base: &str,
         app: &AppHandle,
     ) -> Result<(), ManagerError> {
+        let _inference = self.inference.lock().await;
         tokio::fs::create_dir_all(directory).await?;
         let client = reqwest::Client::builder().build().map_err(failure)?;
         let mut verified_bytes = 0;
@@ -543,6 +607,79 @@ mod tests {
         bytes: 3,
         sha256: "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad",
     };
+
+    #[test]
+    fn model_selection_requires_verified_download_and_matching_capability() {
+        let root = Fixture::new();
+        let paths = crate::core::paths::resolve_app_paths(&root.0);
+        tauri::async_runtime::block_on(async {
+            let service = LocalModelService::default();
+            assert_eq!(
+                service.installed(&paths, "ocr").await.unwrap()["models"],
+                json!([])
+            );
+            let directory = model_directory(&paths).unwrap();
+            std::fs::create_dir_all(&directory).unwrap();
+            let mut receipt = json!({"revision": REVISION, "files": {}});
+            // 稀疏文件加校验凭据模拟完整安装；读取列表不重新计算大文件哈希。
+            for file in &FILES {
+                let target = directory.join(file.name);
+                std::fs::File::create(&target)
+                    .unwrap()
+                    .set_len(file.bytes)
+                    .unwrap();
+                receipt["files"][file.name] = json!({
+                    "sha256": file.sha256, "modified": file_stamp(&target).unwrap()
+                });
+            }
+            std::fs::write(directory.join("installed.json"), receipt.to_string()).unwrap();
+            let installed = service.installed(&paths, "ocr").await.unwrap();
+            assert_eq!(installed["models"][0]["id"], MODEL_ID);
+            assert_eq!(installed["models"][0]["capabilities"], json!(["ocr"]));
+            assert_eq!(
+                service.installed(&paths, "chat").await.unwrap()["models"],
+                json!([])
+            );
+            service.delete(&directory).await.unwrap();
+            assert_eq!(
+                service.installed(&paths, "ocr").await.unwrap()["models"],
+                json!([])
+            );
+            let error = service
+                .generate(
+                    &paths,
+                    json!({
+                        "id": MODEL_ID, "prompt": "识别图片", "image": "data:image/png;base64,test"
+                    }),
+                )
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("尚未完整下载"));
+        });
+    }
+
+    #[test]
+    #[ignore = "使用显式指定的本地权重和图片验证真实推理"]
+    fn downloaded_model_recognizes_image() {
+        use base64::Engine;
+        let paths = crate::core::paths::resolve_app_paths(&PathBuf::from(
+            std::env::var("AI_MANAGER_MODEL_TEST_DATA").expect("请指定模型数据目录"),
+        ));
+        let image =
+            std::fs::read(std::env::var("AI_MANAGER_MODEL_TEST_IMAGE").expect("请指定测试图片"))
+                .unwrap();
+        let result = tauri::async_runtime::block_on(
+            LocalModelService::default().generate(&paths, json!({
+                "id": MODEL_ID,
+                "prompt": "识别图片中的全部可见文字，按阅读顺序保留换行、标点及表格结构，只输出原文。",
+                "image": format!("data:image/png;base64,{}", base64::engine::general_purpose::STANDARD.encode(image))
+            }))
+        ).unwrap();
+        let text = result["text"].as_str().unwrap();
+        println!("识别结果：{text}");
+        assert!(text.contains("Hello"));
+        assert!(text.contains("12345"));
+    }
 
     fn serve(
         response: &'static str,

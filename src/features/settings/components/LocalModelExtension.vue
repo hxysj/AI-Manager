@@ -203,17 +203,6 @@
             </div>
           </article>
         </div>
-        <div class="manager-footer">
-          <span class="storage-path" :title="snapshot.storagePath"
-            >存储位置：{{ snapshot.storagePath || "读取中…" }}</span
-          >
-          <p class="manager-note">
-            占用包含未完成的下载缓存。关闭列表后下载会继续；重新打开应用可继续未完成的下载。
-          </p>
-          <p class="manager-note">
-            这里管理模型文件；用于 OCR 识别还需要接入本地推理引擎。
-          </p>
-        </div>
       </div>
     </BaseModal>
   </section>
@@ -288,8 +277,8 @@ async function load(manual = false) {
     snapshot.value = result
     ready.value = true
     const downloadError = result.models
-      .filter(model => model.phase === "error")
-      .map(model => model.error)
+      .filter((model) => model.phase === "error")
+      .map((model) => model.error)
       .filter(Boolean)
       .join("\n")
     // 下载在后台执行，失败通过统一消息提示展示，同一次失败不随进度刷新重复弹出。
@@ -607,7 +596,6 @@ onBeforeUnmount(() => {
             }
           }
 
-
           .model-actions {
             display: flex;
             flex-wrap: wrap;
@@ -648,24 +636,6 @@ onBeforeUnmount(() => {
               gap: 8px;
             }
           }
-        }
-      }
-
-      .manager-footer {
-        flex: none;
-        padding-top: 2px;
-        color: var(--color-text-muted);
-        font-size: 12px;
-        line-height: 1.6;
-
-        .storage-path {
-          display: block;
-          overflow: hidden;
-          text-overflow: ellipsis;
-          white-space: nowrap;
-        }
-        .manager-note {
-          margin: 5px 0 0;
         }
       }
     }

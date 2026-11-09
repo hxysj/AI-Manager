@@ -1,5 +1,5 @@
 use super::{decode_data, failure, image_data, ScreenshotService};
-use crate::api::proxy;
+use crate::api::{local_models::LocalModelService, proxy};
 use crate::core::{error::ManagerError, paths::AppPaths};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -29,6 +29,7 @@ pub async fn recognize(
     app: &AppHandle,
     paths: &AppPaths,
     cli_targets: &Value,
+    local_models: &LocalModelService,
     payload: Value,
 ) -> Result<Value, ManagerError> {
     let service = app
@@ -41,6 +42,7 @@ pub async fn recognize(
         paths,
         cli_targets,
         &settings,
+        local_models,
         payload["source"].as_str().unwrap_or(""),
     )
     .await
@@ -50,6 +52,7 @@ async fn recognize_with_settings(
     paths: &AppPaths,
     cli_targets: &Value,
     settings: &OcrSettings,
+    local_models: &LocalModelService,
     source: &str,
 ) -> Result<Value, ManagerError> {
     if !settings.use_large_model {
@@ -67,6 +70,19 @@ async fn recognize_with_settings(
     })
     .await
     .map_err(failure)??;
+    if settings.target_id == "local" {
+        let result = local_models.generate(paths, json!({
+            "id": settings.model.trim(),
+            "prompt": "识别图片中的全部可见文字，按阅读顺序保留换行、标点及表格结构，只输出原文。",
+            "image": image
+        })).await?;
+        let text = result["text"].as_str().unwrap_or("");
+        return Ok(json!({
+            "lines": text.lines().map(|line| json!({"text": line})).collect::<Vec<_>>(),
+            "text": text,
+            "engine": format!("本地大模型 OCR · {}", settings.model.trim())
+        }));
+    }
     let target = proxy::prepare_llm_target(
         paths,
         cli_targets,
@@ -271,15 +287,25 @@ mod tests {
                 model: "selected-vision-model".into(),
             };
             let source = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAIAAAABCAYAAAD0In+KAAAAFElEQVR4AQEJAPb/AABaZAA8WmRkCAECHYDE5XcAAAAASUVORK5CYII=";
-            assert!(
-                recognize_with_settings(&paths, &json!([]), &OcrSettings::default(), source)
-                    .await
-                    .is_err()
-            );
+            assert!(recognize_with_settings(
+                &paths,
+                &json!([]),
+                &OcrSettings::default(),
+                &LocalModelService::default(),
+                source
+            )
+            .await
+            .is_err());
             for _ in 0..2 {
-                let result = recognize_with_settings(&paths, &json!([]), &settings, source)
-                    .await
-                    .unwrap();
+                let result = recognize_with_settings(
+                    &paths,
+                    &json!([]),
+                    &settings,
+                    &LocalModelService::default(),
+                    source,
+                )
+                .await
+                .unwrap();
                 assert_eq!(result["text"], "识别结果\n第二行");
                 assert_eq!(result["lines"].as_array().unwrap().len(), 2);
                 assert!(result["engine"]
@@ -287,9 +313,15 @@ mod tests {
                     .unwrap()
                     .contains("selected-vision-model"));
             }
-            let error = recognize_with_settings(&paths, &json!([]), &settings, source)
-                .await
-                .unwrap_err();
+            let error = recognize_with_settings(
+                &paths,
+                &json!([]),
+                &settings,
+                &LocalModelService::default(),
+                source,
+            )
+            .await
+            .unwrap_err();
             assert!(error.to_string().contains("模型不支持图片"));
             server.await.unwrap();
             assert_eq!(provider_store::read_providers(&paths).unwrap(), before);

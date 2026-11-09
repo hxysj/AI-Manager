@@ -46,6 +46,10 @@ const writes = []
 const notifications = []
 let earlyRefresh = true
 let deferReads = true
+let installedModels = [
+  { id: "minicpm-ocr-1.0", name: "MiniCPM-OCR 1.0", capabilities: ["ocr"] }
+]
+let localModelsFailure = false
 const response = () => ({
   entries: [],
   settings: structuredClone(storedSettings),
@@ -72,6 +76,17 @@ new Function(
       return { __esModule: true, default: stub }
     }
     if (name === "@/api/modules/system") return { systemApi: {} }
+    if (name === "@/api/modules/local-models") {
+      return {
+        localModelsApi: {
+          installed: async (capability) => {
+            assert.equal(capability, "ocr")
+            if (localModelsFailure) throw new Error("模拟本地模型读取失败")
+            return { models: structuredClone(installedModels) }
+          }
+        }
+      }
+    }
     if (name === "@/utils/message") {
       return {
         createMessage: { success: (message) => notifications.push(message) }
@@ -207,4 +222,42 @@ assert.equal(disposed.state.ready, false, "关闭弹框后不能继续初始化�
 assert.equal(writes.length, 1)
 assert.deepEqual(runtimeErrors, [])
 assert.equal(listeners.size, 0)
-console.log("截图设置并发初始化、快捷键保存、重开、失败重试和关闭验证通过")
+
+// 本地模型使用实际下载状态，删除后禁止保存，读取失败也不能沿用旧列表。
+deferReads = false
+earlyRefresh = false
+const local = mount()
+await tick()
+local.state.settingsDraft.ocr.useLargeModel = true
+local.state.settingsDraft.ocr.targetId = "local"
+local.state.selectOcrTarget()
+assert.equal(local.state.settingsDraft.ocr.model, "minicpm-ocr-1.0")
+assert.equal(local.state.invalidOcrTarget, false)
+assert.equal(local.state.invalidLocalModel, false)
+assert.deepEqual([...local.state.ocrModelOptions], ["minicpm-ocr-1.0"])
+await local.state.saveSettings()
+assert.deepEqual(storedSettings.ocr, {
+  useLargeModel: true,
+  targetId: "local",
+  model: "minicpm-ocr-1.0"
+})
+local.app.unmount()
+const localReopened = mount()
+await tick()
+assert.equal(localReopened.state.settingsDraft.ocr.targetId, "local")
+assert.equal(localReopened.state.settingsDraft.ocr.model, "minicpm-ocr-1.0")
+installedModels = []
+await listeners.get("local-models:changed")()
+assert.deepEqual([...localReopened.state.ocrModelOptions], [])
+await localReopened.state.saveSettings()
+assert.match(localReopened.state.error, /请选择已下载的本地 OCR 模型/)
+localModelsFailure = true
+await listeners.get("local-models:changed")()
+await localReopened.state.saveSettings()
+assert.match(localReopened.state.error, /读取本地模型失败/)
+localReopened.app.unmount()
+assert.equal(listeners.size, 0)
+assert.deepEqual(runtimeErrors, [])
+console.log(
+  "截图设置初始化、本地模型选择保存、删除校验、失败重试和监听清理验证通过"
+)

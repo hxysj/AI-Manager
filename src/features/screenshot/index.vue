@@ -121,16 +121,18 @@
         </label>
         <template v-if="settingsDraft.ocr.useLargeModel">
           <label class="setting-row">
-            OCR 服务商
+            OCR 来源
             <select
               v-model="settingsDraft.ocr.targetId"
               class="setting-input"
-              aria-label="OCR 服务商"
+              aria-label="OCR 来源"
               :disabled="busy || !ready"
               required
               @change="selectOcrTarget"
             >
-              <option value="" disabled>请选择服务商或官方账号</option>
+              <option value="" disabled>
+                请选择本地模型、服务商或官方账号
+              </option>
               <optgroup
                 v-for="group in ocrTargetGroups"
                 :key="group.label"
@@ -154,7 +156,7 @@
               aria-label="OCR 模型"
               placeholder="选择或输入支持图片识别的模型"
               filterable
-              allow-create
+              :allow-create="settingsDraft.ocr.targetId !== 'local'"
               default-first-option
               :disabled="busy || !ready || !settingsDraft.ocr.targetId"
               @update:model-value="settingsDraft.ocr.model = $event.trim()"
@@ -162,7 +164,9 @@
               <el-option
                 v-for="model in ocrModelOptions"
                 :key="model"
-                :label="model"
+                :label="
+                  localModels.find((item) => item.id === model)?.name || model
+                "
                 :value="model"
               />
             </el-select>
@@ -170,7 +174,30 @@
           <span v-if="invalidOcrTarget" class="settings-error" role="alert">
             已配置的 OCR 服务商不存在或已禁用，请重新选择。
           </span>
-          <span class="setting-hint"
+          <span
+            v-if="
+              settingsDraft.ocr.targetId === 'local' &&
+              (localModelsError || invalidLocalModel)
+            "
+            class="settings-error"
+            role="alert"
+          >
+            {{
+              localModelsError || "所选本地模型尚未下载或已被删除，请重新选择。"
+            }}
+          </span>
+          <span
+            v-if="
+              settingsDraft.ocr.targetId === 'local' &&
+              !localModels.length &&
+              !localModelsError
+            "
+            class="setting-hint"
+            >请先在本地大模型列表中下载 OCR 模型。</span
+          >
+          <span
+            v-else-if="settingsDraft.ocr.targetId !== 'local'"
+            class="setting-hint"
             >截图将发送至所选服务商，请选择支持图片识别的模型。</span
           >
         </template>
@@ -363,6 +390,7 @@ import {
   Trash2
 } from "lucide-vue-next"
 import { screenshotApi } from "@/api/modules/screenshot"
+import { localModelsApi } from "@/api/modules/local-models"
 import { systemApi } from "@/api/modules/system"
 import { subscribeReady } from "@/api/request"
 import { createMessage } from "@/utils/message"
@@ -400,8 +428,11 @@ function defaultSettings() {
 }
 const settings = ref(defaultSettings())
 const settingsDraft = ref(defaultSettings())
+const localModels = ref([])
+const localModelsError = ref("")
 const ocrTargetGroups = computed(() =>
   [
+    { label: "本地模型", items: [{ id: "local", name: "本地模型" }] },
     {
       label: "Codex Provider",
       items: props.providers
@@ -430,8 +461,16 @@ const invalidOcrTarget = computed(
       )
     )
 )
+const invalidLocalModel = computed(
+  () =>
+    settingsDraft.value.ocr.targetId === "local" &&
+    !localModels.value.some(
+      (model) => model.id === settingsDraft.value.ocr.model
+    )
+)
 const ocrModelOptions = computed(() => {
   const targetId = settingsDraft.value.ocr.targetId
+  if (targetId === "local") return localModels.value.map((model) => model.id)
   const providers = props.providers.filter((provider) =>
     targetId.startsWith("account:")
       ? provider.cli === "codex" && provider.enabled !== false
@@ -489,6 +528,7 @@ watch(
     screenshotApi.call("pause-hotkeys", { paused }).catch((cause) => {
       error.value = String(cause)
     })
+    if (paused && ready.value) loadLocalModels()
   },
   { immediate: props.settingsOnly }
 )
@@ -498,8 +538,24 @@ const openCount = computed(
 )
 let unlisten
 let unlistenError
+let unlistenLocalModels
 let disposed = false
 let loading = false
+let localModelsSequence = 0
+
+async function loadLocalModels() {
+  const sequence = ++localModelsSequence
+  try {
+    const result = await localModelsApi.installed("ocr")
+    if (disposed || sequence !== localModelsSequence) return
+    localModels.value = result.models
+    localModelsError.value = ""
+  } catch (cause) {
+    if (disposed || sequence !== localModelsSequence) return
+    localModels.value = []
+    localModelsError.value = `读取本地模型失败：${String(cause)}`
+  }
+}
 
 function pinLabel(pin) {
   if (pin.lifecycle === "closed") return "已关闭 · 可恢复"
@@ -633,6 +689,14 @@ async function saveSettings() {
   const draft = settingsDraft.value
   if (
     draft.ocr.useLargeModel &&
+    draft.ocr.targetId === "local" &&
+    (localModelsError.value || invalidLocalModel.value)
+  ) {
+    error.value = localModelsError.value || "请选择已下载的本地 OCR 模型"
+    return
+  }
+  if (
+    draft.ocr.useLargeModel &&
     (!draft.ocr.targetId || !draft.ocr.model.trim() || invalidOcrTarget.value)
   ) {
     error.value = "启用大模型 OCR 时请选择有效服务商并填写模型"
@@ -689,12 +753,18 @@ onMounted(async () => {
     unlistenError = await subscribeReady("screenshot:error", (value) => {
       error.value = value
     })
+    // 模型下载和删除后刷新候选项，不改变正在编辑的模型选择。
+    unlistenLocalModels = await subscribeReady(
+      "local-models:changed",
+      loadLocalModels
+    )
     if (disposed) {
       unlisten()
       unlistenError()
+      unlistenLocalModels()
       return
     }
-    await load()
+    await Promise.all([load(), loadLocalModels()])
   } catch (cause) {
     error.value = String(cause)
   }
@@ -705,6 +775,7 @@ onBeforeUnmount(() => {
   disposed = true
   unlisten?.()
   unlistenError?.()
+  unlistenLocalModels?.()
 })
 </script>
 

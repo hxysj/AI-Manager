@@ -303,6 +303,7 @@ impl AppState {
                 &app,
                 &paths,
                 &cli_targets,
+                &self.local_models,
                 payload.unwrap_or_else(|| json!({})),
             )
             .await;
