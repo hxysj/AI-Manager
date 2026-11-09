@@ -1,10 +1,17 @@
-import { request, subscribe } from "../request"
+import { invokeWithDiagnostics, request, subscribe } from "../request"
 
 export const lanShareApi = {
   getState: () => request("lan-share:state"),
   setAccessIp: (payload) => request("lan-share:set-access-ip", payload),
   getClipboardFiles: () => request("lan-share:clipboard-files"),
   getFileInfo: (payload) => request("lan-share:file-info", payload),
+  // 无本机路径的附件分块通过二进制 IPC 暂存，避免依赖网页接入地址。
+  uploadFileChunk: (payload, bytes) =>
+    invokeWithDiagnostics("lan_share_upload_chunk", bytes, {
+      headers: {
+        "x-lan-share-upload": encodeURIComponent(JSON.stringify(payload))
+      }
+    }),
   connectPeer: (payload) => request("lan-share:connect-peer", payload),
   respondPairing: (payload) => request("lan-share:respond-pairing", payload),
   discardUploads: (payload) => request("lan-share:discard-uploads", payload),

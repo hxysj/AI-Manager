@@ -452,6 +452,18 @@ impl AppState {
         gateway_result
     }
 
+    pub async fn upload_lan_share_chunk(
+        &self,
+        metadata: String,
+        bytes: Vec<u8>,
+    ) -> Result<Value, ManagerError> {
+        let (registry, paths) = {
+            let manager = self.manager.lock().await;
+            (manager.lan_share_registry.clone(), manager.paths.clone())
+        };
+        lan_share::upload_local_chunk(&registry, &paths, &metadata, bytes).await
+    }
+
     pub async fn start_lan_share_service(&self, app: AppHandle) -> Result<(), ManagerError> {
         let (registry, paths) = {
             let manager = self.manager.lock().await;

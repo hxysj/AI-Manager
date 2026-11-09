@@ -1268,6 +1268,45 @@ function uploadFileWithProgress(url, file, onProgress, onXhrCreated) {
   })
 }
 
+async function uploadLocalFileWithProgress(task, item, onProgress) {
+  const chunkBytes = 4 * 1024 ** 2
+  const chunkTotal = Math.max(1, Math.ceil(item.file.size / chunkBytes))
+  item.uploadId ||= crypto.randomUUID()
+  // 截图和粘贴附件没有本机路径，通过 IPC 分块暂存，单聊与群聊共用后端发送。
+  for (let chunkIndex = 0; chunkIndex < chunkTotal; chunkIndex++) {
+    if (disposed || task.cancelled) throw new Error("已取消上传")
+    const offset = chunkIndex * chunkBytes
+    const bytes = await item.file
+      .slice(offset, offset + chunkBytes)
+      .arrayBuffer()
+    if (disposed || task.cancelled) throw new Error("已取消上传")
+    const result = unwrap(
+      await lanShareApi.uploadFileChunk(
+        {
+          sessionId: task.sessionId,
+          uploadId: item.uploadId,
+          name: item.name,
+          chunkIndex,
+          chunkTotal,
+          totalSize: item.file.size
+        },
+        bytes
+      )
+    )
+    if (result.file) {
+      item.uploadedId = result.file.id
+      if (disposed || task.cancelled) {
+        await discardUploads([item])
+        throw new Error("已取消上传")
+      }
+    }
+    onProgress(Math.min(offset + bytes.byteLength, item.file.size))
+    if (chunkIndex + 1 === chunkTotal && result.complete && result.file)
+      return result.file
+  }
+  throw new Error("附件暂存未完成，请重试")
+}
+
 async function executeSendingTask(task) {
   task.status = "uploading"
   task.errorMessage = ""
@@ -1282,10 +1321,11 @@ async function executeSendingTask(task) {
     )
 
     if (filesNeedingUpload.length > 0) {
-      if (!props.service.accessUrl) {
+      const localUpload = isTauri()
+      if (!localUpload && !props.service.accessUrl) {
         throw new Error("局域网服务未就绪，缺少接入地址")
       }
-      const access = new URL(props.service.accessUrl)
+      const access = localUpload ? null : new URL(props.service.accessUrl)
       const fileProgressMap = new Map()
 
       for (const item of task.files) {
@@ -1300,37 +1340,46 @@ async function executeSendingTask(task) {
         const item = filesNeedingUpload[i]
         task.statusText = `正在上传附件 (${i + 1}/${filesNeedingUpload.length})...`
 
-        const url = new URL("/api/files/upload", access.origin)
-        url.search = new URLSearchParams({
-          token: access.searchParams.get("token") || "",
-          sessionId: task.sessionId,
-          name: item.name
-        }).toString()
-
-        const uploaded = await uploadFileWithProgress(
-          url.toString(),
-          item.file,
-          (loaded) => {
-            fileProgressMap.set(item.id, loaded)
-            const overallLoaded = Array.from(fileProgressMap.values()).reduce(
-              (sum, b) => sum + b,
-              0
+        const onProgress = (loaded) => {
+          fileProgressMap.set(item.id, loaded)
+          const overallLoaded = Array.from(fileProgressMap.values()).reduce(
+            (sum, b) => sum + b,
+            0
+          )
+          task.loadedBytes = overallLoaded
+          if (task.totalBytes > 0) {
+            task.progress = Math.min(
+              88,
+              Math.round((overallLoaded / task.totalBytes) * 88)
             )
-            task.loadedBytes = overallLoaded
-            if (task.totalBytes > 0) {
-              task.progress = Math.min(
-                88,
-                Math.round((overallLoaded / task.totalBytes) * 88)
-              )
-            }
-          },
-          (xhr) => {
-            task.activeXhr = xhr
           }
-        )
+        }
+        let uploaded
+        if (localUpload) {
+          uploaded = await uploadLocalFileWithProgress(task, item, onProgress)
+        } else {
+          const url = new URL("/api/files/upload", access.origin)
+          url.search = new URLSearchParams({
+            token: access.searchParams.get("token") || "",
+            sessionId: task.sessionId,
+            name: item.name
+          }).toString()
+          uploaded = await uploadFileWithProgress(
+            url.toString(),
+            item.file,
+            onProgress,
+            (xhr) => {
+              task.activeXhr = xhr
+            }
+          )
+        }
 
         task.activeXhr = null
         item.uploadedId = uploaded.id
+        if (disposed || task.cancelled) {
+          await discardUploads([item])
+          return
+        }
         fileProgressMap.set(item.id, item.size || 0)
       }
     }
@@ -1378,7 +1427,7 @@ async function executeSendingTask(task) {
       }
     }
   } catch (error) {
-    if (disposed) return
+    if (disposed || task.cancelled) return
     task.status = "error"
     task.errorMessage = error?.message || String(error)
     task.statusText = "发送失败"
@@ -1430,6 +1479,7 @@ function sendMessage() {
       ? `准备发送 ${files.length} 个文件...`
       : "正在发送...",
     errorMessage: "",
+    cancelled: false,
     activeXhr: null
   })
 
@@ -1450,6 +1500,7 @@ function retryTask(task) {
 function cancelTask(taskId) {
   const task = sendingTasks.value.find((t) => t.id === taskId)
   if (!task) return
+  task.cancelled = true
   if (task.activeXhr) {
     try {
       task.activeXhr.abort()

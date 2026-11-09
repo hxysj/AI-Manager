@@ -425,7 +425,23 @@ for (const fileName of [
     assert.deepEqual(result.errors, [])
   }
   let finishSend
+  let desktop = false
+  let nativeDrop
+  const panelErrors = []
   api.listMessages = async () => []
+  api.getFileInfo = async ({ paths }) =>
+    paths.map((path) => ({
+      path,
+      name: path.split("/").at(-1),
+      size: 100,
+      mimeType: "application/octet-stream"
+    }))
+  api.onIncomingTransferProgress = (callback) => {
+    listeners.incoming = callback
+    return () => {
+      delete listeners.incoming
+    }
+  }
   api.sendMessage = () =>
     new Promise((resolve) => {
       finishSend = resolve
@@ -450,12 +466,23 @@ for (const fileName of [
   new Function("require", "module", "exports", code)(
     (name) => {
       if (name === "@/api") return { lanShareApi: api, systemApi: {} }
-      if (name === "@tauri-apps/api/core") return { isTauri: () => false }
+      if (name === "@tauri-apps/api/core") return { isTauri: () => desktop }
+      if (name === "@tauri-apps/api/webview")
+        return {
+          getCurrentWebview: () => ({
+            onDragDropEvent: async (callback) => {
+              nativeDrop = callback
+              return () => {
+                nativeDrop = null
+              }
+            }
+          })
+        }
       if (name === "@/utils/message")
         return {
           createMessage: {
             success() {},
-            error: (error) => assert.fail(error),
+            error: (error) => panelErrors.push(error),
             info() {}
           }
         }
@@ -489,7 +516,7 @@ for (const fileName of [
     false,
     "普通离线或已配对状态不能误判为对方删除"
   )
-  panel.addPaths(["D:/example.bin"])
+  await panel.addPaths(["D:/example.bin"])
   panel.sendMessage()
   await tick()
   const task = panel.sendingTasks[0]
@@ -540,8 +567,267 @@ for (const fileName of [
   blockedPanel.sendMessage()
   assert.equal(blockedPanel.sendingTasks.length, 0)
   renderer.render(null, root)
+  assert.deepEqual(panelErrors, [])
+
+  // 独立桌面窗口的拖拽路径与粘贴附件均不能依赖网页上传地址。
+  desktop = true
+  const sent = []
+  const chunks = []
+  const discarded = []
+  const originalXhr = globalThis.XMLHttpRequest
+  let desktopHttpUploads = 0
+  globalThis.XMLHttpRequest = class {
+    upload = {}
+    open() {}
+    send() {
+      desktopHttpUploads++
+      this.onerror()
+    }
+  }
+  api.sendMessage = async (payload) => {
+    sent.push(structuredClone(payload))
+    return [{ id: payload.messageId, delivered: true }]
+  }
+  api.discardUploads = async (payload) => discarded.push(payload)
+  const uploadChunk = async (payload, bytes) => {
+    assert.ok(bytes instanceof ArrayBuffer, "IPC 必须传原始二进制分块")
+    assert.ok(bytes.byteLength <= 4 * 1024 ** 2)
+    chunks.push({ ...payload, bytes: new Uint8Array(bytes) })
+    const complete = payload.chunkIndex + 1 === payload.chunkTotal
+    return {
+      status: "success",
+      data: {
+        complete,
+        file: complete ? { id: `uploaded-${payload.uploadId}` } : null
+      }
+    }
+  }
+  api.uploadFileChunk = uploadChunk
+  const waitFor = async (condition) => {
+    for (let attempt = 0; attempt < 200; attempt++) {
+      if (condition()) return
+      await new Promise((resolve) => setTimeout(resolve, 5))
+    }
+    assert.fail(panelErrors.at(-1) || "等待附件任务完成失败")
+  }
+  const mountPanel = async (
+    chatMode = "direct",
+    accessUrl = "http://127.0.0.1:17631/?token=desktop-test"
+  ) => {
+    const vnode = vue.h(module.exports.default, {
+      currentDevice: { id: known.id, native: true },
+      currentSessionId: `${chatMode}-session`,
+      chatMode,
+      service: { running: true, accessUrl }
+    })
+    vnode.appContext = { ...vue.createApp({})._context }
+    vnode.appContext.config.errorHandler = (error) =>
+      errorsDuringRuntime.push(error)
+    renderer.render(vnode, root)
+    await tick()
+    return vnode.component.setupState
+  }
+  const desktopPanel = await mountPanel()
+  nativeDrop({
+    payload: { type: "drop", paths: ["D:/native-drop.bin"] }
+  })
+  await tick()
+  desktopPanel.sendMessage()
+  await waitFor(() => desktopPanel.sendingTasks[0]?.status === "success")
+  assert.deepEqual(sent.at(-1).paths, ["D:/native-drop.bin"])
+  assert.equal(chunks.length, 0, "原生拖拽文件直接使用本机路径")
+
+  const content = new Uint8Array(4 * 1024 ** 2 + 7).fill(42)
+  const file = new File([content], "截图+中文.bin")
+  for (const chatMode of ["direct", "group"]) {
+    renderer.render(null, root)
+    const current = await mountPanel(
+      chatMode,
+      chatMode === "group" ? "" : undefined
+    )
+    const before = chunks.length
+    current.pasteFiles({
+      clipboardData: {
+        items: [{ kind: "file", getAsFile: () => file }]
+      },
+      preventDefault() {}
+    })
+    await current.addPaths(["D:/mixed-file.bin"])
+    current.sendMessage()
+    await waitFor(() => current.sendingTasks[0]?.status === "success")
+    const uploaded = chunks.slice(before)
+    assert.equal(uploaded.length, 2)
+    assert.equal(uploaded[0].chunkIndex, 0)
+    assert.equal(uploaded[1].chunkIndex, 1)
+    assert.equal(uploaded[0].sessionId, `${chatMode}-session`)
+    assert.equal(uploaded[0].name, file.name)
+    assert.equal(uploaded[0].uploadId, uploaded[1].uploadId)
+    assert.equal(uploaded[1].bytes.length, 7)
+    assert.ok(uploaded.every((chunk) => chunk.bytes.every((byte) => byte === 42)))
+    assert.deepEqual(sent.at(-1).attachmentOrder, [
+      { id: `uploaded-${uploaded[0].uploadId}` },
+      { path: "D:/mixed-file.bin" }
+    ])
+    assert.equal(current.sendingTasks[0].statusText, "已送达")
+  }
+
+  renderer.render(null, root)
+  const retryPanel = await mountPanel()
+  let failUpload = true
+  api.uploadFileChunk = async (payload, bytes) => {
+    if (failUpload && payload.chunkIndex === 1) {
+      failUpload = false
+      throw new Error("测试写入失败")
+    }
+    return uploadChunk(payload, bytes)
+  }
+  retryPanel.appendFiles([file])
+  const sentBeforeRetry = sent.length
+  retryPanel.sendMessage()
+  await waitFor(() => retryPanel.sendingTasks[0]?.status === "error")
+  const retryTask = retryPanel.sendingTasks[0]
+  const uploadId = retryTask.files[0].uploadId
+  assert.equal(sent.length, sentBeforeRetry)
+  assert.deepEqual(panelErrors.splice(0), ["发送失败：测试写入失败"])
+  retryPanel.retryTask(retryTask)
+  await waitFor(() => retryTask.status === "success")
+  assert.equal(retryTask.files[0].uploadId, uploadId, "重试复用上传标识")
+  assert.equal(sent.length, sentBeforeRetry + 1)
+
+  for (const unmount of [false, true]) {
+    renderer.render(null, root)
+    const current = await mountPanel()
+    let finishUpload
+    api.uploadFileChunk = () =>
+      new Promise((resolve) => {
+        finishUpload = resolve
+      })
+    current.appendFiles([new File(["cancel"], "cancel.txt")])
+    current.sendMessage()
+    await waitFor(() => Boolean(finishUpload))
+    const sentBeforeCancel = sent.length
+    if (unmount) renderer.render(null, root)
+    else current.cancelTask(current.sendingTasks[0].id)
+    finishUpload({
+      complete: true,
+      file: { id: unmount ? "unmounted-file" : "cancelled-file" }
+    })
+    await tick()
+    assert.equal(sent.length, sentBeforeCancel, "取消后不能继续发送文件")
+    assert.deepEqual(discarded.at(-1).attachmentIds, [
+      unmount ? "unmounted-file" : "cancelled-file"
+    ])
+  }
+  assert.deepEqual(panelErrors, [])
+  assert.deepEqual(Object.keys(listeners), [])
+  assert.equal(nativeDrop, null)
+  assert.equal(desktopHttpUploads, 0, "桌面附件不能走网页上传请求")
+
+  // 浏览器环境继续使用带接入令牌的 HTTP 上传，不受桌面 IPC 调整影响。
+  desktop = false
+  const browserUploads = []
+  globalThis.XMLHttpRequest = class {
+    upload = {}
+    status = 200
+    responseText = JSON.stringify({
+      status: "success",
+      data: { id: "browser-upload" }
+    })
+    open(method, url) {
+      browserUploads.push({ method, url })
+    }
+    send(file) {
+      this.upload.onprogress?.({
+        lengthComputable: true,
+        loaded: file.size,
+        total: file.size
+      })
+      this.onload()
+    }
+  }
+  const browserNode = vue.h(module.exports.default, {
+    currentSessionId: "browser-session",
+    currentDevice: { id: "browser", native: false },
+    service: {
+      running: true,
+      accessUrl: "http://127.0.0.1:17631/?token=browser-test"
+    }
+  })
+  renderer.render(browserNode, root)
+  await tick()
+  const browserState = browserNode.component.setupState
+  browserState.appendFiles([new File(["browser"], "浏览器.txt")])
+  browserState.sendMessage()
+  await waitFor(() => browserState.sendingTasks[0]?.status === "success")
+  assert.equal(browserUploads[0].method, "PUT")
+  const uploadUrl = new URL(browserUploads[0].url)
+  assert.equal(uploadUrl.pathname, "/api/files/upload")
+  assert.equal(uploadUrl.searchParams.get("token"), "browser-test")
+  assert.equal(uploadUrl.searchParams.get("sessionId"), "browser-session")
+  assert.equal(uploadUrl.searchParams.get("name"), "浏览器.txt")
+  assert.deepEqual(sent.at(-1).attachmentIds, ["browser-upload"])
+  renderer.render(null, root)
+  globalThis.XMLHttpRequest = originalXhr
+  assert.deepEqual(panelErrors, [])
 }
 assert.deepEqual(errorsDuringRuntime, [])
+
+// 使用真实 API 包装器验证二进制参数、中文元数据和 IPC 选项均传到 Tauri。
+{
+  const nativeCalls = []
+  const requestModule = { exports: {} }
+  const requestCode = transformSync(readFileSync("src/api/request.js", "utf8"), {
+    format: "cjs"
+  }).code
+  new Function("require", "module", "exports", requestCode)(
+    (name) => {
+      if (name === "@tauri-apps/api/core")
+        return {
+          invoke: async (...args) => {
+            nativeCalls.push(args)
+            return { complete: true, file: { id: "native-file" } }
+          }
+        }
+      if (name === "@tauri-apps/api/event") return {}
+      if (name === "@/utils/app-logger")
+        return {
+          createLogContext: () => ({ window: "tool-window-lan-share" }),
+          reportAppError: (kind, error) => assert.fail(error)
+        }
+      return require(name)
+    },
+    requestModule,
+    requestModule.exports
+  )
+  const apiModule = { exports: {} }
+  const apiCode = transformSync(
+    readFileSync("src/api/modules/lan-share.js", "utf8"),
+    { format: "cjs" }
+  ).code
+  new Function("require", "module", "exports", apiCode)(
+    (name) => (name === "../request" ? requestModule.exports : require(name)),
+    apiModule,
+    apiModule.exports
+  )
+  const metadata = {
+    sessionId: "session",
+    uploadId: "upload",
+    name: "截图+中文.png",
+    chunkIndex: 0,
+    chunkTotal: 1,
+    totalSize: 3
+  }
+  const bytes = new Uint8Array([0, 42, 255]).buffer
+  await apiModule.exports.lanShareApi.uploadFileChunk(metadata, bytes)
+  assert.equal(nativeCalls[0][0], "lan_share_upload_chunk")
+  assert.equal(nativeCalls[0][1], bytes)
+  assert.deepEqual(
+    JSON.parse(
+      decodeURIComponent(nativeCalls[0][2].headers["x-lan-share-upload"])
+    ),
+    metadata
+  )
+}
 
 // 执行后端内嵌的扫码页脚本，沿用真实 HTTP 响应结构验证注册、上线和双向消息。
 const guestPageSource = readFileSync(
@@ -959,5 +1245,5 @@ guestWithSlowHistory.releaseHistory()
 await guestWithSlowHistory.settle()
 assert.equal(guestWithSlowHistory.elements.get("sendMessage").disabled, false)
 console.log(
-  "设备快传客户端群聊限制、连接确认、IP 过滤、隐藏、删除、发送进度、扫码上线、双向消息、手机复制与输入、重连及 Vue/Less 编译检查通过"
+  "设备快传原生拖放、桌面附件 IPC 分块、单聊与群聊、取消与重试、浏览器上传、连接、发送进度、扫码上线、双向消息、重连及 Vue/Less 编译检查通过"
 )

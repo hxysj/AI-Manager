@@ -11,14 +11,15 @@ export function request(channel, payload) {
 }
 
 // 二进制专用接口也捕获失败；普通调用的上下文会一同传给后端落盘。
-export async function invokeWithDiagnostics(command, args = {}) {
+export async function invokeWithDiagnostics(command, args = {}, options) {
   const context = createLogContext()
   const startedAt = performance.now()
   const channel = args.channel || command
   try {
     return await invoke(
       command,
-      command === "dispatch_api" ? { ...args, context } : args
+      command === "dispatch_api" ? { ...args, context } : args,
+      options
     )
   } catch (error) {
     if (!channel.startsWith("app-log:")) {

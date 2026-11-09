@@ -15,6 +15,27 @@ use tauri::{Emitter, Manager};
 static CLOSE_DIALOG_OPEN: AtomicBool = AtomicBool::new(false);
 
 #[tauri::command]
+async fn lan_share_upload_chunk(
+    state: tauri::State<'_, AppState>,
+    request: tauri::ipc::Request<'_>,
+) -> Result<Value, String> {
+    let metadata = request
+        .headers()
+        .get("x-lan-share-upload")
+        .and_then(|value| value.to_str().ok())
+        .ok_or_else(|| "缺少附件分块信息。".to_string())?
+        .to_string();
+    let bytes = match request.body() {
+        tauri::ipc::InvokeBody::Raw(bytes) => bytes.clone(),
+        _ => return Err("附件分块必须使用二进制数据。".into()),
+    };
+    state
+        .upload_lan_share_chunk(metadata, bytes)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 async fn dispatch_api(
     app: tauri::AppHandle,
     window: tauri::WebviewWindow,
@@ -304,6 +325,7 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             dispatch_api,
+            lan_share_upload_chunk,
             screenshot::screenshot_frame,
             screenshot::screenshot_region_frame,
             screenshot::screenshot_image

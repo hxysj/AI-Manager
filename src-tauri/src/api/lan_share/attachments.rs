@@ -206,6 +206,74 @@ pub(super) async fn upload(
     Ok(uploaded)
 }
 
+pub async fn upload_local_chunk(
+    registry: &LanShareServerRegistry,
+    paths: &AppPaths,
+    metadata: &str,
+    bytes: Vec<u8>,
+) -> Result<Value, ManagerError> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct LocalChunk {
+        session_id: String,
+        upload_id: String,
+        name: String,
+        chunk_index: u64,
+        chunk_total: u64,
+        total_size: u64,
+    }
+
+    if bytes.len() as u64 > FILE_CHUNK_BYTES || metadata.len() > 8192 {
+        return Err(ManagerError::System("附件分块或元数据过大。".into()));
+    }
+    // 前端只传元数据和当前分块，复用接收端的校验、幂等写入与临时文件清理。
+    let encoded = format!("metadata={metadata}");
+    let decoded = url::form_urlencoded::parse(encoded.as_bytes())
+        .next()
+        .map(|(_, value)| value.into_owned())
+        .unwrap_or_default();
+    let chunk: LocalChunk = serde_json::from_str(&decoded)?;
+    let offset = chunk
+        .chunk_index
+        .checked_mul(FILE_CHUNK_BYTES)
+        .ok_or_else(|| ManagerError::System("分块偏移无效。".into()))?;
+    let length = bytes.len() as u64;
+    if offset > chunk.total_size || length > chunk.total_size - offset {
+        return Err(ManagerError::System("分块大小或偏移无效。".into()));
+    }
+    let content_range = if chunk.total_size == 0 {
+        "bytes 0-0/0".to_string()
+    } else {
+        format!(
+            "bytes {}-{}/{}",
+            offset,
+            offset + length.saturating_sub(1),
+            chunk.total_size
+        )
+    };
+    let digest = format!("{:x}", Sha256::digest(&bytes));
+    let file = upload_chunk(
+        Full::new(Bytes::from(bytes)),
+        registry,
+        paths,
+        &chunk.session_id,
+        &chunk.upload_id,
+        &chunk.name,
+        chunk.chunk_index,
+        chunk.chunk_total,
+        offset,
+        chunk.total_size,
+        length,
+        &content_range,
+        &digest,
+    )
+    .await?;
+    Ok(lan_share_response(json!({
+        "complete": file.is_some(),
+        "file": file.as_ref().map(Attachment::from)
+    })))
+}
+
 pub(super) async fn upload_chunk<B>(
     mut body: B,
     registry: &LanShareServerRegistry,
@@ -710,6 +778,171 @@ pub(super) async fn cleanup_uploads(
 mod tests {
     use super::*;
     use hyper::header::CONTENT_RANGE;
+
+    #[test]
+    fn local_upload_chunks_support_direct_and_group_sessions_without_http() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id());
+            let paths = crate::core::paths::resolve_app_paths(&root);
+            let registry = LanShareServerRegistry::new();
+            let device = upsert_device(
+                &registry,
+                &paths,
+                "local-peer",
+                "测试设备",
+                "MonkeyThief/Desktop",
+                "127.0.0.1",
+            )
+            .await
+            .unwrap();
+            create_session(&registry, &paths, json!({ "deviceId": device.id }))
+                .await
+                .unwrap();
+            let mut sessions: Vec<LanShareSession> =
+                read_array(&paths.lan_share_files.sessions).unwrap();
+            sessions.push(LanShareSession {
+                id: create_id(),
+                device_id: String::new(),
+                mode: "group".into(),
+                group_id: "local-test-group".into(),
+                ..sessions[0].clone()
+            });
+            write_json(&paths.lan_share_files.sessions, &json!(sessions))
+                .await
+                .unwrap();
+            for session in &sessions {
+                let upload_id = create_id();
+                let metadata = |index| {
+                    let payload = json!({
+                        "sessionId": session.id, "uploadId": upload_id, "name": "截图+中文.bin",
+                        "chunkIndex": index, "chunkTotal": 2, "totalSize": FILE_CHUNK_BYTES + 4
+                    });
+                    url::form_urlencoded::byte_serialize(payload.to_string().as_bytes())
+                        .collect::<String>()
+                };
+                assert!(
+                    upload_local_chunk(&registry, &paths, &metadata(1), b"tail".to_vec())
+                        .await
+                        .is_err()
+                );
+                let first = upload_local_chunk(
+                    &registry,
+                    &paths,
+                    &metadata(0),
+                    vec![42; FILE_CHUNK_BYTES as usize],
+                )
+                .await
+                .unwrap();
+                assert_eq!(first["data"]["complete"], false);
+                assert!(first["data"]["file"].is_null());
+                let finished =
+                    upload_local_chunk(&registry, &paths, &metadata(1), b"tail".to_vec())
+                        .await
+                        .unwrap();
+                assert_eq!(finished["data"]["complete"], true);
+                assert_eq!(finished["data"]["file"]["name"], "截图+中文.bin");
+                let repeated =
+                    upload_local_chunk(&registry, &paths, &metadata(1), b"tail".to_vec())
+                        .await
+                        .unwrap();
+                assert_eq!(finished, repeated);
+                let id = finished["data"]["file"]["id"].as_str().unwrap();
+                let files = prepare(
+                    &registry,
+                    &paths,
+                    &session.id,
+                    &json!({
+                        "attachmentIds": [id]
+                    }),
+                )
+                .await
+                .unwrap();
+                assert_eq!(files.len(), 1);
+                let content = tokio::fs::read(&files[0].path).await.unwrap();
+                assert!(content[..FILE_CHUNK_BYTES as usize]
+                    .iter()
+                    .all(|byte| *byte == 42));
+                assert_eq!(&content[FILE_CHUNK_BYTES as usize..], b"tail");
+                discard_uploads(&registry, &paths, json!({ "attachmentIds": [id] }))
+                    .await
+                    .unwrap();
+                assert!(!Path::new(&files[0].path).exists());
+            }
+            assert!(read_array::<LanShareFile>(&paths.lan_share_files.files)
+                .unwrap()
+                .is_empty());
+            tokio::fs::remove_dir_all(root).await.unwrap();
+        });
+    }
+
+    #[test]
+    fn local_upload_chunks_reject_invalid_input_and_accept_empty_files() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(create_id());
+            let paths = crate::core::paths::resolve_app_paths(&root);
+            let registry = LanShareServerRegistry::new();
+            let device = upsert_device(
+                &registry,
+                &paths,
+                "local-empty",
+                "测试设备",
+                "MonkeyThief/Desktop",
+                "127.0.0.1",
+            )
+            .await
+            .unwrap();
+            let state = create_session(&registry, &paths, json!({ "deviceId": device.id }))
+                .await
+                .unwrap();
+            let payload = json!({
+                "sessionId": state["data"]["currentSession"]["id"],
+                "uploadId": create_id(), "name": "empty.txt",
+                "chunkIndex": 0, "chunkTotal": 1, "totalSize": 0
+            });
+            let encode = |value: &Value| {
+                url::form_urlencoded::byte_serialize(value.to_string().as_bytes())
+                    .collect::<String>()
+            };
+            let mut invalid = payload.clone();
+            invalid["name"] = json!("../escape.txt");
+            assert!(
+                upload_local_chunk(&registry, &paths, &encode(&invalid), vec![])
+                    .await
+                    .is_err()
+            );
+            invalid = payload.clone();
+            invalid["chunkIndex"] = json!(u64::MAX);
+            assert!(
+                upload_local_chunk(&registry, &paths, &encode(&invalid), vec![])
+                    .await
+                    .is_err()
+            );
+            invalid = payload.clone();
+            invalid["sessionId"] = json!("missing-session");
+            assert!(
+                upload_local_chunk(&registry, &paths, &encode(&invalid), vec![])
+                    .await
+                    .is_err()
+            );
+            assert!(upload_local_chunk(&registry, &paths, "invalid", vec![])
+                .await
+                .is_err());
+            assert!(upload_local_chunk(
+                &registry,
+                &paths,
+                &encode(&payload),
+                vec![0; FILE_CHUNK_BYTES as usize + 1],
+            )
+            .await
+            .is_err());
+            let result = upload_local_chunk(&registry, &paths, &encode(&payload), vec![])
+                .await
+                .unwrap();
+            assert_eq!(result["data"]["complete"], true);
+            assert_eq!(result["data"]["file"]["size"], 0);
+            tokio::fs::remove_dir_all(root).await.unwrap();
+        });
+    }
 
     #[test]
     fn deleting_device_during_receive_does_not_restore_files_or_checkpoints() {

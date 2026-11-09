@@ -40,7 +40,7 @@ type BoxBody = http_body_util::combinators::BoxBody<Bytes, std::io::Error>;
 mod attachments;
 mod native;
 mod transfer;
-pub use attachments::{clipboard_files, discard_uploads};
+pub use attachments::{clipboard_files, discard_uploads, upload_local_chunk};
 pub use native::{connect_peer, respond_pairing};
 
 pub const DEFAULT_PORT: u16 = 17631;

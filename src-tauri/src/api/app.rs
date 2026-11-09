@@ -565,24 +565,30 @@ pub fn open_tool_window(app: &tauri::AppHandle, tool_id: &str) -> Result<Value, 
         tool_id,
         "image-workbench" | "git" | "network-quality" | "lan-share" | "multi-protocol-gateway"
     );
-    let window = WebviewWindowBuilder::new(
+    let builder = WebviewWindowBuilder::new(
         app,
         &label,
         WebviewUrl::App(format!("index.html?panel=tool&tool={tool_id}").into()),
-    )
+    );
     // Windows 下原生拖放处理会拦截页面的 HTML5 拖拽事件，工具页需要自行接收文件拖放。
-    .disable_drag_drop_handler()
-    .title(format!("{title} · Monkey Thief"))
-    .inner_size(
-        if large { 1120.0 } else { 960.0 },
-        if large { 760.0 } else { 680.0 },
-    )
-    .min_inner_size(896.0, 576.0)
-    .center()
-    .focused(false)
-    .visible(false)
-    .build()
-    .map_err(|error| ManagerError::System(error.to_string()))?;
+    // 设备快传依赖原生事件中的文件路径，独立窗口与主窗口保持一致。
+    let builder = if tool_id == "lan-share" {
+        builder
+    } else {
+        builder.disable_drag_drop_handler()
+    };
+    let window = builder
+        .title(format!("{title} · Monkey Thief"))
+        .inner_size(
+            if large { 1120.0 } else { 960.0 },
+            if large { 760.0 } else { 680.0 },
+        )
+        .min_inner_size(896.0, 576.0)
+        .center()
+        .focused(false)
+        .visible(false)
+        .build()
+        .map_err(|error| ManagerError::System(error.to_string()))?;
 
     // 多个工具错开摆放，保留原生标题栏、缩放、最小化和单独关闭能力。
     let count = app
