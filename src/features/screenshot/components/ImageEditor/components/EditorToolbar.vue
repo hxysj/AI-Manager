@@ -1,6 +1,7 @@
 <template>
   <Teleport to="body">
     <div
+      ref="toolbar"
       class="screenshot-toolbar"
       :style="toolbarStyle"
       @pointerdown.stop
@@ -241,9 +242,12 @@ const emit = defineEmits([
   "redo",
   "reselect",
   "output",
-  "hover"
+  "hover",
+  "resize"
 ])
 
+const toolbar = ref(null)
+let resizeObserver
 const dropdown = ref("")
 const tools = computed(() =>
   [
@@ -315,10 +319,19 @@ function closeDropdownOnBlur(event) {
 }
 
 onMounted(() => {
+  // 工具选项换行后重新测量完整外框，定位时不再依赖预估尺寸。
+  const updateSize = () => {
+    const { width, height } = toolbar.value.getBoundingClientRect()
+    emit("resize", { width, height })
+  }
+  resizeObserver = new ResizeObserver(updateSize)
+  resizeObserver.observe(toolbar.value, { box: "border-box" })
+  updateSize()
   window.addEventListener("pointerdown", closeDropdown, true)
 })
 
 onBeforeUnmount(() => {
+  resizeObserver?.disconnect()
   emit("hover", false)
   window.removeEventListener("pointerdown", closeDropdown, true)
 })
@@ -331,6 +344,8 @@ onBeforeUnmount(() => {
   display: flex;
   flex-direction: column;
   align-items: stretch;
+  box-sizing: border-box;
+  width: max-content;
   gap: 0;
   padding: 2px;
   border: 1px solid #8f9aa7;

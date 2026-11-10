@@ -74,6 +74,7 @@
       @reselect="$emit('reselect', $event)"
       @output="output"
       @hover="$emit('toolbar-hover', $event)"
+      @resize="$emit('toolbar-resize', $event)"
     />
   </div>
 </template>
@@ -110,7 +111,8 @@ const emit = defineEmits([
   "cancel",
   "error",
   "selection-start",
-  "toolbar-hover"
+  "toolbar-hover",
+  "toolbar-resize"
 ])
 const canvas = ref(null)
 const tool = ref(props.reselect ? "select" : "pen")

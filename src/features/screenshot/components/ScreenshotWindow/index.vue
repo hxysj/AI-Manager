@@ -64,6 +64,7 @@
         @reselect="reselect"
         @selection-start="startMove"
         @toolbar-hover="toolbarHovered = $event"
+        @toolbar-resize="toolbarSize = $event"
       />
       <div v-if="!longBusy" class="selection-size">
         {{
@@ -429,6 +430,7 @@ const editorSource = ref("")
 const pointer = ref(null)
 const magnifier = ref(null)
 const toolbarHovered = ref(false)
+const toolbarSize = ref({ width: 0, height: 0 })
 const resizeHovered = ref(false)
 const pixelColor = ref("#000000")
 // 取色模式每次截图默认使用 RGB，显示和复制始终共享同一个格式值。
@@ -561,20 +563,22 @@ const toolbarStyle = computed(() => {
     : innerHeight / frame.value.height
   const right = (bounds?.left ?? 0) + (r.x + r.width) * scaleX
   const bottom = (bounds?.top ?? 0) + (r.y + r.height) * scaleY
-  const toolbarHeight = 82
+  const { width, height } = toolbarSize.value
+  const margin = 4
   const gap = 8
-  const top = bottom + gap
-  const fallbackTop = (bounds?.top ?? 0) + r.y * scaleY - toolbarHeight - gap
+  const below = bottom + gap
+  const above = (bounds?.top ?? 0) + r.y * scaleY - height - gap
+  // 下方放不下时翻到上方；上下均不足时贴近选区底部并限制在视口内。
+  const top =
+    below + height <= innerHeight - margin
+      ? below
+      : above >= margin
+        ? above
+        : bottom - height - gap
   return {
     // 用 right 锚定，工具栏实际宽度变化时仍能和选区右边缘对齐。
-    right: `${Math.max(4, Math.min(innerWidth - right, innerWidth - 4))}px`,
-    top: `${Math.max(
-      4,
-      Math.min(
-        top + toolbarHeight <= innerHeight - 4 ? top : fallbackTop,
-        innerHeight - toolbarHeight - 4
-      )
-    )}px`,
+    right: `${Math.max(margin, Math.min(innerWidth - right, innerWidth - width - margin))}px`,
+    top: `${Math.max(margin, Math.min(top, innerHeight - height - margin))}px`,
     maxWidth: "calc(100vw - 8px)"
   }
 })
