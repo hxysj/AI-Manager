@@ -2,18 +2,25 @@
   <section class="ocr-result-dialog" role="dialog" aria-label="OCR 识别结果">
     <header class="ocr-result-head" @pointerdown="dragResultWindow">
       <span class="ocr-result-title">识别结果</span>
-      <span class="ocr-result-engine">{{
-        result?.engine || (loading ? "正在识别" : "识别失败")
-      }}</span>
-      <button
-        type="button"
-        class="ocr-result-close"
-        aria-label="关闭识别结果"
-        @pointerdown.stop
-        @click="closeResultWindow"
-      >
-        ×
-      </button>
+      <div class="ocr-result-controls" @pointerdown.stop>
+        <button
+          type="button"
+          class="ocr-result-minimize"
+          aria-label="收起识别结果"
+          title="收起到贴图"
+          @click="minimizeResultWindow"
+        >
+          −
+        </button>
+        <button
+          type="button"
+          class="ocr-result-close"
+          aria-label="关闭识别结果"
+          @click="closeResultWindow"
+        >
+          ×
+        </button>
+      </div>
     </header>
     <div
       v-if="loading"
@@ -113,7 +120,7 @@ let disposed = false
 
 async function resizeResultWindow(value) {
   try {
-    // 结果窗从最小宽度起步，仅在文本或模型名称需要时向外扩展。
+    // 结果窗从最小宽度起步，按文本内容向外扩展。
     const canvas = window.document.createElement("canvas")
     const context = canvas.getContext("2d")
     if (!context) throw new Error("无法测量识别结果宽度")
@@ -124,11 +131,10 @@ async function resizeResultWindow(value) {
         (width, line) => Math.max(width, context.measureText(line).width),
         0
       )
-    const engineWidth = context.measureText(value.engine || "").width
     await screenshotApi.call("ocr-result-action", {
       id: props.resultId,
       action: "resize",
-      width: Math.ceil(Math.max(420, textWidth + 64, engineWidth + 160))
+      width: Math.ceil(Math.max(420, textWidth + 64))
     })
   } catch (cause) {
     if (!disposed) error.value = `调整识别结果窗口失败：${String(cause)}`
@@ -203,6 +209,18 @@ async function closeResultWindow() {
   }
 }
 
+async function minimizeResultWindow() {
+  try {
+    // 隐藏原窗口并保留识别、编辑和翻译状态，由对应贴图提供恢复入口。
+    await screenshotApi.call("ocr-result-action", {
+      id: props.resultId,
+      action: "minimize"
+    })
+  } catch (cause) {
+    error.value = `收起识别结果失败：${String(cause)}`
+  }
+}
+
 async function copyResultText() {
   if (!result.value?.text) return
   try {
@@ -257,8 +275,7 @@ async function translateResult() {
     await resizeResultWindow({
       text: lines
         .flatMap((line, index) => [line, translatedLines.value[index] || ""])
-        .join("\n"),
-      engine: result.value.engine
+        .join("\n")
     })
   } catch (cause) {
     if (!disposed) {
@@ -310,21 +327,27 @@ onBeforeUnmount(() => {
       flex-shrink: 0;
       font-size: 15px;
     }
-    .ocr-result-engine {
-      overflow: hidden;
-      color: #64748b;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-      font-size: 12px;
-    }
-    .ocr-result-close {
+    .ocr-result-controls {
+      display: flex;
+      align-items: center;
+      gap: 8px;
       margin-left: auto;
-      border: 0;
-      background: transparent;
-      color: #64748b;
-      cursor: pointer;
-      font-size: 24px;
-      line-height: 20px;
+      .ocr-result-minimize,
+      .ocr-result-close {
+        width: 24px;
+        height: 24px;
+        padding: 0;
+        border: 0;
+        border-radius: 4px;
+        background: transparent;
+        color: #64748b;
+        cursor: pointer;
+        font-size: 24px;
+        line-height: 20px;
+        &:hover {
+          background: #f1f5f9;
+        }
+      }
     }
   }
   .ocr-result-loading,

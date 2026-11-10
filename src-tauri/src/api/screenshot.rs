@@ -203,6 +203,61 @@ struct CaptureRect {
     height: u32,
 }
 
+struct OcrTask {
+    document_id: String,
+    pin_position: PhysicalPosition<i32>,
+    result_position: PhysicalPosition<i32>,
+    collapsed: bool,
+}
+
+// 先更新整组位置，再移动原生窗口；随后回传的相同位置事件不会再次产生位移。
+fn bound_ocr_moves(
+    tasks: &mut HashMap<String, OcrTask>,
+    label: &str,
+    position: PhysicalPosition<i32>,
+) -> Vec<(String, PhysicalPosition<i32>)> {
+    let (document_id, previous) = if let Some(id) = label.strip_prefix("screenshot-ocr-") {
+        let Some(task) = tasks.get(id) else {
+            return Vec::new();
+        };
+        (task.document_id.clone(), task.result_position)
+    } else if let Some(id) = label.strip_prefix("screenshot-pin-") {
+        let Some(task) = tasks.values().find(|task| task.document_id == id) else {
+            return Vec::new();
+        };
+        (id.to_string(), task.pin_position)
+    } else {
+        return Vec::new();
+    };
+    let dx = position.x.saturating_sub(previous.x);
+    let dy = position.y.saturating_sub(previous.y);
+    if dx == 0 && dy == 0 {
+        return Vec::new();
+    }
+    let mut moves = Vec::new();
+    for (id, task) in tasks
+        .iter_mut()
+        .filter(|(_, task)| task.document_id == document_id)
+    {
+        task.pin_position = PhysicalPosition::new(
+            task.pin_position.x.saturating_add(dx),
+            task.pin_position.y.saturating_add(dy),
+        );
+        task.result_position = PhysicalPosition::new(
+            task.result_position.x.saturating_add(dx),
+            task.result_position.y.saturating_add(dy),
+        );
+        if moves.is_empty() && label.starts_with("screenshot-ocr-") {
+            moves.push((format!("screenshot-pin-{document_id}"), task.pin_position));
+        }
+        let result_label = format!("screenshot-ocr-{id}");
+        if label != result_label {
+            moves.push((result_label, task.result_position));
+        }
+    }
+    moves
+}
+
 pub struct ScreenshotService {
     root: PathBuf,
     _instance_lock: std::fs::File,
@@ -218,7 +273,7 @@ pub struct ScreenshotService {
     view_save_pending: AtomicBool,
     menu_windows: Mutex<HashMap<String, (PhysicalPosition<i32>, PhysicalSize<u32>)>>,
     // OCR 任务只在结果窗口存活期间保存在内存中。
-    ocr_results: Mutex<HashMap<String, Value>>,
+    ocr_results: Mutex<HashMap<String, OcrTask>>,
     pub hotkey_errors: Mutex<Vec<String>>,
     pub startup_errors: Mutex<Vec<String>>,
 }
@@ -819,6 +874,13 @@ pub async fn dispatch(
             document["pin"] = json!(entry.as_ref().and_then(|entry| entry.pin.clone()));
             document["width"] = json!(entry.as_ref().map(|entry| entry.width).unwrap_or(0));
             document["height"] = json!(entry.as_ref().map(|entry| entry.height).unwrap_or(0));
+            document["ocrResult"] = json!(service
+                .ocr_results
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(_, task)| task.document_id == id)
+                .map(|(id, task)| json!({"id": id, "collapsed": task.collapsed})));
             Ok(document)
         }
         "pin" => {
@@ -833,6 +895,31 @@ pub async fn dispatch(
         }
         "ocr-result-open" => {
             let id = id_from(&payload)?;
+            let existing = service
+                .ocr_results
+                .lock()
+                .unwrap()
+                .iter()
+                .find(|(_, task)| task.document_id == id)
+                .map(|(id, _)| id.clone());
+            if let Some(result_id) = existing {
+                let window = app
+                    .get_webview_window(&format!("screenshot-ocr-{result_id}"))
+                    .ok_or_else(|| failure("OCR 结果窗口不存在"))?;
+                window.show().map_err(failure)?;
+                window.set_focus().map_err(failure)?;
+                if let Some(task) = service.ocr_results.lock().unwrap().get_mut(&result_id) {
+                    task.collapsed = false;
+                }
+                app.emit(
+                    "screenshot:ocr-result",
+                    json!({
+                        "documentId": id, "result": {"id": result_id, "collapsed": false}
+                    }),
+                )
+                .map_err(failure)?;
+                return Ok(json!(result_id));
+            }
             let entry = service
                 .session
                 .lock()
@@ -905,14 +992,19 @@ pub async fn dispatch(
                 f64::from(size.height) / scale,
             )
             .visible(false)
-            // 结果窗口始终显示在对应贴图上方，仍可独立拖动和关闭。
+            // 结果窗口始终显示在对应贴图上方，位置联动由窗口移动事件处理。
             .parent(&pin_window)
             .map_err(failure)?;
-            service
-                .ocr_results
-                .lock()
-                .unwrap()
-                .insert(result_id.clone(), json!({ "documentId": id }));
+            let pin_position = pin_window.outer_position().map_err(failure)?;
+            service.ocr_results.lock().unwrap().insert(
+                result_id.clone(),
+                OcrTask {
+                    document_id: id.to_string(),
+                    pin_position,
+                    result_position: position,
+                    collapsed: false,
+                },
+            );
             let window = builder.build();
             match window {
                 Ok(window) => {
@@ -931,6 +1023,13 @@ pub async fn dispatch(
                     return Err(failure(error));
                 }
             }
+            app.emit(
+                "screenshot:ocr-result",
+                json!({
+                    "documentId": id, "result": {"id": result_id, "collapsed": false}
+                }),
+            )
+            .map_err(failure)?;
             Ok(json!(result_id))
         }
         "ocr-result" => service
@@ -938,7 +1037,7 @@ pub async fn dispatch(
             .lock()
             .unwrap()
             .get(id_from(&payload)?)
-            .cloned()
+            .map(|task| json!({ "documentId": task.document_id }))
             .ok_or_else(|| failure("OCR 识别结果不存在")),
         "ocr-result-action" => {
             let result_id = id_from(&payload)?.to_string();
@@ -947,8 +1046,36 @@ pub async fn dispatch(
                 .ok_or_else(|| failure("OCR 结果窗口不存在"))?;
             match payload["action"].as_str().unwrap_or("") {
                 "ready" => {
-                    window.show().map_err(failure)?;
-                    window.set_focus().map_err(failure)?;
+                    let collapsed = service
+                        .ocr_results
+                        .lock()
+                        .unwrap()
+                        .get(&result_id)
+                        .is_some_and(|task| task.collapsed);
+                    if !collapsed {
+                        window.show().map_err(failure)?;
+                        window.set_focus().map_err(failure)?;
+                    }
+                }
+                "minimize" | "restore" => {
+                    let collapsed = payload["action"] == "minimize";
+                    if collapsed {
+                        window.hide().map_err(failure)?;
+                    } else {
+                        window.show().map_err(failure)?;
+                        window.set_focus().map_err(failure)?;
+                    }
+                    let document_id = {
+                        let mut tasks = service.ocr_results.lock().unwrap();
+                        let task = tasks
+                            .get_mut(&result_id)
+                            .ok_or_else(|| failure("OCR 任务不存在"))?;
+                        task.collapsed = collapsed;
+                        task.document_id.clone()
+                    };
+                    app.emit("screenshot:ocr-result", json!({
+                        "documentId": document_id, "result": {"id": result_id, "collapsed": collapsed}
+                    })).map_err(failure)?;
                 }
                 "resize" => {
                     let width = payload["width"]
@@ -960,8 +1087,7 @@ pub async fn dispatch(
                         .lock()
                         .unwrap()
                         .get(&result_id)
-                        .and_then(|task| task["documentId"].as_str())
-                        .map(str::to_string)
+                        .map(|task| task.document_id.clone())
                         .ok_or_else(|| failure("OCR 任务不存在"))?;
                     let entry = service
                         .session
@@ -995,6 +1121,10 @@ pub async fn dispatch(
                         width,
                         f64::from(current.height) / scale,
                     );
+                    // 自动调整结果宽度只更新结果窗基准，不带动贴图重新定位。
+                    if let Some(task) = service.ocr_results.lock().unwrap().get_mut(&result_id) {
+                        task.result_position = position;
+                    }
                     window.set_position(position).map_err(failure)?;
                     window.set_size(size).map_err(failure)?;
                 }
@@ -1887,9 +2017,41 @@ pub fn window_event(app: &AppHandle, label: &str, event: &tauri::WindowEvent) {
     let Some(service) = app.try_state::<ScreenshotService>() else {
         return;
     };
+    if let tauri::WindowEvent::Moved(position) = event {
+        if label.starts_with("screenshot-ocr-") || label.starts_with("screenshot-pin-") {
+            let Some(window) = app.get_webview_window(label) else {
+                return;
+            };
+            // 丢弃队列中已过期的位置和结果窗创建时的隐藏定位事件。
+            if window.outer_position().ok().as_ref() != Some(position)
+                || (label.starts_with("screenshot-ocr-") && !window.is_visible().unwrap_or(false))
+                || label
+                    .strip_prefix("screenshot-pin-")
+                    .is_some_and(|id| service.menu_windows.lock().unwrap().contains_key(id))
+            {
+                return;
+            }
+            let moves = bound_ocr_moves(&mut service.ocr_results.lock().unwrap(), label, *position);
+            for (target, position) in moves {
+                if let Some(window) = app.get_webview_window(&target) {
+                    if let Err(error) = window.set_position(position) {
+                        let _ = app.emit("screenshot:error", error.to_string());
+                    }
+                }
+            }
+        }
+    }
     if let Some(id) = label.strip_prefix("screenshot-ocr-") {
         if matches!(event, tauri::WindowEvent::Destroyed) {
-            service.ocr_results.lock().unwrap().remove(id);
+            let task = service.ocr_results.lock().unwrap().remove(id);
+            if let Some(task) = task {
+                let _ = app.emit(
+                    "screenshot:ocr-result",
+                    json!({
+                        "documentId": task.document_id, "result": null
+                    }),
+                );
+            }
         }
         return;
     }
@@ -2146,6 +2308,103 @@ pub fn flush(app: &AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ocr_result_and_pin_move_together_without_event_feedback() {
+        let mut tasks = HashMap::from([
+            (
+                "result".into(),
+                OcrTask {
+                    document_id: "pin".into(),
+                    pin_position: PhysicalPosition::new(-1200, 100),
+                    result_position: PhysicalPosition::new(-800, 100),
+                    collapsed: false,
+                },
+            ),
+            (
+                "other".into(),
+                OcrTask {
+                    document_id: "other-pin".into(),
+                    pin_position: PhysicalPosition::new(100, 100),
+                    result_position: PhysicalPosition::new(500, 100),
+                    collapsed: false,
+                },
+            ),
+        ]);
+        assert_eq!(
+            bound_ocr_moves(
+                &mut tasks,
+                "screenshot-pin-pin",
+                PhysicalPosition::new(-1100, 150)
+            ),
+            vec![(
+                "screenshot-ocr-result".into(),
+                PhysicalPosition::new(-700, 150)
+            )]
+        );
+        assert!(bound_ocr_moves(
+            &mut tasks,
+            "screenshot-ocr-result",
+            PhysicalPosition::new(-700, 150)
+        )
+        .is_empty());
+        assert_eq!(
+            bound_ocr_moves(
+                &mut tasks,
+                "screenshot-ocr-result",
+                PhysicalPosition::new(-720, 190)
+            ),
+            vec![(
+                "screenshot-pin-pin".into(),
+                PhysicalPosition::new(-1120, 190)
+            )]
+        );
+        assert!(bound_ocr_moves(
+            &mut tasks,
+            "screenshot-pin-pin",
+            PhysicalPosition::new(-1120, 190)
+        )
+        .is_empty());
+        assert_eq!(tasks["other"].pin_position, PhysicalPosition::new(100, 100));
+        assert_eq!(
+            tasks["other"].result_position,
+            PhysicalPosition::new(500, 100)
+        );
+
+        // 收起的结果仍跟随贴图更新位置，恢复时沿用原有相对偏移。
+        tasks.get_mut("result").unwrap().collapsed = true;
+        assert_eq!(
+            bound_ocr_moves(
+                &mut tasks,
+                "screenshot-pin-pin",
+                PhysicalPosition::new(-900, -50)
+            ),
+            vec![(
+                "screenshot-ocr-result".into(),
+                PhysicalPosition::new(-500, -50)
+            )]
+        );
+        assert!(tasks["result"].collapsed);
+        // 自动调整结果窗尺寸后的定位只更新该窗口，不反向移动贴图。
+        tasks.get_mut("result").unwrap().result_position = PhysicalPosition::new(-400, -50);
+        assert!(bound_ocr_moves(
+            &mut tasks,
+            "screenshot-ocr-result",
+            PhysicalPosition::new(-400, -50)
+        )
+        .is_empty());
+        assert_eq!(
+            tasks["result"].pin_position,
+            PhysicalPosition::new(-900, -50)
+        );
+        tasks.remove("result");
+        assert!(bound_ocr_moves(
+            &mut tasks,
+            "screenshot-pin-pin",
+            PhysicalPosition::new(0, 0)
+        )
+        .is_empty());
+    }
 
     #[test]
     fn ocr_result_opens_beside_pin_across_monitors_and_scale_factors() {

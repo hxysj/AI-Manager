@@ -374,6 +374,17 @@
       @action="pinAction"
       @toggle-zoom="setZoom(currentZoom === 1 ? 2 : 1)"
     />
+    <button
+      v-if="ocrResult?.collapsed && !editing"
+      class="pin-ocr-restore"
+      type="button"
+      aria-label="显示识别结果"
+      @pointerdown.stop
+      @dblclick.stop
+      @click="restoreOcrResult"
+    >
+      识别结果
+    </button>
     <div v-if="error" class="pin-error" role="alert" @pointerdown.stop>
       {{ error }}
     </div>
@@ -391,11 +402,7 @@ import CaptureMagnifier from "./components/CaptureMagnifier.vue"
 import LongScreenshotPreview from "./components/LongScreenshotPreview.vue"
 import OcrResultPanel from "./components/OcrResultPanel.vue"
 import PinToolbar from "./components/PinToolbar.vue"
-import {
-  canvasSource,
-  selectionRect,
-  thumbnailSource
-} from "../../renderer"
+import { canvasSource, selectionRect, thumbnailSource } from "../../renderer"
 import { captureLongScreenshot } from "../../long-screenshot"
 import {
   detectRectangleRegions,
@@ -444,6 +451,7 @@ const longAutoScroll = ref(false)
 const longSize = ref({ width: 0, height: 0 })
 let longController = null
 const document = ref(null)
+const ocrResult = ref(null)
 const editing = ref(false)
 const menu = ref(false)
 const menuExpanded = ref(false)
@@ -462,6 +470,7 @@ const pinGroups = ref(["Default"])
 const drag = ref(null)
 let selectionGeneration = 0
 let documentGeneration = 0
+let ocrResultSequence = 0
 let disposed = false
 let cancelPinPaint = null
 // 边框、控制点和拖动期间使用相同的方向光标，取色仅在画面区域显示。
@@ -490,6 +499,7 @@ let unlisten
 let unlistenFrame
 let unlistenReset
 let unlistenLongFinish
+let unlistenOcrResult
 let frameGeneration = 0
 let resizeFrame
 let rectangleDetection = null
@@ -520,18 +530,16 @@ const selectionStyle = computed(() => {
 const detectedRegions = computed(() => {
   if (!frame.value) return []
   // 总览、鼠标命中和导出共用完整候选集，大框先绘制，保留内部小框。
-  return [...pageRegions.value]
-    .reverse()
-    .map((region, index) => ({
-      ...region,
-      overlayKey: `${region.kind || "region"}-${region.id || index}-${region.x}-${region.y}-${region.width}-${region.height}`,
-      overlayStyle: {
-        left: `${(region.x / frame.value.width) * 100}%`,
-        top: `${(region.y / frame.value.height) * 100}%`,
-        width: `${(region.width / frame.value.width) * 100}%`,
-        height: `${(region.height / frame.value.height) * 100}%`
-      }
-    }))
+  return [...pageRegions.value].reverse().map((region, index) => ({
+    ...region,
+    overlayKey: `${region.kind || "region"}-${region.id || index}-${region.x}-${region.y}-${region.width}-${region.height}`,
+    overlayStyle: {
+      left: `${(region.x / frame.value.width) * 100}%`,
+      top: `${(region.y / frame.value.height) * 100}%`,
+      width: `${(region.width / frame.value.width) * 100}%`,
+      height: `${(region.height / frame.value.height) * 100}%`
+    }
+  }))
 })
 const longPreviewStyle = computed(() => {
   const bounds = desktop.value.getBoundingClientRect()
@@ -610,7 +618,9 @@ function containsRegion(region, point) {
 
 function applySmartLevels(point) {
   // 候选已按面积排序，移动鼠标只查询缓存，滚轮可以切换包裹层级。
-  const local = pageRegions.value.filter(region => containsRegion(region, point))
+  const local = pageRegions.value.filter((region) =>
+    containsRegion(region, point)
+  )
   const anchor = local[0]
   if (
     !anchor ||
@@ -1210,8 +1220,21 @@ function releaseDocumentImages(value) {
   }
 }
 
+async function restoreOcrResult() {
+  if (!ocrResult.value) return
+  try {
+    await screenshotApi.call("ocr-result-action", {
+      id: ocrResult.value.id,
+      action: "restore"
+    })
+  } catch (cause) {
+    error.value = `显示识别结果失败：${String(cause)}`
+  }
+}
+
 async function loadDocument() {
   const generation = ++documentGeneration
+  const resultSequence = ocrResultSequence
   const metadata = await screenshotApi.call("document", {
     id,
     metadataOnly: true
@@ -1224,6 +1247,9 @@ async function loadDocument() {
     source: "",
     output: URL.createObjectURL(new Blob([bytes], { type: "image/png" }))
   }
+  // 加载图片期间收到的收起事件优先，避免旧元数据覆盖恢复按钮。
+  if (resultSequence === ocrResultSequence)
+    ocrResult.value = metadata.ocrResult || null
   await nextTick()
   releaseDocumentImages(previous)
   return true
@@ -1625,14 +1651,22 @@ async function loadFrame() {
   if (background.height !== current.height) background.height = current.height
   const context = background.getContext("2d", { willReadFrequently: true })
   const pixels = new Uint8ClampedArray(bytes, 20)
-  context.putImageData(new ImageData(pixels, current.width, current.height), 0, 0)
+  context.putImageData(
+    new ImageData(pixels, current.width, current.height),
+    0,
+    0
+  )
   originalImage = background
   pixelCanvas = background
   frame.value = current
   autoCopy.value = header.getUint32(16, true) === 1
   if (generation !== frameGeneration) return
   // 每帧仅检测一次；原始像素交给 Worker，不阻塞框选和截图首帧显示。
-  const detection = detectRectangleRegions(pixels, current.width, current.height)
+  const detection = detectRectangleRegions(
+    pixels,
+    current.width,
+    current.height
+  )
     .then((regions) => {
       if (disposed || generation !== frameGeneration) return
       pageRegions.value = regions
@@ -1640,7 +1674,7 @@ async function loadFrame() {
         applySmartLevels(pointer.value)
       }
     })
-    .catch(cause => {
+    .catch((cause) => {
       if (!disposed && generation === frameGeneration)
         error.value = `矩形检测失败：${String(cause)}`
     })
@@ -1672,6 +1706,19 @@ onMounted(async () => {
       await loadFrame()
       if (!frame.value) await screenshotApi.call("capture-window-ready")
     } else if (mode !== "ocr") {
+      // 收起结果后在对应贴图上显示恢复按钮，保持窗口与识别状态不被重建。
+      unlistenOcrResult = await subscribeReady(
+        "screenshot:ocr-result",
+        (value) => {
+          if (value.documentId !== id) return
+          ocrResultSequence += 1
+          ocrResult.value = value.result
+        }
+      )
+      if (disposed) {
+        unlistenOcrResult()
+        return
+      }
       if (!(await loadDocument())) return
       opacity.value = document.value.pin?.opacity ?? 1
       pinGroup.value = document.value.pin?.group || "Default"
@@ -1724,6 +1771,7 @@ onBeforeUnmount(() => {
   unlistenFrame?.()
   unlistenReset?.()
   unlistenLongFinish?.()
+  unlistenOcrResult?.()
   if (resizeFrame) cancelAnimationFrame(resizeFrame)
   if (menuExpanded.value)
     screenshotApi
@@ -1935,6 +1983,22 @@ onBeforeUnmount(() => {
   position: fixed;
   inset: 0;
   overflow: visible;
+  .pin-ocr-restore {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    z-index: 8;
+    padding: 6px 10px;
+    border: 1px solid #a7a7a7;
+    border-radius: 5px;
+    background: #f8f8f8;
+    color: #1d1d1d;
+    cursor: pointer;
+    font-size: 12px;
+    &:hover {
+      background: #c7e4ff;
+    }
+  }
   user-select: none;
   outline: none;
   &.has-shadow {
