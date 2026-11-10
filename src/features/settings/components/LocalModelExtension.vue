@@ -659,6 +659,7 @@ onBeforeUnmount(() => {
 
           .model-row {
             display: flex;
+            min-height: 60px;
             align-items: center;
             gap: 12px;
             padding: 12px 14px;
