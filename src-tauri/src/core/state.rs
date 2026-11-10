@@ -322,6 +322,7 @@ impl AppState {
                 &resource_dir,
                 &cli_targets,
                 &settings,
+                &self.local_models,
                 payload.unwrap_or_else(|| json!({})),
             )
             .await;

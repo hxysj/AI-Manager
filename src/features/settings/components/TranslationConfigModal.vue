@@ -31,10 +31,10 @@
       <div class="translation-section">
         <div class="translation-fields">
           <label class="translation-field">
-            <span class="translation-field-label">Provider / 官方账号</span>
+            <span class="translation-field-label">模型来源</span>
             <el-select
               :model-value="modelValue.targetId"
-              placeholder="请选择 Codex Provider 或账号"
+              placeholder="选择本地模型、Provider 或账号"
               filterable
               popper-class="translation-select-popper"
               @update:model-value="selectTarget"
@@ -49,6 +49,7 @@
                   :key="item.id"
                   :label="item.name"
                   :value="item.id"
+                  :disabled="item.disabled"
                 />
               </el-option-group>
             </el-select>
@@ -59,19 +60,21 @@
               <span class="translation-field-label">翻译模型</span>
               <el-select
                 :model-value="modelValue.model"
-                placeholder="选择或输入模型名称"
+                :placeholder="
+                  local ? '选择已下载的翻译模型' : '选择或输入模型名称'
+                "
                 filterable
-                allow-create
+                :allow-create="!local"
                 default-first-option
                 popper-class="translation-select-popper"
                 :disabled="!modelValue.targetId"
-                @update:model-value="update({ model: $event })"
+                @update:model-value="selectModel"
               >
                 <el-option
                   v-for="model in modelOptions"
-                  :key="model"
-                  :label="model"
-                  :value="model"
+                  :key="model.id"
+                  :label="model.name"
+                  :value="model.id"
                 />
               </el-select>
             </label>
@@ -91,6 +94,23 @@
               </el-select>
             </label>
           </div>
+          <label v-if="local" class="translation-field">
+            <span class="translation-field-label">源语言</span>
+            <el-select
+              :model-value="modelValue.sourceLanguage || 'auto'"
+              filterable
+              popper-class="translation-select-popper"
+              @update:model-value="update({ sourceLanguage: $event })"
+            >
+              <el-option label="自动识别" value="auto" />
+              <el-option
+                v-for="language in localLanguages"
+                :key="language.code"
+                :label="language.label"
+                :value="language.code"
+              />
+            </el-select>
+          </label>
         </div>
       </div>
 
@@ -160,13 +180,16 @@
 
       <div class="translation-notices">
         <p v-if="invalidTarget" class="translation-error">
-          所选 Provider / 账号已删除或禁用，请重新选择。
+          所选模型来源不可用，或本地模型已删除，请重新选择。
+        </p>
+        <p v-if="localModelsError" class="translation-error">
+          {{ localModelsError }}
         </p>
         <p v-if="desktopStatus.error" class="translation-error">
           {{ desktopStatus.error }}
         </p>
         <p class="translation-hint">
-          目前仅支持 Codex 模式。 按快捷键划词取词，或先复制再按
+          本地翻译模型可在“本地大模型”中下载。按快捷键划词取词，或先复制再按
           <strong>{{
             modelValue.clipboardShortcut || "Ctrl+Alt+Shift+T"
           }}</strong>
@@ -191,6 +214,8 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue"
 import { RotateCcw, Settings, X } from "lucide-vue-next"
 import { translationApi } from "@/api"
+import { localModelsApi } from "@/api/modules/local-models"
+import { subscribeReady } from "@/api/request"
 import { ElOption, ElOptionGroup, ElSelect } from "element-plus"
 import "element-plus/es/components/select/style/css"
 import BaseModal from "@/components/BaseModal.vue"
@@ -204,7 +229,7 @@ const props = defineProps({
 
 const emit = defineEmits(["update:modelValue", "save", "close"])
 
-const languages = [
+const cloudLanguages = [
   "简体中文",
   "繁體中文",
   "English",
@@ -217,7 +242,39 @@ const languages = [
 
 const desktopStatus = ref({ error: "" })
 const shortcutError = ref("")
+const localModels = ref([])
+const localModelsError = ref("")
+const local = computed(() => props.modelValue.targetId === "local")
+const localLanguages = computed(
+  () =>
+    localModels.value.find((model) => model.id === props.modelValue.model)
+      ?.languages || []
+)
+const languages = computed(() =>
+  local.value
+    ? localLanguages.value.map((language) => language.label)
+    : cloudLanguages
+)
 let unsubscribeDesktopStatus = null
+let unsubscribeLocalModels = null
+let disposed = false
+let localSequence = 0
+
+async function loadLocalModels() {
+  const sequence = ++localSequence
+  try {
+    // 只列出已下载且具备翻译能力的模型，OCR 模型不会出现在这里。
+    const result = await localModelsApi.installed("translation")
+    if (disposed || sequence !== localSequence) return
+    localModels.value = result.models
+    localModelsError.value = ""
+  } catch (error) {
+    if (!disposed && sequence === localSequence) {
+      localModels.value = []
+      localModelsError.value = `本地翻译模型读取失败：${error.message || error}`
+    }
+  }
+}
 
 async function loadDesktopStatus() {
   try {
@@ -229,6 +286,16 @@ async function loadDesktopStatus() {
 
 const targetGroups = computed(() =>
   [
+    {
+      label: "本地模型",
+      items: [
+        {
+          id: "local",
+          name: "本地翻译模型",
+          disabled: !localModels.value.length
+        }
+      ]
+    },
     {
       label: "Codex Provider",
       items: props.providers
@@ -263,30 +330,37 @@ const selectedProvider = computed(() =>
 const invalidTarget = computed(
   () =>
     props.modelValue.targetId &&
-    !targetGroups.value.some((group) =>
-      group.items.some((item) => item.id === props.modelValue.targetId)
-    )
+    (local.value
+      ? !localModels.value.some((model) => model.id === props.modelValue.model)
+      : !targetGroups.value.some((group) =>
+          group.items.some((item) => item.id === props.modelValue.targetId)
+        ))
 )
 
-const modelOptions = computed(() => [
-  ...new Set(
-    [
-      selectedProvider.value?.runtimeConfig?.mainModel,
-      ...props.runtimeModels
-        .filter(
-          (item) =>
-            item.providerId === props.modelValue.targetId ||
-            (official.value &&
-              props.providers.some(
-                (provider) =>
-                  provider.id === item.providerId && provider.cli === "codex"
-              ))
+const modelOptions = computed(() =>
+  local.value
+    ? localModels.value
+    : [
+        ...new Set(
+          [
+            selectedProvider.value?.runtimeConfig?.mainModel,
+            ...props.runtimeModels
+              .filter(
+                (item) =>
+                  item.providerId === props.modelValue.targetId ||
+                  (official.value &&
+                    props.providers.some(
+                      (provider) =>
+                        provider.id === item.providerId &&
+                        provider.cli === "codex"
+                    ))
+              )
+              .map((item) => item.name || item.id),
+            props.modelValue.model
+          ].filter(Boolean)
         )
-        .map((item) => item.name || item.id),
-      props.modelValue.model
-    ].filter(Boolean)
-  )
-])
+      ].map((model) => ({ id: model, name: model }))
+)
 
 function update(changes) {
   const next = { ...props.modelValue, ...changes }
@@ -304,9 +378,37 @@ function update(changes) {
 }
 
 function selectTarget(targetId) {
+  if (targetId === "local") {
+    const model =
+      localModels.value.find((model) => model.id === props.modelValue.model) ||
+      localModels.value[0]
+    if (!model) return
+    selectModel(model.id, targetId)
+    return
+  }
   const provider = props.providers.find((item) => item.id === targetId)
-  const model = provider?.runtimeConfig?.mainModel || props.modelValue.model
+  const model =
+    provider?.runtimeConfig?.mainModel ||
+    (local.value ? "" : props.modelValue.model)
   update({ targetId, model })
+}
+
+function selectModel(modelId, targetId = props.modelValue.targetId) {
+  if (targetId !== "local") return update({ model: modelId })
+  const model = localModels.value.find((model) => model.id === modelId)
+  if (!model) return
+  // 按选中模型自己的语言范围调整配置，刷新列表不替换用户已经选择的模型。
+  const targetLanguage = model.languages.some(
+    (language) => language.label === props.modelValue.targetLanguage
+  )
+    ? props.modelValue.targetLanguage
+    : model.languages[0]?.label || ""
+  const sourceLanguage = model.languages.some(
+    (language) => language.code === props.modelValue.sourceLanguage
+  )
+    ? props.modelValue.sourceLanguage
+    : "auto"
+  update({ targetId, model: model.id, targetLanguage, sourceLanguage })
 }
 
 function recordShortcut(event, field) {
@@ -359,13 +461,24 @@ function resetShortcuts() {
   })
 }
 
-onMounted(() => {
+onMounted(async () => {
   loadDesktopStatus()
   unsubscribeDesktopStatus = translationApi.onDesktopStatus(loadDesktopStatus)
+  try {
+    const stop = await subscribeReady("local-models:changed", loadLocalModels)
+    if (disposed) return stop()
+    unsubscribeLocalModels = stop
+    await loadLocalModels()
+  } catch (error) {
+    if (!disposed) localModelsError.value = String(error)
+  }
 })
 
 onBeforeUnmount(() => {
+  disposed = true
+  localSequence++
   unsubscribeDesktopStatus?.()
+  unsubscribeLocalModels?.()
 })
 </script>
 

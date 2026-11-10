@@ -1,4 +1,4 @@
-use crate::api::{llm_proxy::LlmProxy, proxy, runtime_provider};
+use crate::api::{llm_proxy::LlmProxy, local_models::{self, LocalModelService}, proxy, runtime_provider};
 use crate::core::{
     error::ManagerError, paths::AppPaths, settings::TranslationAgentSettings, translation_store,
 };
@@ -17,6 +17,7 @@ pub async fn translate_text(
     resource_dir: &Path,
     cli_targets: &Value,
     settings: &TranslationAgentSettings,
+    local_models: &LocalModelService,
     payload: Value,
 ) -> Result<Value, ManagerError> {
     if !settings.enabled {
@@ -50,6 +51,11 @@ pub async fn translate_text(
     translation_store::save_history(paths, &history)?;
     let started = std::time::Instant::now();
     let result = async {
+        if info["engine"] == "local" {
+            return translate_local(
+                paths, local_models, settings, &payload, &mut history, source_text, target_language,
+            ).await;
+        }
         let target = proxy::prepare_translation_target(paths, cli_targets, settings).await?;
         let llm_proxy = LlmProxy::start(
             paths.clone(),
@@ -113,6 +119,102 @@ pub async fn translate_text(
     }
     translation_store::save_history(paths, &history)?;
     result.map(|_| history)
+}
+
+async fn translate_local(
+    paths: &AppPaths,
+    service: &LocalModelService,
+    settings: &TranslationAgentSettings,
+    payload: &Value,
+    history: &mut Value,
+    text: &str,
+    target: &str,
+) -> Result<String, ManagerError> {
+    let source = payload["sourceLanguage"]
+        .as_str()
+        .unwrap_or(&settings.source_language);
+    let plan = local_models::translation_plan(text, source, target)?;
+    let mut translated = text.to_string();
+    history["requestCount"] = json!(0);
+    history["usageKnown"] = json!(true);
+    for key in [
+        "inputTokens",
+        "outputTokens",
+        "cacheReadTokens",
+        "reasoningTokens",
+    ] {
+        history[key] = json!(0);
+    }
+    for (source, target) in plan {
+        let mut request = json!({
+            "id": uuid::Uuid::new_v4().to_string(), "translationId": history["id"],
+            "createdAt": chrono::Utc::now().timestamp_millis(),
+            "targetId": "local", "providerName": history["providerName"],
+            "model": settings.model, "engine": "local", "status": "running",
+            "errorMessage": "", "usageKnown": false,
+        });
+        translation_store::save_request(paths, &request)?;
+        let started = std::time::Instant::now();
+        let result = service
+            .translate(
+                paths,
+                json!({
+                    "id": settings.model, "text": translated,
+                    "sourceLanguage": source, "targetLanguage": target,
+                }),
+            )
+            .await;
+        request["durationMs"] = json!(started.elapsed().as_millis() as u64);
+        history["requestCount"] = json!(history["requestCount"].as_u64().unwrap_or(0) + 1);
+        match &result {
+            Ok(result) => {
+                request["status"] = json!(if result["error"].is_string() {
+                    "failed"
+                } else {
+                    "success"
+                });
+                request["errorMessage"] = json!(result["error"].as_str().unwrap_or(""));
+                request["statusCode"] = result["statusCode"].clone();
+                let usage = &result["usage"];
+                let known = usage["prompt_tokens"].is_u64() && usage["completion_tokens"].is_u64();
+                request["usageKnown"] = json!(known);
+                if known {
+                    for (key, tokens) in [
+                        ("inputTokens", usage["prompt_tokens"].as_u64().unwrap()),
+                        ("outputTokens", usage["completion_tokens"].as_u64().unwrap()),
+                        (
+                            "cacheReadTokens",
+                            usage["prompt_tokens_details"]["cached_tokens"]
+                                .as_u64()
+                                .unwrap_or(0),
+                        ),
+                        (
+                            "reasoningTokens",
+                            usage["completion_tokens_details"]["reasoning_tokens"]
+                                .as_u64()
+                                .unwrap_or(0),
+                        ),
+                    ] {
+                        request[key] = json!(tokens);
+                        history[key] = json!(history[key].as_u64().unwrap_or(0) + tokens);
+                    }
+                }
+            }
+            Err(error) => {
+                request["status"] = json!("failed");
+                request["errorMessage"] = json!(error.to_string());
+            }
+        }
+        history["usageKnown"] =
+            json!(history["usageKnown"] == true && request["usageKnown"] == true);
+        translation_store::save_request(paths, &request)?;
+        let result = result?;
+        if let Some(error) = result["error"].as_str() {
+            return Err(ManagerError::System(error.to_string()));
+        }
+        translated = result["text"].as_str().unwrap_or("").to_string();
+    }
+    Ok(translated)
 }
 
 async fn run_agent(
@@ -289,6 +391,89 @@ mod tests {
     use tokio::net::TcpListener;
 
     #[test]
+    fn local_translation_uses_no_cloud_agent_and_records_language_errors() {
+        tauri::async_runtime::block_on(async {
+            let root = std::env::temp_dir().join(format!("local-translation-{}", uuid::Uuid::new_v4()));
+            let paths = resolve_app_paths(&root);
+            let directory = local_models::tests::install_model(&paths, "lmt-60-0.6b");
+            let settings = TranslationAgentSettings {
+                enabled: true, target_id: "local".into(), model: "lmt-60-0.6b".into(),
+                source_language: "zh".into(), target_language: "简体中文".into(),
+                shortcut: "Ctrl+Alt+T".into(), clipboard_shortcut: "Ctrl+Alt+Shift+T".into(),
+            };
+            let service = LocalModelService::default();
+            // 同语言直接返回原文，使用不存在的代理资源目录证明本地分支不启动云端代理。
+            let translated = translate_text(&paths, &root, &root.join("no-agent"), &json!([]),
+                &settings, &service, json!({"text": "你好，世界！"})).await.unwrap();
+            assert_eq!(translated["engine"], "local");
+            assert_eq!(translated["translatedText"], "你好，世界！");
+            assert_eq!(translated["requestCount"], 0);
+            assert_eq!(translation_store::list(&paths, &json!({"kind": "usage"})).unwrap()["total"], 0);
+            let error = translate_text(&paths, &root, &root, &json!([]), &settings, &service,
+                json!({"text": "你好", "targetLanguage": "unsupported"})).await.unwrap_err();
+            assert!(error.to_string().contains("不支持此语言"));
+            let history = translation_store::list(&paths, &json!({})).unwrap();
+            assert_eq!(history["total"], 2);
+            assert!(history["items"].as_array().unwrap().iter().any(|item| {
+                item["status"] == "failed" && item["errorMessage"].as_str().unwrap().contains("不支持此语言")
+            }));
+            std::fs::remove_file(directory.join("installed.json")).unwrap();
+            assert!(translate_text(&paths, &root, &root, &json!([]), &settings, &service,
+                json!({"text": "你好"})).await.unwrap_err().to_string().contains("尚未完整下载"));
+            let resolved = root.canonicalize().unwrap();
+            assert_eq!(resolved.parent().unwrap(), std::env::temp_dir().canonicalize().unwrap());
+            std::fs::remove_dir_all(resolved).unwrap();
+        });
+    }
+
+    #[test]
+    #[ignore = "需要已下载并校验的 LMT 权重；验证实际翻译、数据库用量和按需释放"]
+    fn downloaded_lmt_translates_through_application_entry() {
+        tauri::async_runtime::block_on(async {
+            let root = PathBuf::from(std::env::var("AI_MANAGER_MODEL_TEST_DATA").expect("请指定模型数据目录"));
+            // 权重使用指定目录，测试历史写入独立临时数据库，避免污染用户翻译记录。
+            let fixture = local_models::tests::Fixture::new();
+            let mut paths = resolve_app_paths(&fixture.0);
+            paths.workspace_root = resolve_app_paths(&root).workspace_root;
+            let settings = TranslationAgentSettings {
+                enabled: true, target_id: "local".into(), model: "lmt-60-0.6b".into(),
+                source_language: "auto".into(), target_language: "简体中文".into(),
+                shortcut: "Ctrl+Alt+T".into(), clipboard_shortcut: "Ctrl+Alt+Shift+T".into(),
+            };
+            let service = LocalModelService::default();
+            if std::env::var("AI_MANAGER_MODEL_TEST_DOWNLOAD").as_deref() == Ok("1") {
+                local_models::tests::prepare_real_model(&paths, &service, "lmt-60-0.6b").await.unwrap();
+            }
+            for (text, source, expected) in [
+                ("Hello, world!", "auto", "世界"),
+                ("Bonjour !", "auto", "你好"),
+                ("Guten Morgen!", "auto", "早上好"),
+                ("これは日本語の翻訳テストです。", "auto", "翻译"),
+            ] {
+                let result = translate_text(&paths, &root, &root, &json!([]), &settings, &service,
+                    json!({"text": text, "sourceLanguage": source})).await.unwrap();
+                println!("本地翻译：{result}");
+                assert_eq!(result["status"], "success");
+                assert_eq!(result["usageKnown"], true);
+                assert_eq!(result["requestCount"], 1);
+                assert!(result["translatedText"].as_str().unwrap().contains(expected));
+                assert!(result["inputTokens"].as_u64().unwrap() > 0);
+                assert!(result["outputTokens"].as_u64().unwrap() > 0);
+                let usage = translation_store::list(&paths, &json!({"kind": "usage"})).unwrap();
+                assert!(usage["items"].as_array().unwrap().iter().any(|request| {
+                    request["translationId"] == result["id"] && request["status"] == "success"
+                        && request["inputTokens"] == result["inputTokens"]
+                }));
+            }
+            let japanese = translate_text(&paths, &root, &root, &json!([]), &settings, &service,
+                json!({"text": "Hello, world!", "targetLanguage": "日本語"})).await.unwrap();
+            assert_eq!(japanese["requestCount"], 2);
+            assert_eq!(japanese["usageKnown"], true);
+            assert!(japanese["translatedText"].as_str().unwrap().contains("世界"));
+        });
+    }
+
+    #[test]
     #[ignore = "需要 Node.js 和已打包的 translation-agent.cjs，仅访问本地模拟接口"]
     fn translation_starts_node_and_records_usage_from_a_canonical_resource_path() {
         tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
@@ -340,10 +525,11 @@ mod tests {
             let settings = TranslationAgentSettings {
                 enabled: true, target_id: "translation-test".to_string(),
                 model: "custom-translation-model".to_string(), target_language: "简体中文".to_string(),
+                source_language: "auto".to_string(),
                 shortcut: "Ctrl+Alt+T".to_string(), clipboard_shortcut: "Ctrl+Alt+Shift+T".to_string(),
             };
             // 使用实际入口、独立工作目录和 Windows 扩展路径，覆盖本次启动失败。
-            let result = translate_text(&paths, &root, &resources.canonicalize().unwrap(), &json!([]), &settings, json!({"text": "Hello, world!"})).await;
+            let result = translate_text(&paths, &root, &resources.canonicalize().unwrap(), &json!([]), &settings, &LocalModelService::default(), json!({"text": "Hello, world!"})).await;
             server.abort();
             let history = translation_store::list(&paths, &json!({})).unwrap();
             let usage = translation_store::list(&paths, &json!({"kind": "usage"})).unwrap();

@@ -73,7 +73,7 @@ new Function('require', 'module', 'exports', 'loadMonaco', transformSync(
   if (name === '@/api') return { translationApi: api }
   if (name === 'lucide-vue-next') {
     const icon = { render: () => vue.h('span') }
-    return { Copy: icon, Languages: icon, X: icon }
+    return new Proxy({}, { get: () => icon })
   }
   return require(name)
 }, module, module.exports, async () => {
@@ -82,7 +82,7 @@ new Function('require', 'module', 'exports', 'loadMonaco', transformSync(
 })
 
 function node(type, text = '') {
-  return { type, text, children: [], parent: null, props: {}, getBoundingClientRect: () => ({ left: 0, top: 0, width: 440, height: 460 }) }
+  return { type, text, children: [], parent: null, props: {}, querySelector: () => null, getBoundingClientRect: () => ({ left: 0, top: 0, width: 440, height: 460 }) }
 }
 const body = node('body')
 const renderer = vue.createRenderer({

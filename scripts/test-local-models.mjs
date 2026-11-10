@@ -45,6 +45,7 @@ const reads = []
 let deferReads = false
 let failAction = ""
 let deferSubscription
+const sources = [{ id: "modelscope", name: "ModelScope（官方）" }, { id: "huggingface", name: "Hugging Face（官方）" }]
 const compatibility = {
   allowed: true,
   validation: { passed: null, detail: "下载后可进行本机运行校验" },
@@ -58,6 +59,8 @@ let data = {
   models: [
     {
       id: "minicpm-ocr-1.0",
+      sources,
+      capabilities: ["ocr"],
       phase: "not-downloaded",
       usedBytes: 0,
       compatibility
@@ -118,26 +121,28 @@ new Function(
               detail: passed ? "本机运行校验通过" : "内存分配失败",
               checkedAt: 2
             }
-            data.models[0].compatibility.validation = result
+            data.models.find(model => model.id === id).compatibility.validation = result
             return result
           },
           download: async (payload) => {
             calls.push({ action: "download", payload })
             if (failAction === "download") throw new Error("下载源连接失败")
-            data.models[0].phase = "downloading"
+            data.models.find(model => model.id === payload.id).phase = "downloading"
           },
           cancel: async (id) => {
             calls.push({ action: "cancel", id })
-            data.models[0].phase = "paused"
+            data.models.find(model => model.id === id).phase = "paused"
             data.usedBytes = 10
-            data.models[0].usedBytes = 10
+            data.models.find(model => model.id === id).usedBytes = 10
           },
           delete: async (id) => {
             calls.push({ action: "delete", id })
             if (failAction === "delete") throw new Error("文件被占用")
             data.usedBytes = 0
             data.installedCount = 0
-            data.models[0] = {
+            const index = data.models.findIndex(model => model.id === id)
+            data.models[index] = {
+              ...data.models[index],
               id,
               phase: "not-downloaded",
               usedBytes: 0,
@@ -292,7 +297,7 @@ assert.equal(first.state.snapshot.usedBytes, 10)
 await first.state.perform("cancel", first.state.snapshot.models[0])
 assert.equal(first.state.snapshot.models[0].phase, "paused")
 assert.equal(calls.at(-1).action, "cancel", "条件不足时仍能暂停下载")
-first.state.source = "huggingface"
+first.state.sources["minicpm-ocr-1.0"] = "huggingface"
 data.models[0].compatibility = { ...compatibility, allowed: false }
 await emitChanged()
 const callsBeforeResume = calls.length
@@ -362,6 +367,26 @@ await first.state.perform("delete", first.state.snapshot.models[0])
 assert.equal(first.state.snapshot.usedBytes, 0)
 assert.equal(first.state.snapshot.installedCount, 0)
 assert.equal(first.state.deleteId, "")
+
+// 两个模型分别使用自己的下载源，翻译模型的动作不能改动 OCR 卡片。
+data.models.push({
+  id: "lmt-60-0.6b", name: "LMT-60-0.6B", capabilities: ["translation"],
+  sources: [{ id: "hf-mirror", name: "HF Mirror（社区量化镜像）" }, { id: "huggingface", name: "Hugging Face（社区量化）" }],
+  phase: "not-downloaded", usedBytes: 0, compatibility
+})
+await emitChanged()
+assert.equal(first.state.snapshot.models.length, 2)
+await first.state.perform("download", first.state.snapshot.models[1])
+assert.deepEqual(calls.at(-1).payload, { id: "lmt-60-0.6b", source: "hf-mirror" })
+assert.equal(data.models[0].phase, "not-downloaded")
+first.state.sources["lmt-60-0.6b"] = "huggingface"
+await first.state.perform("cancel", first.state.snapshot.models[1])
+await first.state.perform("download", first.state.snapshot.models[1])
+assert.equal(calls.at(-1).payload.source, "huggingface")
+assert.equal(first.state.sources["minicpm-ocr-1.0"], "huggingface")
+await first.state.perform("cancel", first.state.snapshot.models[1])
+await first.state.perform("delete", first.state.snapshot.models[1])
+assert.equal(data.models[0].phase, "not-downloaded")
 
 deferReads = true
 const old = first.state.load()

@@ -186,12 +186,18 @@
               <label class="source-field">
                 <span>下载源</span>
                 <select
-                  v-model="source"
+                  :value="sources[model.id] || model.sources[0]?.id"
+                  @change="sources[model.id] = $event.target.value"
                   class="source-select"
                   :disabled="isActive(model) || Boolean(pending)"
                 >
-                  <option value="modelscope">ModelScope（官方）</option>
-                  <option value="huggingface">Hugging Face（官方）</option>
+                  <option
+                    v-for="source in model.sources"
+                    :key="source.id"
+                    :value="source.id"
+                  >
+                    {{ source.name }}
+                  </option>
                 </select>
               </label>
               <button
@@ -218,7 +224,7 @@
                 @click="perform('download', model)"
               >
                 <Download :size="14" />{{
-                  pending === "download"
+                  pending === "download" && pendingId === model.id
                     ? "准备中…"
                     : model.usedBytes
                       ? "继续下载"
@@ -233,7 +239,9 @@
                 @click="perform('validate', model)"
               >
                 <FileCheck :size="14" />{{
-                  pending === "validate" ? "校验中…" : "运行校验"
+                  pending === "validate" && pendingId === model.id
+                    ? "校验中…"
+                    : "运行校验"
                 }}
               </button>
               <button
@@ -270,7 +278,11 @@
                   :disabled="Boolean(pending) || isActive(model)"
                   @click="perform('delete', model)"
                 >
-                  {{ pending === "delete" ? "删除中…" : "确认删除" }}
+                  {{
+                    pending === "delete" && pendingId === model.id
+                      ? "删除中…"
+                      : "确认删除"
+                  }}
                 </button>
               </div>
             </div>
@@ -305,7 +317,9 @@ const refreshing = ref(false)
 const pending = ref("")
 const error = ref("")
 const deleteId = ref("")
-const source = ref("modelscope")
+// 每个模型维护自己的下载源，避免将 OCR 官方仓库用于翻译权重。
+const sources = ref({})
+const pendingId = ref("")
 const snapshot = ref({
   models: [],
   usedBytes: 0,
@@ -405,11 +419,15 @@ async function perform(action, model) {
   // 检测未通过时保留暂停和删除操作，下载入口仍由后端重新校验。
   if (action === "download" && !model.compatibility?.allowed) return
   pending.value = action
+  pendingId.value = model.id
   error.value = ""
   try {
     if (action === "download") {
       lastDownloadError = ""
-      await localModelsApi.download({ id: model.id, source: source.value })
+      await localModelsApi.download({
+        id: model.id,
+        source: sources.value[model.id] || model.sources[0]?.id
+      })
     } else {
       const result = await localModelsApi[action](model.id)
       if (action === "validate" && result.passed === false) {
@@ -424,6 +442,7 @@ async function perform(action, model) {
     }
   } finally {
     pending.value = ""
+    pendingId.value = ""
     if (!disposed && showManager.value) await load()
   }
 }

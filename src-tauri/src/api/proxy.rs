@@ -80,11 +80,18 @@ pub(crate) fn translation_target_info(
 ) -> Result<Value, ManagerError> {
     if settings.target_id.is_empty() || settings.model.is_empty() {
         return Err(ManagerError::System(
-            "请在设置 → 功能扩展 → 划词翻译中选择 Provider / 账号并填写模型".to_string(),
+            "请在设置 → 功能扩展 → 划词翻译中选择模型来源和翻译模型".to_string(),
         ));
     }
     if settings.target_language.len() > 100 {
         return Err(ManagerError::System("翻译目标语言过长".to_string()));
+    }
+    if settings.target_id == "local" {
+        crate::api::local_models::check_translation_languages(
+            &settings.source_language,
+            &settings.target_language,
+        )?;
+        return crate::api::local_models::translation_target_info(paths, &settings.model);
     }
     let target = get_target(paths, "codex", &json!({}), &settings.target_id)?;
     Ok(json!({
@@ -2479,7 +2486,7 @@ mod tests {
                 )).await.unwrap();
             });
             let settings = crate::core::settings::TranslationAgentSettings {
-                enabled: true, target_id: "provider-active".into(), model: "translation-model".into(), target_language: "简体中文".into(),
+                enabled: true, source_language: "auto".into(), target_id: "provider-active".into(), model: "translation-model".into(), target_language: "简体中文".into(),
                 shortcut: "Ctrl+Alt+T".into(), clipboard_shortcut: "Ctrl+Alt+Shift+T".into(),
             };
             let target = super::prepare_translation_target(&paths, &json!([]), &settings).await.unwrap();

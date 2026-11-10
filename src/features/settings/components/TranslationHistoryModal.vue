@@ -128,8 +128,14 @@
           <div class="translation-record-body">
             <div class="translation-record-info">
               {{ item.providerName }} · {{ item.model }} ·
-              {{ item.engine === "codex" ? "Codex" : "LangChain" }} ·
-              {{ item.durationMs || 0 }} ms
+              {{
+                item.engine === "local"
+                  ? "本地模型"
+                  : item.engine === "codex"
+                    ? "Codex"
+                    : "LangChain"
+              }}
+              · {{ item.durationMs || 0 }} ms
             </div>
             <div v-if="kind === 'history'" class="translation-texts">
               <span class="translation-subhint"

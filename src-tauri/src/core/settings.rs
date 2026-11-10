@@ -63,6 +63,8 @@ pub struct TranslationAgentSettings {
     pub enabled: bool,
     pub target_id: String,
     pub model: String,
+    #[serde(default)]
+    pub source_language: String,
     pub target_language: String,
     #[serde(default = "default_translation_shortcut")]
     pub shortcut: String,
@@ -199,6 +201,7 @@ pub fn normalize_app_settings(settings_file_path: PathBuf, payload: Option<Value
                 enabled: bool_value(translation.get("enabled"), false),
                 target_id: string_value(translation.get("targetId")),
                 model: string_value(translation.get("model")),
+                source_language: non_empty_string(translation.get("sourceLanguage"), "auto"),
                 target_language: non_empty_string(translation.get("targetLanguage"), "简体中文"),
                 shortcut: non_empty_string(translation.get("shortcut"), "Ctrl+Alt+T"),
                 clipboard_shortcut: non_empty_string(

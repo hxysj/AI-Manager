@@ -47,7 +47,8 @@ const notifications = []
 let earlyRefresh = true
 let deferReads = true
 let installedModels = [
-  { id: "minicpm-ocr-1.0", name: "MiniCPM-OCR 1.0", capabilities: ["ocr"] }
+  { id: "minicpm-ocr-1.0", name: "MiniCPM-OCR 1.0", capabilities: ["ocr"] },
+  { id: "test-ocr-secondary", name: "OCR 测试模型 B", capabilities: ["ocr"] }
 ]
 let localModelsFailure = false
 const response = () => ({
@@ -234,21 +235,46 @@ local.state.selectOcrTarget()
 assert.equal(local.state.settingsDraft.ocr.model, "minicpm-ocr-1.0")
 assert.equal(local.state.invalidOcrTarget, false)
 assert.equal(local.state.invalidLocalModel, false)
-assert.deepEqual([...local.state.ocrModelOptions], ["minicpm-ocr-1.0"])
+assert.deepEqual(
+  [...local.state.ocrModelOptions],
+  ["minicpm-ocr-1.0", "test-ocr-secondary"]
+)
+local.state.settingsDraft.ocr.model = "test-ocr-secondary"
 await local.state.saveSettings()
 assert.deepEqual(storedSettings.ocr, {
   useLargeModel: true,
   targetId: "local",
-  model: "minicpm-ocr-1.0"
+  model: "test-ocr-secondary"
 })
 local.app.unmount()
 const localReopened = mount()
 await tick()
 assert.equal(localReopened.state.settingsDraft.ocr.targetId, "local")
-assert.equal(localReopened.state.settingsDraft.ocr.model, "minicpm-ocr-1.0")
-installedModels = []
+assert.equal(localReopened.state.settingsDraft.ocr.model, "test-ocr-secondary")
+const ocrModelFixtures = installedModels
 await listeners.get("local-models:changed")()
-assert.deepEqual([...localReopened.state.ocrModelOptions], [])
+assert.equal(
+  localReopened.state.settingsDraft.ocr.model,
+  "test-ocr-secondary",
+  "刷新后保留第二个模型"
+)
+installedModels = [ocrModelFixtures[1]]
+await listeners.get("local-models:changed")()
+assert.equal(
+  localReopened.state.invalidLocalModel,
+  false,
+  "删除其他 OCR 模型不影响当前选择"
+)
+await localReopened.state.saveSettings()
+assert.equal(storedSettings.ocr.model, "test-ocr-secondary")
+installedModels = [ocrModelFixtures[0]]
+await listeners.get("local-models:changed")()
+assert.deepEqual([...localReopened.state.ocrModelOptions], ["minicpm-ocr-1.0"])
+assert.equal(
+  localReopened.state.settingsDraft.ocr.model,
+  "test-ocr-secondary",
+  "删除选中模型后不自动替换"
+)
 await localReopened.state.saveSettings()
 assert.match(localReopened.state.error, /请选择已下载的本地 OCR 模型/)
 localModelsFailure = true
@@ -259,5 +285,5 @@ localReopened.app.unmount()
 assert.equal(listeners.size, 0)
 assert.deepEqual(runtimeErrors, [])
 console.log(
-  "截图设置初始化、本地模型选择保存、删除校验、失败重试和监听清理验证通过"
+  "截图设置初始化、本地 OCR 多模型选择保存、刷新保留、删除校验、失败重试和监听清理验证通过"
 )

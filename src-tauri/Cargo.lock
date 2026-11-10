@@ -68,6 +68,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "allocator-api2"
+version = "0.2.21"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "683d7910e743518b0e34f1186f92494becacb047c7b6bf616c96772180fef923"
+
+[[package]]
 name = "android_system_properties"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1781,6 +1787,8 @@ version = "0.15.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9229cfe53dfd69f0609a49f65461bd93001ea1ef889cd5529dd176593f5338a1"
 dependencies = [
+ "allocator-api2",
+ "equivalent",
  "foldhash 0.1.5",
 ]
 
@@ -2641,6 +2649,7 @@ dependencies = [
  "tokio-util",
  "url",
  "uuid",
+ "whatlang",
  "windows 0.61.3",
  "windows-sys 0.61.2",
  "winreg 0.55.0",
@@ -5819,6 +5828,15 @@ dependencies = [
  "thiserror 2.0.18",
  "windows 0.61.3",
  "windows-core 0.61.2",
+]
+
+[[package]]
+name = "whatlang"
+version = "0.18.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f5e8f38b596e2a359b755342473520a99421e43658548c79489ee221b728c107"
+dependencies = [
+ "hashbrown 0.15.5",
 ]
 
 [[package]]

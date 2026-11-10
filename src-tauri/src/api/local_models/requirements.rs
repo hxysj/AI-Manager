@@ -1,4 +1,7 @@
-use super::{failure, file_size, runtime, runtime_validation, AppPaths, ManagerError, ModelFile};
+use super::{
+    failure, file_size, runtime, runtime_validation, AppPaths, ManagerError, ModelDefinition,
+    ModelFile,
+};
 use serde::Serialize;
 use serde_json::{json, Value};
 use std::path::Path;
@@ -184,9 +187,10 @@ fn remaining_model_bytes(directory: &Path, files: &[ModelFile]) -> Result<u64, M
 pub(super) fn inspect(
     paths: &AppPaths,
     directory: &Path,
-    requirements: &ModelRequirements,
+    model: &ModelDefinition,
     for_download: bool,
 ) -> Result<Compatibility, ManagerError> {
+    let requirements = &model.requirements;
     let model_bytes = if for_download {
         remaining_model_bytes(directory, requirements.files)?
     } else {
@@ -209,7 +213,7 @@ pub(super) fn inspect(
         for_download,
     );
     if for_download {
-        report.validation = runtime_validation(directory)?;
+        report.validation = runtime_validation(directory, model)?;
     }
     Ok(report)
 }
@@ -266,7 +270,7 @@ fn disk_available(_: &Path) -> Result<u64, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::{FILES, MODEL_REQUIREMENTS};
+    use super::super::tests::{FILES, MODEL_REQUIREMENTS};
     use super::*;
 
     fn resources() -> Resources {
@@ -296,6 +300,12 @@ mod tests {
 
     #[test]
     fn each_model_uses_its_own_memory_and_platform_requirements() {
+        let mut modest = resources();
+        modest.memory.as_mut().unwrap().1 = 2300 * 1024 * 1024;
+        assert!(evaluate(modest, &super::super::catalog::LMT.requirements, 0, true).allowed);
+        let mut modest = resources();
+        modest.memory.as_mut().unwrap().1 = 2300 * 1024 * 1024;
+        assert!(!evaluate(modest, &MODEL_REQUIREMENTS, 0, true).allowed);
         let demanding = ModelRequirements {
             memory_requirement: Some(MemoryRequirement {
                 available_bytes: 4 * 1024 * 1024 * 1024,
@@ -356,7 +366,11 @@ mod tests {
         let root = super::super::tests::Fixture::new();
         let remaining = remaining_model_bytes(&root.0, &FILES).unwrap();
         assert_eq!(remaining, FILES.iter().map(|file| file.bytes).sum::<u64>());
-        assert!(super::super::runtime_validation(&root.0).unwrap()["passed"].is_null());
+        assert!(
+            super::super::runtime_validation(&root.0, &super::super::catalog::OCR).unwrap()
+                ["passed"]
+                .is_null()
+        );
         let report = evaluate(resources(), &MODEL_REQUIREMENTS, remaining, true);
         assert!(report.ensure_allowed().is_ok());
         assert!(report.checks[1].detail.contains("应用预估内存预算"));
@@ -372,14 +386,20 @@ mod tests {
         low_memory.memory.as_mut().unwrap().1 = 2_598_455_214;
         let mut report = evaluate(low_memory, &MODEL_REQUIREMENTS, 1, true);
         report.validation = json!({"passed": true, "detail": "上次校验通过"});
-        assert!(report.ensure_allowed().is_err(), "旧成功不能覆盖当前资源不足");
+        assert!(
+            report.ensure_allowed().is_err(),
+            "旧成功不能覆盖当前资源不足"
+        );
         assert!(report.checks[1].detail.contains("2.42 GiB"));
         assert!(report.checks[1].detail.contains("请释放内存后刷新检测"));
         let mut low_memory = resources();
         low_memory.memory.as_mut().unwrap().1 = 2_598_455_214;
-        assert!(evaluate(low_memory, &MODEL_REQUIREMENTS, 1, false)
-            .ensure_runtime_prerequisites()
-            .is_ok(), "已下载模型允许通过实测确认预估预算以下的运行能力");
+        assert!(
+            evaluate(low_memory, &MODEL_REQUIREMENTS, 1, false)
+                .ensure_runtime_prerequisites()
+                .is_ok(),
+            "已下载模型允许通过实测确认预估预算以下的运行能力"
+        );
         let unconfigured = ModelRequirements {
             memory_requirement: None,
             ..MODEL_REQUIREMENTS

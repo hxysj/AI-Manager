@@ -33,6 +33,9 @@ globalThis.window = {
 }
 const stub = { render: () => vue.h("span") }
 const components = new Map()
+const modelListeners = new Set()
+let installedTranslationModels = []
+let translationModelsFailure = false
 
 async function loadComponent(filename) {
   const { descriptor, errors } = parse(readFileSync(filename, "utf8"), {
@@ -83,6 +86,25 @@ async function loadComponent(filename) {
           translationApi: {
             desktopStatus: async () => ({}),
             onDesktopStatus: () => () => {}
+          }
+        }
+      if (name === "@/api/modules/local-models")
+        return {
+          localModelsApi: {
+            installed: async (capability) => {
+              assert.equal(capability, "translation")
+              if (translationModelsFailure)
+                throw new Error("模拟翻译模型读取失败")
+              return { models: installedTranslationModels }
+            }
+          }
+        }
+      if (name === "@/api/request")
+        return {
+          subscribeReady: async (event, callback) => {
+            assert.equal(event, "local-models:changed")
+            modelListeners.add(callback)
+            return () => modelListeners.delete(callback)
           }
         }
       if (name === "@/features/tools/constant")
@@ -546,8 +568,121 @@ assert.deepEqual(translationChanges.at(-1), {
   targetId: "account:test",
   model: "test-model"
 })
+await tick()
+assert.equal(translation.state.targetGroups[0].items[0].disabled, true)
+const beforeLocalSelection = translationChanges.length
+translation.state.selectTarget("local")
+assert.equal(
+  translationChanges.length,
+  beforeLocalSelection,
+  "未下载翻译模型时不能选择本地来源"
+)
+const translationModelFixtures = [
+  {
+    id: "lmt-60-0.6b",
+    name: "LMT-60-0.6B",
+    languages: [
+      { code: "zh", label: "简体中文" },
+      { code: "en", label: "English" },
+      { code: "ja", label: "日本語" }
+    ]
+  },
+  {
+    id: "test-translation-secondary",
+    name: "翻译测试模型 B",
+    languages: [
+      { code: "en", label: "English" },
+      { code: "fr", label: "Français" }
+    ]
+  }
+]
+installedTranslationModels = translationModelFixtures
+await Promise.all([...modelListeners].map((callback) => callback()))
+translation.state.selectTarget("local")
+await tick()
+assert.equal(translationProps.modelValue.model, "lmt-60-0.6b")
+assert.equal(translationProps.modelValue.sourceLanguage, "auto")
+assert.equal(translation.state.local, true)
+assert.deepEqual(
+  translation.state.modelOptions.map((model) => model.name),
+  ["LMT-60-0.6B", "翻译测试模型 B"]
+)
+assert.equal(translation.state.invalidTarget, false)
+translation.state.update({ sourceLanguage: "ja" })
+assert.deepEqual(translationChanges.at(-1), { sourceLanguage: "ja" })
+assert.ok(
+  !translation.state.languages.includes("繁體中文"),
+  "不把繁简转换冒充模型独立支持的语言"
+)
+translation.state.selectModel("test-translation-secondary")
+await tick()
+assert.deepEqual(translationChanges.at(-1), {
+  targetId: "local",
+  model: "test-translation-secondary",
+  sourceLanguage: "auto",
+  targetLanguage: "English"
+})
+assert.deepEqual(
+  [...translation.state.languages],
+  ["English", "Français"],
+  "切换模型后使用该模型自己的语言范围"
+)
+translation.state.update({ sourceLanguage: "en", targetLanguage: "Français" })
+await tick()
+await Promise.all([...modelListeners].map((callback) => callback()))
+assert.equal(
+  translationProps.modelValue.model,
+  "test-translation-secondary",
+  "刷新不能改回第一个模型"
+)
+translation.state.selectTarget("local")
+await tick()
+assert.equal(translationProps.modelValue.model, "test-translation-secondary")
+assert.equal(translationProps.modelValue.sourceLanguage, "en")
+assert.equal(translationProps.modelValue.targetLanguage, "Français")
+installedTranslationModels = [translationModelFixtures[1]]
+await Promise.all([...modelListeners].map((callback) => callback()))
+assert.equal(
+  translation.state.invalidTarget,
+  false,
+  "删除其他模型不影响当前选择"
+)
 translation.unmount()
+assert.equal(modelListeners.size, 0, "翻译配置卸载时清理模型监听")
+const translationReopened = mount(TranslationConfig, translationProps)
+await tick()
+assert.equal(
+  translationProps.modelValue.model,
+  "test-translation-secondary",
+  "重开配置保留实际选中的模型 ID"
+)
+installedTranslationModels = [translationModelFixtures[0]]
+await Promise.all([...modelListeners].map((callback) => callback()))
+assert.equal(
+  translationReopened.state.invalidTarget,
+  true,
+  "选中模型删除后失效，即使仍有其他模型"
+)
+assert.equal(
+  translationProps.modelValue.model,
+  "test-translation-secondary",
+  "不能静默替换已删除的模型"
+)
+translationReopened.state.selectModel("lmt-60-0.6b")
+await tick()
+assert.equal(translationReopened.state.invalidTarget, false)
+translationModelsFailure = true
+await Promise.all([...modelListeners].map((callback) => callback()))
+assert.equal(
+  translationReopened.state.invalidTarget,
+  true,
+  "读取失败后不能沿用旧模型列表"
+)
+assert.equal(translationReopened.state.modelOptions.length, 0)
+assert.match(translationReopened.state.localModelsError, /翻译模型读取失败/)
+translationReopened.unmount()
+assert.equal(modelListeners.size, 0, "翻译配置卸载时清理模型监听")
 assert.deepEqual(runtimeErrors, [])
 console.log(
-  "设置自动保存：字段隔离、连续修改、失败恢复、日志开关与存储统计、轮询清理、目录、桌宠及翻译配置验证通过"
+  "设置自动保存：字段隔离、连续修改、失败恢复、日志、桌宠及本地翻译多模型切换、语言范围、删除和刷新验证通过"
 )

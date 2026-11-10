@@ -684,6 +684,7 @@ const draft = reactive({
       enabled: false,
       targetId: "",
       model: "",
+      sourceLanguage: "auto",
       targetLanguage: "简体中文",
       shortcut: "Ctrl+Alt+T",
       clipboardShortcut: "Ctrl+Alt+Shift+T"
@@ -869,6 +870,7 @@ function syncDraft() {
     enabled: false,
     targetId: "",
     model: "",
+    sourceLanguage: "auto",
     targetLanguage: "简体中文",
     shortcut: "Ctrl+Alt+T",
     clipboardShortcut: "Ctrl+Alt+Shift+T",

@@ -64,6 +64,7 @@ tokio-tungstenite = "0.26"
 tokio-util = { version = "0.7", features = ["io"] }
 url = "2"
 uuid = { version = "1", features = ["v4"] }
+whatlang = "0.18"
 zip = "2"
 
 [target.'cfg(windows)'.dependencies]
