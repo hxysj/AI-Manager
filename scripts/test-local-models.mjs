@@ -45,8 +45,24 @@ const reads = []
 let deferReads = false
 let failAction = ""
 let deferSubscription
+const compatibility = {
+  allowed: true,
+  validation: { passed: null, detail: "下载后可进行本机运行校验" },
+  checks: [
+    { label: "系统与架构", passed: true, detail: "Windows x64 · CPU 推理" },
+    { label: "可用内存", passed: true, detail: "满足本模型的应用预估内存预算" },
+    { label: "存储空间", passed: true, detail: "空间充足" }
+  ]
+}
 let data = {
-  models: [{ id: "minicpm-ocr-1.0", phase: "not-downloaded", usedBytes: 0 }],
+  models: [
+    {
+      id: "minicpm-ocr-1.0",
+      phase: "not-downloaded",
+      usedBytes: 0,
+      compatibility
+    }
+  ],
   usedBytes: 0,
   installedCount: 0,
   storagePath: "test/workspace/local-ai/models"
@@ -68,6 +84,8 @@ new Function(
       return {
         createMessage: { error: (message) => messages.push(message) }
       }
+    if (name === "@/utils/formatters")
+      return { formatDateTime: (value) => String(value) }
     if (name === "lucide-vue-next") return new Proxy({}, { get: () => stub })
     if (name === "@/components/BaseModal.vue")
       return { __esModule: true, default: stub }
@@ -92,6 +110,17 @@ new Function(
                   reads.push({ resolve, reject })
                 )
               : response(),
+          validate: async (id) => {
+            calls.push({ action: "validate", id })
+            const passed = failAction !== "validate"
+            const result = {
+              passed,
+              detail: passed ? "本机运行校验通过" : "内存分配失败",
+              checkedAt: 2
+            }
+            data.models[0].compatibility.validation = result
+            return result
+          },
           download: async (payload) => {
             calls.push({ action: "download", payload })
             if (failAction === "download") throw new Error("下载源连接失败")
@@ -108,7 +137,12 @@ new Function(
             if (failAction === "delete") throw new Error("文件被占用")
             data.usedBytes = 0
             data.installedCount = 0
-            data.models[0] = { id, phase: "not-downloaded", usedBytes: 0 }
+            data.models[0] = {
+              id,
+              phase: "not-downloaded",
+              usedBytes: 0,
+              compatibility
+            }
           }
         }
       }
@@ -117,6 +151,43 @@ new Function(
   module,
   module.exports
 )
+const viewModule = { exports: {} }
+new Function(
+  "require",
+  "module",
+  "exports",
+  transformSync(template.code, { format: "cjs" }).code
+)(require, viewModule, viewModule.exports)
+
+function downloadButtons(state, text = []) {
+  const buttons = []
+  function visit(node) {
+    if (Array.isArray(node)) return node.forEach(visit)
+    if (typeof node === "string") {
+      text.push(node)
+      return
+    }
+    if (!node || typeof node !== "object") return
+    if (
+      node.type === "button" &&
+      node.props?.class?.includes("primary-button")
+    ) {
+      buttons.push(node.props)
+    }
+    visit(node.children)
+    if (typeof node.children?.default === "function")
+      visit(node.children.default())
+  }
+  const app = renderer.createApp({
+    render() {
+      visit(viewModule.exports.render({}, [], {}, state))
+      return null
+    }
+  })
+  app.mount({})
+  app.unmount()
+  return buttons
+}
 
 // 用真实 Vue 生命周期验证异步竞争、动作和监听清理，文件传输另由 Rust 小文件测试覆盖。
 const renderer = vue.createRenderer({
@@ -160,6 +231,48 @@ assert.equal(first.state.snapshot.usedBytes, 0)
 assert.equal(first.state.formatBytes(1430124352), "1.33 GiB")
 assert.equal(first.state.formatBytes(0), "0 B")
 
+// 首次下载只依赖资源检查，不要求本地已有权重或成功运行记录。
+const initialText = []
+assert.equal(downloadButtons(first.state, initialText)[0].disabled, false)
+assert.ok(initialText.includes("下载前资源检查通过"))
+assert.equal(
+  first.state.snapshot.models[0].compatibility.validation.passed,
+  null
+)
+assert.equal(calls.filter((item) => item.action === "validate").length, 0)
+assert.ok(!initialText.includes("符合使用条件"))
+
+// 硬件条件不通过或检测结果缺失时，点击下载也不能发出请求。
+data.models[0].compatibility = {
+  allowed: false,
+  validation: { passed: true, detail: "上次运行校验通过" },
+  checks: [{ label: "可用内存", passed: false, detail: "当前可用内存不足" }]
+}
+await emitChanged()
+const callsBeforeBlocked = calls.length
+// 同一台电脑的模型列表允许出现不同检测结果，按钮必须逐个按对应模型判断。
+const perModelButtons = downloadButtons({
+  ...first.state,
+  snapshot: {
+    ...first.state.snapshot,
+    models: [
+      first.state.snapshot.models[0],
+      { ...first.state.snapshot.models[0], id: "other-model", compatibility }
+    ]
+  }
+})
+assert.deepEqual(
+  perModelButtons.map((button) => button.disabled),
+  [true, false]
+)
+await first.state.perform("download", first.state.snapshot.models[0])
+assert.equal(calls.length, callsBeforeBlocked)
+delete data.models[0].compatibility
+await emitChanged()
+await first.state.perform("download", first.state.snapshot.models[0])
+assert.equal(calls.length, callsBeforeBlocked)
+data.models[0].compatibility = compatibility
+await first.state.load(true)
 await first.state.perform("download", first.state.snapshot.models[0])
 assert.equal(first.state.snapshot.models[0].phase, "downloading")
 assert.deepEqual(calls.at(-1), {
@@ -173,11 +286,20 @@ assert.equal(
   "关闭列表不能取消后台下载"
 )
 data.usedBytes = 10
+data.models[0].compatibility = { ...compatibility, allowed: false }
 await first.state.openManager()
 assert.equal(first.state.snapshot.usedBytes, 10)
 await first.state.perform("cancel", first.state.snapshot.models[0])
 assert.equal(first.state.snapshot.models[0].phase, "paused")
+assert.equal(calls.at(-1).action, "cancel", "条件不足时仍能暂停下载")
 first.state.source = "huggingface"
+data.models[0].compatibility = { ...compatibility, allowed: false }
+await emitChanged()
+const callsBeforeResume = calls.length
+await first.state.perform("download", first.state.snapshot.models[0])
+assert.equal(calls.length, callsBeforeResume, "继续下载同样需要满足运行条件")
+data.models[0].compatibility = compatibility
+await first.state.load(true)
 await first.state.perform("download", first.state.snapshot.models[0])
 assert.equal(calls.at(-1).payload.source, "huggingface")
 
@@ -185,16 +307,39 @@ data.models[0].phase = "error"
 data.models[0].error = "下载源拒绝请求（HTTP 403），请重试或切换下载源"
 await emitChanged()
 await emitChanged()
-assert.equal(messages.filter(message => message.includes("HTTP 403")).length, 1, "后台失败使用消息提示，重复刷新不能反复弹出")
+assert.equal(
+  messages.filter((message) => message.includes("HTTP 403")).length,
+  1,
+  "后台失败使用消息提示，重复刷新不能反复弹出"
+)
 await first.state.perform("download", first.state.snapshot.models[0])
 data.models[0].phase = "error"
 await emitChanged()
-assert.equal(messages.filter(message => message.includes("HTTP 403")).length, 2, "重新下载后相同的失败也需要提示")
+assert.equal(
+  messages.filter((message) => message.includes("HTTP 403")).length,
+  2,
+  "重新下载后相同的失败也需要提示"
+)
 
 data.installedCount = 1
 data.models[0].phase = "downloaded"
 await emitChanged()
 assert.equal(first.state.snapshot.installedCount, 1)
+failAction = "validate"
+await first.state.perform("validate", first.state.snapshot.models[0])
+assert.equal(first.state.snapshot.models[0].compatibility.allowed, true)
+assert.equal(
+  first.state.snapshot.models[0].compatibility.validation.passed,
+  false
+)
+assert.match(messages.at(-1), /内存分配失败/, "运行校验失败必须展示实际原因")
+failAction = ""
+await first.state.perform("validate", first.state.snapshot.models[0])
+assert.equal(
+  first.state.snapshot.models[0].compatibility.validation.passed,
+  true
+)
+assert.equal(first.state.snapshot.models[0].compatibility.allowed, true)
 failAction = "delete"
 first.state.deleteId = data.models[0].id
 await first.state.perform("delete", first.state.snapshot.models[0])
@@ -211,6 +356,8 @@ assert.equal(
   "失败后保留确认入口供重试"
 )
 failAction = ""
+data.models[0].compatibility = { ...compatibility, allowed: false }
+await emitChanged()
 await first.state.perform("delete", first.state.snapshot.models[0])
 assert.equal(first.state.snapshot.usedBytes, 0)
 assert.equal(first.state.snapshot.installedCount, 0)
@@ -256,5 +403,5 @@ deferSubscription()
 await subscription
 assert.equal(listeners.size, 0, "卸载期间才注册成功的监听也必须清理")
 console.log(
-  "本地模型列表、下载源、暂停续传、删除失败及重试、统计刷新、异步竞争和监听清理验证通过"
+  "本地模型使用条件、下载拦截、下载源、暂停续传、删除失败及重试、统计刷新、异步竞争和监听清理验证通过"
 )

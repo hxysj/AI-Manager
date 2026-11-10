@@ -14,11 +14,66 @@ use tokio::{io::AsyncReadExt, process::Command};
 const RUNTIME: &str = "llama-b11901-bin-win-cpu-x64";
 const ARCHIVE_BYTES: usize = 24_228_082;
 const ARCHIVE_SHA256: &str = "039951745399d7c1228b1e882d6e41b24d393f1795e3a6e176162bfb8193500a";
+pub(super) const SUPPORTED: bool = cfg!(all(target_os = "windows", target_arch = "x86_64"));
+const MAX_EXTRACTED_BYTES: u64 = 256 * 1024 * 1024;
+const INFERENCE_ARGS: &[&str] = &[
+    "--ctx-size",
+    "8192",
+    "--parallel",
+    "1",
+    "--n-gpu-layers",
+    "0",
+    "--no-mmproj-offload",
+    "--jinja",
+    "--reasoning",
+    "off",
+    "--no-webui",
+];
 
-async fn executable(paths: &AppPaths) -> Result<PathBuf, ManagerError> {
-    if !cfg!(all(target_os = "windows", target_arch = "x86_64")) {
-        return Err(failure("本地模型推理暂不支持当前系统"));
+pub(super) fn validation_profile() -> String {
+    let mut digest = Sha256::new();
+    digest.update(ARCHIVE_SHA256);
+    digest.update(INFERENCE_ARGS.join("\0"));
+    digest.update(include_bytes!("ocr-probe.png"));
+    // 仅存指纹，不把计算机名或 CPU 标识写入模型记录。
+    digest.update(std::env::var("COMPUTERNAME").unwrap_or_default());
+    digest.update(std::env::var("PROCESSOR_IDENTIFIER").unwrap_or_default());
+    if let Ok((total, _)) = super::requirements::memory_status() {
+        digest.update(total.to_le_bytes());
     }
+    format!("{:x}", digest.finalize())
+}
+
+pub(super) async fn validate(paths: &AppPaths, directory: &Path) -> Result<(), ManagerError> {
+    use base64::Engine;
+    let image = base64::engine::general_purpose::STANDARD.encode(include_bytes!("ocr-probe.png"));
+    let result = tokio::time::timeout(
+        Duration::from_secs(180),
+        generate(
+            paths,
+            directory,
+            json!({
+                "prompt": "识别图片中的文字，只输出原文。",
+                "image": format!("data:image/png;base64,{image}"),
+            }),
+        ),
+    )
+    .await
+    .map_err(|_| failure("运行校验超时，请释放资源后重试"))??;
+    let text: String = result["text"]
+        .as_str()
+        .unwrap_or("")
+        .chars()
+        .filter(|value| value.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect();
+    if !text.contains("helloocr12345") {
+        return Err(failure("模型已加载，但 OCR 校验没有返回预期文字"));
+    }
+    Ok(())
+}
+
+fn runtime_directory(paths: &AppPaths) -> Result<PathBuf, ManagerError> {
     let mut directory = PathBuf::from(&paths.workspace_root);
     for part in ["local-ai", "runtime", RUNTIME] {
         directory.push(part);
@@ -31,8 +86,27 @@ async fn executable(paths: &AppPaths) -> Result<PathBuf, ManagerError> {
             Err(error) => return Err(error.into()),
         }
     }
+    Ok(directory)
+}
+
+pub(super) fn required_disk_bytes(paths: &AppPaths) -> Result<u64, ManagerError> {
+    let directory = runtime_directory(paths)?;
+    if super::file_size(&directory.join("installed.json"))? > 0
+        && super::file_size(&directory.join("llama-server.exe"))? > 0
+    {
+        return Ok(0);
+    }
+    // 压缩包在内存中校验，磁盘只需预留解压空间。
+    Ok(MAX_EXTRACTED_BYTES)
+}
+
+async fn executable(paths: &AppPaths) -> Result<PathBuf, ManagerError> {
+    if !SUPPORTED {
+        return Err(failure("本地模型推理暂不支持当前系统"));
+    }
+    let directory = runtime_directory(paths)?;
     let executable = directory.join("llama-server.exe");
-    if directory.join("installed.json").is_file() && super::file_size(&executable)? > 0 {
+    if required_disk_bytes(paths)? == 0 {
         return Ok(executable);
     }
     let client = reqwest::Client::builder().build().map_err(failure)?;
@@ -78,7 +152,7 @@ fn install(bytes: &[u8], directory: &Path) -> Result<(), ManagerError> {
             return Err(failure("推理引擎包包含链接"));
         }
         total += entry.size();
-        if total > 256 * 1024 * 1024 {
+        if total > MAX_EXTRACTED_BYTES {
             return Err(failure("推理引擎包解压大小无效"));
         }
         let target = directory.join(relative);
@@ -129,18 +203,8 @@ pub(super) async fn generate(
             MODEL_ID,
             "--api-key",
             &key,
-            "--ctx-size",
-            "8192",
-            "--parallel",
-            "1",
-            "--n-gpu-layers",
-            "0",
-            "--no-mmproj-offload",
-            "--jinja",
-            "--reasoning",
-            "off",
-            "--no-webui",
         ])
+        .args(INFERENCE_ARGS)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::piped())

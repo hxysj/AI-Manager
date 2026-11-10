@@ -6,6 +6,8 @@ export const localModelsApi = {
   // 调用方按能力读取已下载模型，推理时由后端按需加载。
   installed: (capability) => request("local-models:installed", { capability }),
   generate: (payload) => request("local-models:generate", payload),
+  // 运行校验复用实际推理流程，结束后立即释放模型。
+  validate: (id) => request("local-models:validate", { id }),
   download: (payload) => request("local-models:download", payload),
   cancel: (id) => request("local-models:cancel", { id }),
   delete: (id) => request("local-models:delete", { id })

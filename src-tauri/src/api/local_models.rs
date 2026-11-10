@@ -15,6 +15,7 @@ use tokio::{
     sync::{watch, Mutex},
 };
 
+mod requirements;
 mod runtime;
 
 const MODEL_ID: &str = "minicpm-ocr-1.0";
@@ -32,6 +33,20 @@ const FILES: [ModelFile; 2] = [
         sha256: "ceed82261b3b1380c3165f8b37c10117a50093be1362cbfeeb692fa036444682",
     },
 ];
+// 准入要求随模型声明，不作为其他模型的统一门槛。
+const MODEL_REQUIREMENTS: requirements::ModelRequirements = requirements::ModelRequirements {
+    os: "windows",
+    arch: "x86_64",
+    platform_name: "Windows x64 · CPU 推理",
+    // b11901、上下文 8192 的基础 OCR 实测私有内存峰值约 2.00 GiB，含约 0.84 GiB 视觉权重。
+    // 按完整权重加 1.25 GiB 运行缓冲、0.25 GiB 余量预检，不将预算冒充官方最低要求。
+    memory_requirement: Some(requirements::MemoryRequirement {
+        available_bytes: FILES[0].bytes + FILES[1].bytes + 1536 * 1024 * 1024,
+        estimated: true,
+        source: "CPU / 上下文 8192；完整权重 + 1.25 GiB 运行缓冲 + 0.25 GiB 余量",
+    }),
+    files: &FILES,
+};
 
 struct ModelFile {
     name: &'static str,
@@ -131,6 +146,42 @@ fn active(phase: &str) -> bool {
     matches!(phase, "downloading" | "verifying" | "cancelling")
 }
 
+fn runtime_validation(directory: &Path) -> Result<Value, ManagerError> {
+    // 校验凭据留在模型目录之外，删除权重后仍可判断本机是否曾运行过同一版本。
+    let path = directory.with_file_name(format!("{MODEL_ID}.runtime-check.json"));
+    let bytes = file_size(&path)?;
+    let record = if bytes > 0 && bytes <= 64 * 1024 {
+        serde_json::from_slice::<Value>(&std::fs::read(path)?).unwrap_or(Value::Null)
+    } else {
+        Value::Null
+    };
+    let valid = record["revision"] == REVISION
+        && record["profile"] == runtime::validation_profile()
+        && record["passed"].is_boolean()
+        // 运行能力绑定预期权重版本；重新下载与续传时，文件完整性仍由安装校验负责。
+        && FILES
+            .iter()
+            .all(|file| record["files"][file.name]["sha256"] == file.sha256);
+    if valid {
+        return Ok(json!({
+            "passed": record["passed"], "checkedAt": record["checkedAt"],
+            "detail": if record["passed"] == true {
+                "本机模型加载和基础 OCR 实测通过".to_string()
+            } else {
+                format!("本机运行校验未通过：{}", record["error"].as_str().unwrap_or("请重新校验"))
+            },
+        }));
+    }
+    Ok(json!({
+        "passed": null,
+        "detail": if bytes > 0 {
+            "旧校验结果已失效，请重新运行校验"
+        } else {
+            "尚未进行本机运行校验，可在下载完成后校验"
+        },
+    }))
+}
+
 impl LocalModelService {
     pub async fn dispatch(
         &self,
@@ -155,6 +206,11 @@ impl LocalModelService {
         }
         let directory = model_directory(paths)?;
         match action {
+            "validate" => {
+                let result = self.validate(paths).await;
+                let _ = app.emit("local-models:changed", ());
+                return result;
+            }
             "download" => {
                 let source = payload["source"].as_str().unwrap_or("modelscope");
                 let base = match source {
@@ -173,6 +229,8 @@ impl LocalModelService {
                 {
                     return Err(failure("该模型正在下载或校验"));
                 }
+                requirements::inspect(paths, &directory, &MODEL_REQUIREMENTS, true)?
+                    .ensure_allowed()?;
                 let (cancel, mut cancelled) = watch::channel(false);
                 tasks.insert(
                     directory.clone(),
@@ -187,9 +245,10 @@ impl LocalModelService {
                 drop(tasks);
                 let service = self.clone();
                 let app = app.clone();
+                let paths = paths.clone();
                 tauri::async_runtime::spawn(async move {
                     let result = {
-                        let transfer = service.download(&directory, &base, &app);
+                        let transfer = service.download(&paths, &directory, &base, &app);
                         let stop = cancelled.changed();
                         futures_util::pin_mut!(transfer, stop);
                         match futures_util::future::select(transfer, stop).await {
@@ -328,6 +387,7 @@ impl LocalModelService {
                     .map(|task| task.error.as_str()).unwrap_or(""),
                 "path": directory,
                 "files": files,
+                "compatibility": requirements::inspect(paths, &directory, &MODEL_REQUIREMENTS, true)?,
             }]
         }))
     }
@@ -379,7 +439,37 @@ impl LocalModelService {
         if snapshot["models"][0]["phase"] != "downloaded" {
             return Err(failure("所选本地模型尚未完整下载或已被删除"));
         }
+        // 调用时重新检查可用内存；已安装文件不再占用下载空间预算。
+        requirements::inspect(paths, &model_directory(paths)?, &MODEL_REQUIREMENTS, false)?
+            .ensure_runtime_prerequisites()?;
         runtime::generate(paths, &model_directory(paths)?, payload).await
+    }
+
+    async fn validate(&self, paths: &AppPaths) -> Result<Value, ManagerError> {
+        let _inference = self
+            .inference
+            .try_lock()
+            .map_err(|_| failure("模型正在使用，请稍后运行校验"))?;
+        let directory = model_directory(paths)?;
+        let snapshot = self.list(paths).await?;
+        if snapshot["models"][0]["phase"] != "downloaded" {
+            return Err(failure("模型尚未完整下载，无法执行本机运行校验"));
+        }
+        requirements::inspect(paths, &directory, &MODEL_REQUIREMENTS, false)?
+            .ensure_runtime_prerequisites()?;
+        let result = runtime::validate(paths, &directory).await;
+        let receipt: Value =
+            serde_json::from_slice(&std::fs::read(directory.join("installed.json"))?)?;
+        let record = json!({
+            "revision": REVISION, "profile": runtime::validation_profile(),
+            "files": receipt["files"], "passed": result.is_ok(),
+            "checkedAt": chrono::Utc::now().timestamp_millis(),
+            "error": result.err().map(|error| error.to_string()).unwrap_or_default(),
+        });
+        let path = directory.with_file_name(format!("{MODEL_ID}.runtime-check.json"));
+        file_size(&path)?;
+        tokio::fs::write(&path, serde_json::to_vec(&record)?).await?;
+        runtime_validation(&directory)
     }
 
     async fn progress(
@@ -402,11 +492,14 @@ impl LocalModelService {
 
     async fn download(
         &self,
+        paths: &AppPaths,
         directory: &Path,
         base: &str,
         app: &AppHandle,
     ) -> Result<(), ManagerError> {
         let _inference = self.inference.lock().await;
+        // 等待其他识别任务结束后，按该模型的要求重新检测，再创建目录和发起网络请求。
+        requirements::inspect(paths, directory, &MODEL_REQUIREMENTS, true)?.ensure_allowed()?;
         tokio::fs::create_dir_all(directory).await?;
         let client = reqwest::Client::builder().build().map_err(failure)?;
         let mut verified_bytes = 0;
@@ -585,10 +678,10 @@ mod tests {
     use super::*;
     use std::io::{Read, Write};
 
-    struct Fixture(PathBuf);
+    pub(super) struct Fixture(pub(super) PathBuf);
 
     impl Fixture {
-        fn new() -> Self {
+        pub(super) fn new() -> Self {
             let path =
                 std::env::temp_dir().join(format!("local-models-test-{}", uuid::Uuid::new_v4()));
             std::fs::create_dir_all(&path).unwrap();
@@ -655,6 +748,115 @@ mod tests {
                 .await
                 .unwrap_err();
             assert!(error.to_string().contains("尚未完整下载"));
+        });
+    }
+
+    #[test]
+    fn runtime_validation_is_bound_to_model_files_and_runtime_profile() {
+        let root = Fixture::new();
+        let paths = crate::core::paths::resolve_app_paths(&root.0);
+        let directory = model_directory(&paths).unwrap();
+        std::fs::create_dir_all(&directory).unwrap();
+        let mut receipt = json!({"revision": REVISION, "files": {}});
+        for file in &FILES {
+            let target = directory.join(file.name);
+            std::fs::File::create(&target)
+                .unwrap()
+                .set_len(file.bytes)
+                .unwrap();
+            receipt["files"][file.name] = json!({
+                "sha256": file.sha256, "modified": file_stamp(&target).unwrap()
+            });
+        }
+        std::fs::write(directory.join("installed.json"), receipt.to_string()).unwrap();
+        assert!(runtime_validation(&directory).unwrap()["passed"].is_null());
+        let mut record = json!({
+            "revision": REVISION, "profile": runtime::validation_profile(),
+            "files": receipt["files"], "passed": false, "error": "内存分配失败",
+            "checkedAt": 1,
+        });
+        let validation_path = directory.with_file_name(format!("{MODEL_ID}.runtime-check.json"));
+        let write_record = |record: &Value| {
+            std::fs::write(&validation_path, record.to_string()).unwrap()
+        };
+        write_record(&record);
+        assert_eq!(runtime_validation(&directory).unwrap()["passed"], false);
+        assert!(runtime_validation(&directory).unwrap()["detail"]
+            .as_str()
+            .unwrap()
+            .contains("内存分配失败"));
+        record["passed"] = json!(true);
+        write_record(&record);
+        assert_eq!(runtime_validation(&directory).unwrap()["passed"], true);
+        record["profile"] = json!("旧引擎配置");
+        write_record(&record);
+        assert!(runtime_validation(&directory).unwrap()["passed"].is_null());
+        record["profile"] = json!(runtime::validation_profile());
+        record["files"][FILES[0].name]["sha256"] = json!("其他模型权重");
+        write_record(&record);
+        assert!(runtime_validation(&directory).unwrap()["passed"].is_null());
+        record["files"] = receipt["files"].clone();
+        write_record(&record);
+        let service = LocalModelService::default();
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(directory.join(FILES[0].name))
+            .unwrap()
+            .set_len(123)
+            .unwrap();
+        let snapshot = tauri::async_runtime::block_on(service.list(&paths)).unwrap();
+        assert_eq!(snapshot["models"][0]["phase"], "paused");
+        assert_eq!(
+            snapshot["models"][0]["compatibility"]["validation"]["passed"], true,
+            "权重未完成时仍可展示同一版本的历史运行结果"
+        );
+        tauri::async_runtime::block_on(service.delete(&directory)).unwrap();
+        assert_eq!(
+            runtime_validation(&directory).unwrap()["passed"], true,
+            "删除权重后保留本机对同一版本的运行结论，允许重新下载"
+        );
+        std::fs::write(&validation_path, b"invalid-json").unwrap();
+        assert!(runtime_validation(&directory).unwrap()["passed"].is_null());
+    }
+
+    #[test]
+    fn validation_rejects_incomplete_models_and_concurrent_inference() {
+        let root = Fixture::new();
+        let paths = crate::core::paths::resolve_app_paths(&root.0);
+        let service = LocalModelService::default();
+        tauri::async_runtime::block_on(async {
+            assert!(service
+                .validate(&paths)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("尚未完整下载"));
+            let _inference = service.inference.lock().await;
+            assert!(service
+                .validate(&paths)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("正在使用"));
+        });
+    }
+
+    #[test]
+    #[ignore = "使用显式指定的本地权重验证并保存真实运行校验结果"]
+    fn downloaded_model_passes_runtime_validation() {
+        let paths = crate::core::paths::resolve_app_paths(&PathBuf::from(
+            std::env::var("AI_MANAGER_MODEL_TEST_DATA").expect("请指定模型数据目录"),
+        ));
+        let service = LocalModelService::default();
+        tauri::async_runtime::block_on(async {
+            let result = service.validate(&paths).await.unwrap();
+            println!("运行校验：{result}");
+            assert_eq!(result["passed"], true);
+            let snapshot = service.list(&paths).await.unwrap();
+            assert_eq!(
+                snapshot["models"][0]["compatibility"]["validation"]["passed"], true
+            );
+            assert_eq!(snapshot["models"][0]["phase"], "downloaded");
         });
     }
 

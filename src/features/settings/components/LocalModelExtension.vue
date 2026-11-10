@@ -75,6 +75,63 @@
               <span>完整下载 {{ formatBytes(model.downloadBytes) }}</span>
               <span>本地占用 {{ formatBytes(model.usedBytes) }}</span>
             </div>
+            <div
+              class="model-compatibility"
+              :class="{
+                'compatibility-blocked': !model.compatibility?.allowed
+              }"
+              aria-live="polite"
+            >
+              <div class="compatibility-title">
+                {{
+                  model.compatibility?.allowed
+                    ? "下载前资源检查通过"
+                    : model.compatibility
+                      ? "暂不满足下载条件"
+                      : "尚未完成本机检测，请刷新后重试"
+                }}
+              </div>
+              <div
+                v-for="check in model.compatibility?.checks"
+                :key="check.label"
+                class="compatibility-check"
+                :class="{
+                  'check-failed': check.passed === false,
+                  'check-unknown': check.passed == null
+                }"
+              >
+                <span class="check-label">{{ check.label }}</span>
+                <span class="check-detail">{{ check.detail }}</span>
+                <span class="check-result">{{
+                  check.passed == null
+                    ? "缺少资源配置"
+                    : check.passed
+                      ? "通过"
+                      : "未通过"
+                }}</span>
+              </div>
+              <div v-if="model.phase === 'downloaded'" class="model-validation">
+                <div
+                  class="validation-detail"
+                  :class="{
+                    'validation-failed':
+                      model.compatibility?.validation?.passed === false
+                  }"
+                >
+                  {{
+                    model.compatibility?.validation?.detail ||
+                    "下载后可进行本机运行校验"
+                  }}
+                </div>
+                <div
+                  v-if="model.compatibility?.validation?.checkedAt"
+                  class="validation-time"
+                >
+                  上次校验
+                  {{ formatDateTime(model.compatibility.validation.checkedAt) }}
+                </div>
+              </div>
+            </div>
             <div class="model-files">
               <div
                 v-for="file in model.files"
@@ -152,7 +209,12 @@
                 v-else-if="model.phase !== 'downloaded'"
                 class="model-button primary-button"
                 type="button"
-                :disabled="Boolean(pending)"
+                :disabled="Boolean(pending) || !model.compatibility?.allowed"
+                :title="
+                  model.compatibility?.allowed
+                    ? ''
+                    : '请先满足上方下载条件，再刷新检测'
+                "
                 @click="perform('download', model)"
               >
                 <Download :size="14" />{{
@@ -161,6 +223,17 @@
                     : model.usedBytes
                       ? "继续下载"
                       : "下载模型"
+                }}
+              </button>
+              <button
+                v-if="model.phase === 'downloaded'"
+                class="model-button"
+                type="button"
+                :disabled="Boolean(pending)"
+                @click="perform('validate', model)"
+              >
+                <FileCheck :size="14" />{{
+                  pending === "validate" ? "校验中…" : "运行校验"
                 }}
               </button>
               <button
@@ -224,6 +297,7 @@ import BaseModal from "@/components/BaseModal.vue"
 import { localModelsApi } from "@/api/modules/local-models"
 import { subscribeReady } from "@/api/request"
 import { createMessage } from "@/utils/message"
+import { formatDateTime } from "@/utils/formatters"
 
 const showManager = ref(false)
 const ready = ref(false)
@@ -328,6 +402,8 @@ function closeManager() {
 
 async function perform(action, model) {
   if (pending.value) return
+  // 检测未通过时保留暂停和删除操作，下载入口仍由后端重新校验。
+  if (action === "download" && !model.compatibility?.allowed) return
   pending.value = action
   error.value = ""
   try {
@@ -335,7 +411,10 @@ async function perform(action, model) {
       lastDownloadError = ""
       await localModelsApi.download({ id: model.id, source: source.value })
     } else {
-      await localModelsApi[action](model.id)
+      const result = await localModelsApi[action](model.id)
+      if (action === "validate" && result.passed === false) {
+        createMessage.error(result.detail)
+      }
     }
     deleteId.value = ""
   } catch (cause) {
@@ -538,6 +617,75 @@ onBeforeUnmount(() => {
               padding: 3px 7px;
               border: 1px solid var(--color-line);
               border-radius: 5px;
+            }
+          }
+
+          .model-compatibility {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            margin-top: 16px;
+            padding: 14px;
+            border: 1px solid var(--color-line);
+            border-radius: 8px;
+            background: var(--color-panel-soft);
+
+            .compatibility-title {
+              color: #047857;
+            }
+            .model-validation {
+              .validation-detail {
+                color: var(--color-text-muted);
+
+                &.validation-failed {
+                  color: var(--color-danger);
+                }
+              }
+              .validation-time {
+                color: var(--color-text-muted);
+                font-size: 12px;
+              }
+            }
+
+            &.compatibility-blocked {
+              .compatibility-title {
+                color: var(--color-danger);
+              }
+            }
+
+            .compatibility-check {
+              display: flex;
+              align-items: baseline;
+              gap: 12px;
+              color: var(--color-text-muted);
+              font-size: 12px;
+              line-height: 1.6;
+
+              .check-label {
+                width: 72px;
+                flex: none;
+              }
+              .check-detail {
+                min-width: 0;
+                flex: 1;
+                overflow-wrap: anywhere;
+              }
+              .check-result {
+                flex: none;
+                color: #047857;
+              }
+
+              &.check-failed {
+                .check-detail,
+                .check-result {
+                  color: var(--color-danger);
+                }
+              }
+              &.check-unknown {
+                .check-result {
+                  color: var(--color-text-muted);
+                }
+              }
             }
           }
 
