@@ -13,26 +13,23 @@
       </button>
     </div>
 
-    <BaseModal
-      v-if="showManager"
-      class="model-modal"
-      title="本地大模型"
-      description="选择需要的模型下载到本机，也可以清理模型文件释放空间。"
-      @close="closeManager"
-    >
-      <div class="model-manager">
-        <div class="manager-toolbar">
+    <BaseModal v-if="showManager" class="model-modal" @close="closeManager">
+      <template #header>
+        <div class="manager-heading">
+          <h2 class="manager-title">本地大模型</h2>
           <div class="storage-summary" aria-live="polite">
-            <HardDrive :size="18" />
+            <HardDrive :size="15" />
             <span
               >文件占用
               {{ ready ? formatBytes(snapshot.usedBytes) : "—" }}</span
             >
-            <span class="summary-muted"
+            <span
               >已下载 {{ snapshot.installedCount }} /
               {{ snapshot.models.length }} 个模型</span
             >
           </div>
+        </div>
+        <div class="manager-header-actions">
           <button
             class="model-button"
             type="button"
@@ -41,7 +38,17 @@
           >
             <RefreshCw :size="14" />{{ refreshing ? "刷新中…" : "刷新" }}
           </button>
+          <button
+            class="manager-close"
+            type="button"
+            aria-label="关闭模型列表"
+            @click="closeManager"
+          >
+            <X :size="16" />
+          </button>
         </div>
+      </template>
+      <div class="model-manager">
         <div v-if="!ready" class="manager-empty" role="status">
           {{
             error ? "模型列表读取失败，请点击刷新重试。" : "正在读取本地模型…"
@@ -53,142 +60,32 @@
             :key="model.id"
             class="model-card"
           >
-            <div class="model-heading">
-              <div class="model-heading-copy">
-                <h3 class="model-title">{{ model.name }}</h3>
-                <span class="model-publisher">{{ model.publisher }}</span>
-              </div>
-              <span
-                class="model-status"
-                :class="{
-                  'status-complete': model.phase === 'downloaded',
-                  'status-error': model.phase === 'error'
-                }"
+            <div class="model-row">
+              <button
+                class="model-toggle"
+                type="button"
+                :aria-expanded="Boolean(expandedModels[model.id])"
+                :aria-controls="`model-details-${model.id}`"
+                :title="`${expandedModels[model.id] ? '收起' : '展开'} ${model.name} 详情`"
+                @click="expandedModels[model.id] = !expandedModels[model.id]"
               >
-                {{ phaseLabels[model.phase] || model.phase }}
-              </span>
-            </div>
-            <p class="model-description">{{ model.description }}</p>
-            <div class="model-meta">
-              <span class="model-tag">{{ model.format }}</span>
-              <span class="model-tag">{{ model.license }}</span>
-              <span>完整下载 {{ formatBytes(model.downloadBytes) }}</span>
-              <span>本地占用 {{ formatBytes(model.usedBytes) }}</span>
-            </div>
-            <div
-              class="model-compatibility"
-              :class="{
-                'compatibility-blocked': !model.compatibility?.allowed
-              }"
-              aria-live="polite"
-            >
-              <div class="compatibility-title">
-                {{
-                  model.compatibility?.allowed
-                    ? "下载前资源检查通过"
-                    : model.compatibility
-                      ? "暂不满足下载条件"
-                      : "尚未完成本机检测，请刷新后重试"
-                }}
-              </div>
-              <div
-                v-for="check in model.compatibility?.checks"
-                :key="check.label"
-                class="compatibility-check"
-                :class="{
-                  'check-failed': check.passed === false,
-                  'check-unknown': check.passed == null
-                }"
-              >
-                <span class="check-label">{{ check.label }}</span>
-                <span class="check-detail">{{ check.detail }}</span>
-                <span class="check-result">{{
-                  check.passed == null
-                    ? "缺少资源配置"
-                    : check.passed
-                      ? "通过"
-                      : "未通过"
-                }}</span>
-              </div>
-              <div v-if="model.phase === 'downloaded'" class="model-validation">
-                <div
-                  class="validation-detail"
-                  :class="{
-                    'validation-failed':
-                      model.compatibility?.validation?.passed === false
-                  }"
-                >
-                  {{
-                    model.compatibility?.validation?.detail ||
-                    "下载后可进行本机运行校验"
-                  }}
-                </div>
-                <div
-                  v-if="model.compatibility?.validation?.checkedAt"
-                  class="validation-time"
-                >
-                  上次校验
-                  {{ formatDateTime(model.compatibility.validation.checkedAt) }}
-                </div>
-              </div>
-            </div>
-            <div class="model-files">
-              <div
-                v-for="file in model.files"
-                :key="file.name"
-                class="model-file"
-              >
-                <FileCheck
-                  v-if="file.verified"
-                  :size="15"
-                  class="file-verified"
+                <ChevronRight
+                  :size="16"
+                  class="model-chevron"
+                  :class="{ 'is-expanded': expandedModels[model.id] }"
                 />
-                <FileDown v-else :size="15" />
-                <span class="file-name">{{ file.name }}</span>
-                <span class="file-state">
-                  {{
-                    file.verified
-                      ? "已校验"
-                      : file.localBytes === file.bytes
-                        ? "待校验"
-                        : file.cachedBytes
-                          ? `已缓存 ${formatBytes(file.cachedBytes)}`
-                          : "未下载"
-                  }}
-                </span>
-                <span class="file-size">{{ formatBytes(file.bytes) }}</span>
-              </div>
-            </div>
-            <div
-              v-if="
-                isActive(model) ||
-                model.phase === 'paused' ||
-                model.phase === 'error'
-              "
-              class="download-progress"
-            >
-              <div class="progress-copy" aria-live="polite">
-                <span>{{
-                  model.phase === "verifying"
-                    ? `正在校验 ${model.currentFile}`
-                    : `${formatBytes(model.downloadedBytes)} / ${formatBytes(model.downloadBytes)}`
-                }}</span>
-                <span>{{ model.percent.toFixed(1) }}%</span>
-              </div>
-              <progress
-                class="progress-bar"
-                :value="model.percent"
-                max="100"
-                aria-label="模型下载进度"
-              ></progress>
-            </div>
-            <div class="model-actions">
+                <span class="model-name">{{ model.name }}</span>
+              </button>
+              <span class="model-size" title="完整下载大小">{{
+                formatBytes(model.downloadBytes)
+              }}</span>
               <label class="source-field">
                 <span>下载源</span>
                 <select
                   :value="sources[model.id] || model.sources[0]?.id"
                   @change="sources[model.id] = $event.target.value"
                   class="source-select"
+                  :aria-label="`${model.name} 下载源`"
                   :disabled="isActive(model) || Boolean(pending)"
                 >
                   <option
@@ -200,90 +97,232 @@
                   </option>
                 </select>
               </label>
-              <button
-                v-if="isActive(model)"
-                class="model-button"
-                type="button"
-                :disabled="Boolean(pending) || model.phase === 'cancelling'"
-                @click="perform('cancel', model)"
-              >
-                <Pause :size="14" />{{
-                  model.phase === "cancelling" ? "暂停中…" : "暂停下载"
-                }}
-              </button>
-              <button
-                v-else-if="model.phase !== 'downloaded'"
-                class="model-button primary-button"
-                type="button"
-                :disabled="Boolean(pending) || !model.compatibility?.allowed"
-                :title="
-                  model.compatibility?.allowed
-                    ? ''
-                    : '请先满足上方下载条件，再刷新检测'
-                "
-                @click="perform('download', model)"
-              >
-                <Download :size="14" />{{
-                  pending === "download" && pendingId === model.id
-                    ? "准备中…"
-                    : model.usedBytes
-                      ? "继续下载"
-                      : "下载模型"
-                }}
-              </button>
-              <button
-                v-if="model.phase === 'downloaded'"
-                class="model-button"
-                type="button"
-                :disabled="Boolean(pending)"
-                @click="perform('validate', model)"
-              >
-                <FileCheck :size="14" />{{
-                  pending === "validate" && pendingId === model.id
-                    ? "校验中…"
-                    : "运行校验"
-                }}
-              </button>
-              <button
-                v-if="model.usedBytes > 0"
-                class="model-button danger-button"
-                type="button"
-                :disabled="isActive(model) || Boolean(pending)"
-                @click="deleteId = model.id"
-              >
-                <Trash2 :size="14" />删除
-              </button>
+              <div class="model-row-action">
+                <button
+                  v-if="isActive(model)"
+                  class="model-button"
+                  type="button"
+                  :disabled="Boolean(pending) || model.phase === 'cancelling'"
+                  @click="perform('cancel', model)"
+                >
+                  <Pause :size="14" />{{
+                    model.phase === "cancelling" ? "暂停中…" : "暂停下载"
+                  }}
+                </button>
+                <button
+                  v-else-if="model.phase !== 'downloaded'"
+                  class="model-button primary-button"
+                  type="button"
+                  :disabled="Boolean(pending) || !model.compatibility?.allowed"
+                  :title="
+                    model.compatibility?.allowed
+                      ? ''
+                      : '请展开查看下载条件，再刷新检测'
+                  "
+                  @click="perform('download', model)"
+                >
+                  <Download :size="14" />{{
+                    pending === "download" && pendingId === model.id
+                      ? "准备中…"
+                      : model.usedBytes
+                        ? "继续下载"
+                        : "下载模型"
+                  }}
+                </button>
+                <span v-else class="model-status status-complete">已下载</span>
+              </div>
             </div>
             <div
-              v-if="deleteId === model.id"
-              class="delete-confirm"
-              role="alert"
+              v-if="expandedModels[model.id]"
+              :id="`model-details-${model.id}`"
+              class="model-details"
             >
-              <span
-                >删除 {{ model.name }} 的全部模型与缓存文件，释放
-                {{ formatBytes(model.usedBytes) }}？</span
+              <div class="model-heading">
+                <span class="model-publisher">{{ model.publisher }}</span>
+                <span
+                  class="model-status"
+                  :class="{
+                    'status-complete': model.phase === 'downloaded',
+                    'status-error': model.phase === 'error'
+                  }"
+                >
+                  {{ phaseLabels[model.phase] || model.phase }}
+                </span>
+              </div>
+              <p class="model-description">{{ model.description }}</p>
+              <div class="model-meta">
+                <span class="model-tag">{{ model.format }}</span>
+                <span class="model-tag">{{ model.license }}</span>
+                <span>完整下载 {{ formatBytes(model.downloadBytes) }}</span>
+                <span>本地占用 {{ formatBytes(model.usedBytes) }}</span>
+              </div>
+              <div
+                class="model-compatibility"
+                :class="{
+                  'compatibility-blocked': !model.compatibility?.allowed
+                }"
+                aria-live="polite"
               >
-              <div class="confirm-actions">
+                <div class="compatibility-title">
+                  {{
+                    model.compatibility?.allowed
+                      ? "下载前资源检查通过"
+                      : model.compatibility
+                        ? "暂不满足下载条件"
+                        : "尚未完成本机检测，请刷新后重试"
+                  }}
+                </div>
+                <div
+                  v-for="check in model.compatibility?.checks"
+                  :key="check.label"
+                  class="compatibility-check"
+                  :class="{
+                    'check-failed': check.passed === false,
+                    'check-unknown': check.passed == null
+                  }"
+                >
+                  <span class="check-label">{{ check.label }}</span>
+                  <span class="check-detail">{{ check.detail }}</span>
+                  <span class="check-result">{{
+                    check.passed == null
+                      ? "缺少资源配置"
+                      : check.passed
+                        ? "通过"
+                        : "未通过"
+                  }}</span>
+                </div>
+                <div
+                  v-if="model.phase === 'downloaded'"
+                  class="model-validation"
+                >
+                  <div
+                    class="validation-detail"
+                    :class="{
+                      'validation-failed':
+                        model.compatibility?.validation?.passed === false
+                    }"
+                  >
+                    {{
+                      model.compatibility?.validation?.detail ||
+                      "下载后可进行本机运行校验"
+                    }}
+                  </div>
+                  <div
+                    v-if="model.compatibility?.validation?.checkedAt"
+                    class="validation-time"
+                  >
+                    上次校验
+                    {{
+                      formatDateTime(model.compatibility.validation.checkedAt)
+                    }}
+                  </div>
+                </div>
+              </div>
+              <div class="model-files">
+                <div
+                  v-for="file in model.files"
+                  :key="file.name"
+                  class="model-file"
+                >
+                  <FileCheck
+                    v-if="file.verified"
+                    :size="15"
+                    class="file-verified"
+                  />
+                  <FileDown v-else :size="15" />
+                  <span class="file-name">{{ file.name }}</span>
+                  <span class="file-state">
+                    {{
+                      file.verified
+                        ? "已校验"
+                        : file.localBytes === file.bytes
+                          ? "待校验"
+                          : file.cachedBytes
+                            ? `已缓存 ${formatBytes(file.cachedBytes)}`
+                            : "未下载"
+                    }}
+                  </span>
+                  <span class="file-size">{{ formatBytes(file.bytes) }}</span>
+                </div>
+              </div>
+              <div
+                v-if="
+                  isActive(model) ||
+                  model.phase === 'paused' ||
+                  model.phase === 'error'
+                "
+                class="download-progress"
+              >
+                <div class="progress-copy" aria-live="polite">
+                  <span>{{
+                    model.phase === "verifying"
+                      ? `正在校验 ${model.currentFile}`
+                      : `${formatBytes(model.downloadedBytes)} / ${formatBytes(model.downloadBytes)}`
+                  }}</span>
+                  <span>{{ model.percent.toFixed(1) }}%</span>
+                </div>
+                <progress
+                  class="progress-bar"
+                  :value="model.percent"
+                  max="100"
+                  aria-label="模型下载进度"
+                ></progress>
+              </div>
+              <div class="model-actions">
                 <button
+                  v-if="model.phase === 'downloaded'"
                   class="model-button"
                   type="button"
                   :disabled="Boolean(pending)"
-                  @click="deleteId = ''"
+                  @click="perform('validate', model)"
                 >
-                  取消
-                </button>
-                <button
-                  class="model-button danger-button"
-                  type="button"
-                  :disabled="Boolean(pending) || isActive(model)"
-                  @click="perform('delete', model)"
-                >
-                  {{
-                    pending === "delete" && pendingId === model.id
-                      ? "删除中…"
-                      : "确认删除"
+                  <FileCheck :size="14" />{{
+                    pending === "validate" && pendingId === model.id
+                      ? "校验中…"
+                      : "运行校验"
                   }}
                 </button>
+                <button
+                  v-if="model.usedBytes > 0"
+                  class="model-button danger-button"
+                  type="button"
+                  :disabled="isActive(model) || Boolean(pending)"
+                  @click="deleteId = model.id"
+                >
+                  <Trash2 :size="14" />删除
+                </button>
+              </div>
+              <div
+                v-if="deleteId === model.id"
+                class="delete-confirm"
+                role="alert"
+              >
+                <span
+                  >删除 {{ model.name }} 的全部模型与缓存文件，释放
+                  {{ formatBytes(model.usedBytes) }}？</span
+                >
+                <div class="confirm-actions">
+                  <button
+                    class="model-button"
+                    type="button"
+                    :disabled="Boolean(pending)"
+                    @click="deleteId = ''"
+                  >
+                    取消
+                  </button>
+                  <button
+                    class="model-button danger-button"
+                    type="button"
+                    :disabled="Boolean(pending) || isActive(model)"
+                    @click="perform('delete', model)"
+                  >
+                    {{
+                      pending === "delete" && pendingId === model.id
+                        ? "删除中…"
+                        : "确认删除"
+                    }}
+                  </button>
+                </div>
               </div>
             </div>
           </article>
@@ -297,13 +336,15 @@
 import { onBeforeUnmount, ref } from "vue"
 import {
   BrainCircuit,
+  ChevronRight,
   Download,
   FileCheck,
   FileDown,
   HardDrive,
   Pause,
   RefreshCw,
-  Trash2
+  Trash2,
+  X
 } from "lucide-vue-next"
 import BaseModal from "@/components/BaseModal.vue"
 import { localModelsApi } from "@/api/modules/local-models"
@@ -317,6 +358,8 @@ const refreshing = ref(false)
 const pending = ref("")
 const error = ref("")
 const deleteId = ref("")
+// 展开状态按模型保存，后台进度刷新不打断正在查看的详情。
+const expandedModels = ref({})
 // 每个模型维护自己的下载源，避免将 OCR 官方仓库用于翻译权重。
 const sources = ref({})
 const pendingId = ref("")
@@ -411,6 +454,7 @@ async function openManager() {
 function closeManager() {
   showManager.value = false
   deleteId.value = ""
+  expandedModels.value = {}
   sequence++
 }
 
@@ -533,35 +577,66 @@ onBeforeUnmount(() => {
     }
     :deep(.base-modal__header) {
       flex-shrink: 0;
+      align-items: center;
+      gap: 12px;
+      padding: 10px 24px;
+      border-bottom: 1px solid var(--color-line);
+    }
+
+    .manager-heading {
+      display: flex;
+      min-width: 0;
+      flex: 1;
+      align-items: center;
+      gap: 16px;
+
+      .manager-title {
+        flex: none;
+        margin: 0;
+        font-size: var(--font-size-xl);
+      }
+
+      .storage-summary {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        color: var(--color-text-muted);
+        font-size: 12px;
+        white-space: nowrap;
+      }
+    }
+
+    .manager-header-actions {
+      display: flex;
+      flex: none;
+      align-items: center;
+      gap: 8px;
+
+      .manager-close {
+        display: flex;
+        width: 32px;
+        height: 32px;
+        align-items: center;
+        justify-content: center;
+        border: 1px solid var(--color-line);
+        border-radius: 8px;
+        background: var(--color-panel);
+        color: var(--color-text-muted);
+        cursor: pointer;
+
+        &:hover {
+          background: var(--color-panel-soft);
+          color: var(--color-text);
+        }
+      }
     }
 
     .model-manager {
       display: flex;
       min-height: 0;
       flex-direction: column;
-      gap: 16px;
+      padding-top: 12px;
       font-size: 13px;
-
-      .manager-toolbar {
-        display: flex;
-        flex: none;
-        align-items: center;
-        justify-content: space-between;
-        gap: 12px;
-        padding: 14px 0;
-        border-bottom: 1px solid var(--color-line);
-
-        .storage-summary {
-          display: flex;
-          flex-wrap: wrap;
-          align-items: center;
-          gap: 10px;
-
-          .summary-muted {
-            color: var(--color-text-muted);
-          }
-        }
-      }
 
       .manager-empty {
         padding: 32px 0;
@@ -572,235 +647,293 @@ onBeforeUnmount(() => {
       .model-list {
         min-height: 0;
         overflow-y: auto;
+        border: 1px solid var(--color-line);
+        border-radius: 8px;
 
         .model-card {
-          padding: 20px;
-          border: 1px solid var(--color-line);
-          border-radius: 12px;
           background: var(--color-panel);
 
-          .model-heading {
+          & + .model-card {
+            border-top: 1px solid var(--color-line);
+          }
+
+          .model-row {
             display: flex;
             align-items: center;
-            justify-content: space-between;
             gap: 12px;
+            padding: 12px 14px;
 
-            .model-heading-copy {
+            .model-toggle {
               display: flex;
-              flex-wrap: wrap;
-              align-items: baseline;
-              gap: 10px;
-
-              .model-title {
-                margin: 0;
-                font-size: 17px;
-              }
-              .model-publisher {
-                color: var(--color-text-muted);
-                font-size: 12px;
-              }
-            }
-
-            .model-status {
-              flex: none;
-              padding: 4px 9px;
-              border-radius: 6px;
-              background: var(--color-panel-soft);
-              color: var(--color-text-muted);
-
-              &.status-complete {
-                background: #ecfdf5;
-                color: #047857;
-              }
-              &.status-error {
-                color: var(--color-danger);
-              }
-            }
-          }
-
-          .model-description {
-            margin: 12px 0;
-            color: var(--color-text-muted);
-            line-height: 1.6;
-          }
-
-          .model-meta {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 10px 16px;
-            color: var(--color-text-muted);
-            font-size: 12px;
-
-            .model-tag {
-              padding: 3px 7px;
-              border: 1px solid var(--color-line);
-              border-radius: 5px;
-            }
-          }
-
-          .model-compatibility {
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            margin-top: 16px;
-            padding: 14px;
-            border: 1px solid var(--color-line);
-            border-radius: 8px;
-            background: var(--color-panel-soft);
-
-            .compatibility-title {
-              color: #047857;
-            }
-            .model-validation {
-              .validation-detail {
-                color: var(--color-text-muted);
-
-                &.validation-failed {
-                  color: var(--color-danger);
-                }
-              }
-              .validation-time {
-                color: var(--color-text-muted);
-                font-size: 12px;
-              }
-            }
-
-            &.compatibility-blocked {
-              .compatibility-title {
-                color: var(--color-danger);
-              }
-            }
-
-            .compatibility-check {
-              display: flex;
-              align-items: baseline;
-              gap: 12px;
-              color: var(--color-text-muted);
-              font-size: 12px;
-              line-height: 1.6;
-
-              .check-label {
-                width: 72px;
-                flex: none;
-              }
-              .check-detail {
-                min-width: 0;
-                flex: 1;
-                overflow-wrap: anywhere;
-              }
-              .check-result {
-                flex: none;
-                color: #047857;
-              }
-
-              &.check-failed {
-                .check-detail,
-                .check-result {
-                  color: var(--color-danger);
-                }
-              }
-              &.check-unknown {
-                .check-result {
-                  color: var(--color-text-muted);
-                }
-              }
-            }
-          }
-
-          .model-files {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            margin: 18px 0;
-            padding: 14px;
-            border-radius: 8px;
-            background: var(--color-panel-soft);
-
-            .model-file {
-              display: flex;
+              min-width: 0;
+              flex: 1;
               align-items: center;
               gap: 8px;
-              color: var(--color-text-muted);
-              font-size: 12px;
+              padding: 4px 0;
+              border: 0;
+              background: transparent;
+              color: var(--color-text);
+              font: inherit;
+              text-align: left;
+              cursor: pointer;
 
-              .file-verified {
-                color: #047857;
+              &:hover {
+                color: #2563eb;
               }
-              .file-name {
-                min-width: 0;
-                flex: 1;
-                overflow-wrap: anywhere;
-              }
-              .file-state {
+
+              .model-chevron {
                 flex: none;
+
+                &.is-expanded {
+                  transform: rotate(90deg);
+                }
               }
-              .file-size {
-                width: 85px;
-                flex: none;
-                text-align: right;
+              .model-name {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
               }
             }
-          }
 
-          .download-progress {
-            margin: 16px 0;
-
-            .progress-copy {
-              display: flex;
-              justify-content: space-between;
-              gap: 12px;
-              margin-bottom: 8px;
+            .model-size {
+              width: 80px;
+              flex: none;
               color: var(--color-text-muted);
-              overflow-wrap: anywhere;
+              font-variant-numeric: tabular-nums;
+              text-align: right;
+              white-space: nowrap;
             }
-
-            .progress-bar {
-              display: block;
-              width: 100%;
-              height: 7px;
-              accent-color: #2563eb;
-            }
-          }
-
-          .model-actions {
-            display: flex;
-            flex-wrap: wrap;
-            align-items: center;
-            gap: 10px;
 
             .source-field {
               display: flex;
-              flex: 1;
+              flex: none;
               align-items: center;
               gap: 8px;
               color: var(--color-text-muted);
 
               .source-select {
+                width: 180px;
                 padding: 7px 9px;
                 border: 1px solid var(--color-line);
                 border-radius: 7px;
                 background: var(--color-panel);
                 color: var(--color-text);
                 font: inherit;
+
+                &:disabled {
+                  opacity: 0.55;
+                  cursor: not-allowed;
+                }
               }
+            }
+
+            .model-row-action {
+              display: flex;
+              width: 100px;
+              flex: none;
+              justify-content: flex-end;
             }
           }
 
-          .delete-confirm {
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-            margin-top: 16px;
-            padding-top: 16px;
-            border-top: 1px solid var(--color-line);
-            color: var(--color-danger);
-            line-height: 1.6;
+          .model-status {
+            flex: none;
+            padding: 4px 9px;
+            border-radius: 6px;
+            background: var(--color-panel-soft);
+            color: var(--color-text-muted);
 
-            .confirm-actions {
+            &.status-complete {
+              background: #ecfdf5;
+              color: #047857;
+            }
+            &.status-error {
+              color: var(--color-danger);
+            }
+          }
+
+          .model-details {
+            padding: 14px;
+            border-top: 1px solid var(--color-line);
+
+            .model-heading {
               display: flex;
-              justify-content: flex-end;
-              gap: 8px;
+              align-items: center;
+              justify-content: space-between;
+              gap: 12px;
+
+              .model-publisher {
+                color: var(--color-text-muted);
+                font-size: 12px;
+              }
+            }
+
+            .model-description {
+              margin: 12px 0;
+              color: var(--color-text-muted);
+              line-height: 1.6;
+            }
+
+            .model-meta {
+              display: flex;
+              flex-wrap: wrap;
+              align-items: center;
+              gap: 10px 16px;
+              color: var(--color-text-muted);
+              font-size: 12px;
+
+              .model-tag {
+                padding: 3px 7px;
+                border: 1px solid var(--color-line);
+                border-radius: 5px;
+              }
+            }
+
+            .model-compatibility {
+              display: flex;
+              flex-direction: column;
+              gap: 10px;
+              margin-top: 16px;
+              padding: 14px;
+              border: 1px solid var(--color-line);
+              border-radius: 8px;
+              background: var(--color-panel-soft);
+
+              .compatibility-title {
+                color: #047857;
+              }
+              .model-validation {
+                .validation-detail {
+                  color: var(--color-text-muted);
+
+                  &.validation-failed {
+                    color: var(--color-danger);
+                  }
+                }
+                .validation-time {
+                  color: var(--color-text-muted);
+                  font-size: 12px;
+                }
+              }
+
+              &.compatibility-blocked {
+                .compatibility-title {
+                  color: var(--color-danger);
+                }
+              }
+
+              .compatibility-check {
+                display: flex;
+                align-items: baseline;
+                gap: 12px;
+                color: var(--color-text-muted);
+                font-size: 12px;
+                line-height: 1.6;
+
+                .check-label {
+                  width: 72px;
+                  flex: none;
+                }
+                .check-detail {
+                  min-width: 0;
+                  flex: 1;
+                  overflow-wrap: anywhere;
+                }
+                .check-result {
+                  flex: none;
+                  color: #047857;
+                }
+
+                &.check-failed {
+                  .check-detail,
+                  .check-result {
+                    color: var(--color-danger);
+                  }
+                }
+                &.check-unknown {
+                  .check-result {
+                    color: var(--color-text-muted);
+                  }
+                }
+              }
+            }
+
+            .model-files {
+              display: flex;
+              flex-direction: column;
+              gap: 12px;
+              margin: 18px 0;
+              padding: 14px;
+              border-radius: 8px;
+              background: var(--color-panel-soft);
+
+              .model-file {
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                color: var(--color-text-muted);
+                font-size: 12px;
+
+                .file-verified {
+                  color: #047857;
+                }
+                .file-name {
+                  min-width: 0;
+                  flex: 1;
+                  overflow-wrap: anywhere;
+                }
+                .file-state {
+                  flex: none;
+                }
+                .file-size {
+                  width: 85px;
+                  flex: none;
+                  text-align: right;
+                }
+              }
+            }
+
+            .download-progress {
+              margin: 16px 0;
+
+              .progress-copy {
+                display: flex;
+                justify-content: space-between;
+                gap: 12px;
+                margin-bottom: 8px;
+                color: var(--color-text-muted);
+                overflow-wrap: anywhere;
+              }
+
+              .progress-bar {
+                display: block;
+                width: 100%;
+                height: 7px;
+                accent-color: #2563eb;
+              }
+            }
+
+            .model-actions {
+              display: flex;
+              flex-wrap: wrap;
+              align-items: center;
+              gap: 10px;
+            }
+
+            .delete-confirm {
+              display: flex;
+              flex-direction: column;
+              gap: 12px;
+              margin-top: 16px;
+              padding-top: 16px;
+              border-top: 1px solid var(--color-line);
+              color: var(--color-danger);
+              line-height: 1.6;
+
+              .confirm-actions {
+                display: flex;
+                justify-content: flex-end;
+                gap: 8px;
+              }
             }
           }
         }

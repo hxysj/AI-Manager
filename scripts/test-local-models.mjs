@@ -59,6 +59,13 @@ let data = {
   models: [
     {
       id: "minicpm-ocr-1.0",
+      name: "MiniCPM-OCR 1.0",
+      publisher: "OpenBMB / 面壁智能",
+      description: "中英文文档识别，支持文字、表格、公式和图表。",
+      downloadBytes: 1430124352,
+      downloadedBytes: 0,
+      percent: 0,
+      files: [{ name: "ocr-model.gguf", bytes: 1430124352, localBytes: 0 }],
       sources,
       capabilities: ["ocr"],
       phase: "not-downloaded",
@@ -164,7 +171,7 @@ new Function(
   transformSync(template.code, { format: "cjs" }).code
 )(require, viewModule, viewModule.exports)
 
-function downloadButtons(state, text = []) {
+function downloadButtons(state, text = [], elements = []) {
   const buttons = []
   function visit(node) {
     if (Array.isArray(node)) return node.forEach(visit)
@@ -173,6 +180,7 @@ function downloadButtons(state, text = []) {
       return
     }
     if (!node || typeof node !== "object") return
+    if (node.type) elements.push(node)
     if (
       node.type === "button" &&
       node.props?.class?.includes("primary-button")
@@ -182,6 +190,8 @@ function downloadButtons(state, text = []) {
     visit(node.children)
     if (typeof node.children?.default === "function")
       visit(node.children.default())
+    if (typeof node.children?.header === "function")
+      visit(node.children.header())
   }
   const app = renderer.createApp({
     render() {
@@ -238,8 +248,36 @@ assert.equal(first.state.formatBytes(0), "0 B")
 
 // 首次下载只依赖资源检查，不要求本地已有权重或成功运行记录。
 const initialText = []
-assert.equal(downloadButtons(first.state, initialText)[0].disabled, false)
-assert.ok(initialText.includes("下载前资源检查通过"))
+const initialElements = []
+assert.equal(downloadButtons(first.state, initialText, initialElements)[0].disabled, false)
+assert.ok(!initialText.includes("下载前资源检查通过"), "默认只显示模型摘要，检测详情收起")
+assert.ok(initialText.includes("MiniCPM-OCR 1.0"))
+assert.ok(initialText.includes("1.33 GiB"))
+assert.ok(!initialElements.some(node => node.props?.class === "model-details"))
+assert.ok(!initialElements.some(node => node.props?.class === "manager-toolbar"), "统计不再单独占用工具栏")
+const heading = initialElements.find(node => node.props?.class === "manager-heading")
+assert.deepEqual(heading.children.map(node => node.props?.class), ["manager-title", "storage-summary"])
+const headerActions = initialElements.find(node => node.props?.class === "manager-header-actions")
+assert.deepEqual(headerActions.children.map(node => node.props?.class), ["model-button", "manager-close"])
+const toggle = initialElements.find(node => node.props?.class === "model-toggle")
+assert.equal(toggle.props["aria-expanded"], false)
+toggle.props.onClick()
+const expandedText = []
+const expandedElements = []
+downloadButtons(first.state, expandedText, expandedElements)
+assert.ok(expandedText.includes("下载前资源检查通过"))
+assert.ok(expandedText.includes("ocr-model.gguf"))
+assert.equal(expandedElements.find(node => node.props?.class === "model-toggle").props["aria-expanded"], true)
+const sourceSelect = expandedElements.find(node => node.type === "select")
+sourceSelect.props.onChange({ target: { value: "huggingface" } })
+assert.equal(first.state.sources["minicpm-ocr-1.0"], "huggingface")
+assert.equal(first.state.expandedModels["minicpm-ocr-1.0"], true, "选择下载源不能收起详情")
+delete first.state.sources["minicpm-ocr-1.0"]
+await emitChanged()
+assert.equal(first.state.expandedModels["minicpm-ocr-1.0"], true, "进度刷新应保留展开状态")
+toggle.props.onClick()
+assert.equal(first.state.expandedModels["minicpm-ocr-1.0"], false)
+assert.equal(downloadButtons(first.state)[0].disabled, false, "收起后仍能下载")
 assert.equal(
   first.state.snapshot.models[0].compatibility.validation.passed,
   null
@@ -285,6 +323,7 @@ assert.deepEqual(calls.at(-1), {
   payload: { id: "minicpm-ocr-1.0", source: "modelscope" }
 })
 first.state.closeManager()
+assert.deepEqual(first.state.expandedModels, {}, "关闭后再次打开默认显示收起的列表")
 assert.equal(
   calls.filter((item) => item.action === "cancel").length,
   0,
@@ -376,6 +415,17 @@ data.models.push({
 })
 await emitChanged()
 assert.equal(first.state.snapshot.models.length, 2)
+const modelElements = []
+downloadButtons(first.state, [], modelElements)
+const modelToggles = modelElements.filter(node => node.props?.class === "model-toggle")
+modelToggles[1].props.onClick()
+assert.equal(first.state.expandedModels["lmt-60-0.6b"], true)
+assert.equal(Boolean(first.state.expandedModels["minicpm-ocr-1.0"]), false, "展开一个模型不影响另一个")
+modelToggles[0].props.onClick()
+assert.equal(first.state.expandedModels["minicpm-ocr-1.0"], true)
+modelToggles[1].props.onClick()
+assert.equal(first.state.expandedModels["lmt-60-0.6b"], false)
+assert.equal(first.state.expandedModels["minicpm-ocr-1.0"], true)
 await first.state.perform("download", first.state.snapshot.models[1])
 assert.deepEqual(calls.at(-1).payload, { id: "lmt-60-0.6b", source: "hf-mirror" })
 assert.equal(data.models[0].phase, "not-downloaded")
