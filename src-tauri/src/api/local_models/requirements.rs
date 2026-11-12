@@ -28,6 +28,7 @@ pub(super) struct Check {
     label: &'static str,
     passed: Option<bool>,
     detail: String,
+    advisory: bool,
 }
 
 #[derive(Serialize)]
@@ -43,10 +44,10 @@ impl Compatibility {
             return Ok(());
         }
         Err(failure(format!(
-            "本地模型使用条件未满足：{}",
+            "本地模型下载条件未满足：{}",
             self.checks
                 .iter()
-                .filter(|check| check.passed != Some(true))
+                .filter(|check| !check.advisory && check.passed != Some(true))
                 .map(|check| check.detail.as_str())
                 .collect::<Vec<_>>()
                 .join("；")
@@ -89,7 +90,7 @@ fn evaluate(
     let memory = match (resources.memory, &requirements.memory_requirement) {
         (Ok((total, available)), Some(minimum)) => Check {
             label: "可用内存",
-            // 预估预算只控制下载准入；已下载模型保留实际校验入口，硬性要求仍需满足。
+            // 下载时内存仅作运行参考；实际调用仍检查已核实的硬性要求。
             passed: Some(
                 available >= minimum.available_bytes || (!for_download && minimum.estimated),
             ),
@@ -106,28 +107,31 @@ fn evaluate(
                 minimum.source,
                 if available < minimum.available_bytes {
                     if total < minimum.available_bytes {
-                        "；设备总内存不足预算"
+                        "；设备总内存低于运行参考值"
                     } else {
-                        "；当前可用内存不足，请释放内存后刷新检测"
+                        "；当前可用内存低于运行参考值，运行前可尝试释放内存"
                     }
                 } else {
                     ""
                 }
             ),
+            advisory: for_download,
         },
         (Ok((total, available)), None) => Check {
             label: "可用内存",
             passed: None,
             detail: format!(
-                "当前可用 {}（总计 {}）；此模型尚未配置下载前内存预算",
+                "当前可用 {}（总计 {}）；此模型尚未配置运行内存参考值",
                 gib(available),
                 gib(total)
             ),
+            advisory: for_download,
         },
         (Err(error), minimum) => Check {
             label: "可用内存",
             passed: minimum.as_ref().map(|_| false),
             detail: format!("无法检测物理内存：{error}；运行能力尚未确认"),
+            advisory: for_download,
         },
     };
     let disk = match resources.disk {
@@ -139,11 +143,13 @@ fn evaluate(
                 gib(required_disk),
                 gib(available)
             ),
+            advisory: false,
         },
         Err(error) => Check {
             label: "存储空间",
             passed: Some(false),
             detail: format!("无法检测模型存储盘空间：{error}"),
+            advisory: false,
         },
     };
     let checks = vec![
@@ -158,13 +164,17 @@ fn evaluate(
                     resources.os, resources.arch, requirements.platform_name
                 )
             },
+            advisory: false,
         },
         memory,
         disk,
     ];
     Compatibility {
-        // 下载准入只依赖模型资源条件，不依赖必须先下载才能获得的运行记录。
-        allowed: checks.iter().all(|check| check.passed == Some(true)),
+        // 系统与磁盘决定下载准入，当前内存和运行校验记录不阻止下载或续传。
+        allowed: checks
+            .iter()
+            .filter(|check| !check.advisory)
+            .all(|check| check.passed == Some(true)),
         checks,
         validation: json!({}),
     }
@@ -305,7 +315,10 @@ mod tests {
         assert!(evaluate(modest, &super::super::catalog::LMT.requirements, 0, true).allowed);
         let mut modest = resources();
         modest.memory.as_mut().unwrap().1 = 2300 * 1024 * 1024;
-        assert!(!evaluate(modest, &MODEL_REQUIREMENTS, 0, true).allowed);
+        let report = evaluate(modest, &MODEL_REQUIREMENTS, 0, true);
+        assert!(report.allowed);
+        assert_eq!(report.checks[1].passed, Some(false));
+        assert!(report.checks[1].advisory);
         let demanding = ModelRequirements {
             memory_requirement: Some(MemoryRequirement {
                 available_bytes: 4 * 1024 * 1024 * 1024,
@@ -316,19 +329,15 @@ mod tests {
         };
         assert!(evaluate(resources(), &MODEL_REQUIREMENTS, 0, true).allowed);
         let report = evaluate(resources(), &demanding, 0, true);
-        assert!(!report.allowed);
+        assert!(report.allowed);
         assert_eq!(report.checks[1].passed, Some(false));
-        assert!(report
-            .ensure_allowed()
-            .unwrap_err()
-            .to_string()
-            .contains("测试模型的已核实运行条件"));
+        assert!(report.ensure_allowed().is_ok());
         let mut enough_memory = resources();
         enough_memory.memory.as_mut().unwrap().1 = 4 * 1024 * 1024 * 1024;
         assert!(evaluate(enough_memory, &demanding, 0, true).allowed);
         let mut below_minimum = resources();
         below_minimum.memory.as_mut().unwrap().1 = 4 * 1024 * 1024 * 1024 - 1;
-        assert!(!evaluate(below_minimum, &demanding, 0, true).allowed);
+        assert!(evaluate(below_minimum, &demanding, 0, true).allowed);
         let mut below_minimum = resources();
         below_minimum.memory.as_mut().unwrap().1 = 4 * 1024 * 1024 * 1024 - 1;
         assert!(evaluate(below_minimum, &demanding, 0, false)
@@ -336,7 +345,7 @@ mod tests {
             .is_err());
         let mut unknown_memory = resources();
         unknown_memory.memory = Err("检测失败".into());
-        assert!(!evaluate(unknown_memory, &demanding, 0, true).allowed);
+        assert!(evaluate(unknown_memory, &demanding, 0, true).allowed);
         let other_platform = ModelRequirements {
             os: "linux",
             platform_name: "Linux x64",
@@ -346,7 +355,7 @@ mod tests {
     }
 
     #[test]
-    fn unknown_resources_block_download_and_recovery_is_allowed() {
+    fn unknown_disk_blocks_download_without_including_memory_advice() {
         let mut unknown = resources();
         unknown.memory = Err("检测失败".into());
         unknown.disk = Err("磁盘不可访问".into());
@@ -354,7 +363,8 @@ mod tests {
             .ensure_allowed()
             .unwrap_err()
             .to_string();
-        assert!(message.contains("无法检测物理内存"));
+        assert!(!message.contains("无法检测物理内存"));
+        assert!(message.contains("下载条件未满足"));
         assert!(message.contains("无法检测模型存储盘空间"));
         assert!(evaluate(resources(), &MODEL_REQUIREMENTS, 1, false)
             .ensure_runtime_prerequisites()
@@ -362,7 +372,7 @@ mod tests {
     }
 
     #[test]
-    fn first_download_uses_catalog_budget_without_weights_or_validation() {
+    fn first_download_shows_memory_budget_without_requiring_weights_or_validation() {
         let root = super::super::tests::Fixture::new();
         let remaining = remaining_model_bytes(&root.0, &FILES).unwrap();
         assert_eq!(remaining, FILES.iter().map(|file| file.bytes).sum::<u64>());
@@ -378,7 +388,7 @@ mod tests {
     }
 
     #[test]
-    fn old_validation_does_not_replace_current_resource_checks() {
+    fn memory_advice_and_old_validation_do_not_block_download() {
         let mut report = evaluate(resources(), &MODEL_REQUIREMENTS, 1, true);
         report.validation = json!({"passed": false, "detail": "上次识别失败"});
         assert!(report.ensure_allowed().is_ok(), "旧失败不构成首次下载条件");
@@ -387,11 +397,12 @@ mod tests {
         let mut report = evaluate(low_memory, &MODEL_REQUIREMENTS, 1, true);
         report.validation = json!({"passed": true, "detail": "上次校验通过"});
         assert!(
-            report.ensure_allowed().is_err(),
-            "旧成功不能覆盖当前资源不足"
+            report.ensure_allowed().is_ok(),
+            "下载不受当前空闲内存或旧运行记录影响"
         );
         assert!(report.checks[1].detail.contains("2.42 GiB"));
-        assert!(report.checks[1].detail.contains("请释放内存后刷新检测"));
+        assert_eq!(report.checks[1].passed, Some(false));
+        assert!(report.checks[1].detail.contains("运行前可尝试释放内存"));
         let mut low_memory = resources();
         low_memory.memory.as_mut().unwrap().1 = 2_598_455_214;
         assert!(
@@ -405,14 +416,19 @@ mod tests {
             ..MODEL_REQUIREMENTS
         };
         let report = evaluate(resources(), &unconfigured, 1, true);
-        assert!(!report.allowed);
-        assert!(report.checks[1].detail.contains("尚未配置下载前内存预算"));
+        assert!(report.allowed);
+        assert!(report.checks[1].detail.contains("尚未配置运行内存参考值"));
         let mut unknown_memory = resources();
         unknown_memory.memory = Err("检测失败".into());
         let report = evaluate(unknown_memory, &MODEL_REQUIREMENTS, 1, true);
-        assert!(!report.allowed);
+        assert!(report.allowed);
         assert_eq!(report.checks[1].passed, Some(false));
         assert!(report.checks[1].detail.contains("无法检测物理内存"));
+        let mut low_total_memory = resources();
+        low_total_memory.memory = Ok((1024 * 1024 * 1024, 512 * 1024 * 1024));
+        let report = evaluate(low_total_memory, &MODEL_REQUIREMENTS, 1, true);
+        assert!(report.ensure_allowed().is_ok());
+        assert!(report.checks[1].detail.contains("设备总内存低于运行参考值"));
     }
 
     #[test]

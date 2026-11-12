@@ -32,7 +32,7 @@ pub(super) const OCR: ModelDefinition = ModelDefinition {
         arch: "x86_64",
         platform_name: "Windows x64 · CPU 推理",
         // b11901、上下文 8192 的基础 OCR 实测私有内存峰值约 2.00 GiB，含约 0.84 GiB 视觉权重。
-        // 按完整权重加 1.25 GiB 运行缓冲、0.25 GiB 余量预检，不将预算冒充官方最低要求。
+        // 按完整权重加 1.25 GiB 运行缓冲、0.25 GiB 余量提示，不限制下载。
         memory_requirement: Some(MemoryRequirement {
             available_bytes: 529_106_816 + 901_017_536 + 1536 * 1024 * 1024,
             estimated: true,
@@ -81,7 +81,7 @@ pub(super) const LMT: ModelDefinition = ModelDefinition {
         arch: "x86_64",
         platform_name: "Windows x64 · CPU 推理",
         // Qwen3 的 28 层、8 个 KV 头、head_dim 128，8192 上下文的 F16 KV 约 896 MiB。
-        // 另留 512 MiB 计算缓冲和 256 MiB 余量；这是应用下载预算，不是官方最低要求。
+        // 另留 512 MiB 计算缓冲和 256 MiB 余量；仅作运行参考，不限制下载。
         memory_requirement: Some(MemoryRequirement {
             available_bytes: 484_220_000 + (896 + 512 + 256) * 1024 * 1024,
             estimated: true,

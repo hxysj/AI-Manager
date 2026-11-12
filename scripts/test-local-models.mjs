@@ -50,9 +50,9 @@ const compatibility = {
   allowed: true,
   validation: { passed: null, detail: "下载后可进行本机运行校验" },
   checks: [
-    { label: "系统与架构", passed: true, detail: "Windows x64 · CPU 推理" },
-    { label: "可用内存", passed: true, detail: "满足本模型的应用预估内存预算" },
-    { label: "存储空间", passed: true, detail: "空间充足" }
+    { label: "系统与架构", passed: true, detail: "Windows x64 · CPU 推理", advisory: false },
+    { label: "可用内存", passed: true, detail: "满足本模型的应用预估内存预算", advisory: true },
+    { label: "存储空间", passed: true, detail: "空间充足", advisory: false }
   ]
 }
 let data = {
@@ -250,7 +250,7 @@ assert.equal(first.state.formatBytes(0), "0 B")
 const initialText = []
 const initialElements = []
 assert.equal(downloadButtons(first.state, initialText, initialElements)[0].disabled, false)
-assert.ok(!initialText.includes("下载前资源检查通过"), "默认只显示模型摘要，检测详情收起")
+assert.ok(!initialText.includes("下载条件已满足，内存仅供运行参考"), "默认只显示模型摘要，检测详情收起")
 assert.ok(initialText.includes("MiniCPM-OCR 1.0"))
 assert.ok(initialText.includes("1.33 GiB"))
 assert.ok(!initialElements.some(node => node.props?.class === "model-details"))
@@ -265,7 +265,7 @@ toggle.props.onClick()
 const expandedText = []
 const expandedElements = []
 downloadButtons(first.state, expandedText, expandedElements)
-assert.ok(expandedText.includes("下载前资源检查通过"))
+assert.ok(expandedText.includes("下载条件已满足，内存仅供运行参考"))
 assert.ok(expandedText.includes("ocr-model.gguf"))
 assert.equal(expandedElements.find(node => node.props?.class === "model-toggle").props["aria-expanded"], true)
 const sourceSelect = expandedElements.find(node => node.type === "select")
@@ -285,11 +285,44 @@ assert.equal(
 assert.equal(calls.filter((item) => item.action === "validate").length, 0)
 assert.ok(!initialText.includes("符合使用条件"))
 
-// 硬件条件不通过或检测结果缺失时，点击下载也不能发出请求。
+// 内存不足、无法检测或缺少预算时仅作提示，仍可下载并在暂停后续传。
+for (const passed of [false, null]) {
+  data.models[0].compatibility = {
+    ...compatibility,
+    checks: compatibility.checks.map(check =>
+      check.advisory ? { ...check, passed, detail: "运行内存不足或尚未确认" } : check
+    )
+  }
+  await emitChanged()
+  first.state.expandedModels["minicpm-ocr-1.0"] = true
+  const memoryText = []
+  const memoryElements = []
+  assert.equal(downloadButtons(first.state, memoryText, memoryElements)[0].disabled, false)
+  assert.ok(memoryText.includes("仅供参考"))
+  assert.ok(!memoryText.includes("未通过"))
+  const memoryCheck = memoryElements.find(node =>
+    node.props?.class?.includes("compatibility-check") &&
+    node.children?.[0]?.children === "可用内存"
+  )
+  assert.ok(!memoryCheck.props.class.includes("check-failed"))
+  await first.state.perform("download", first.state.snapshot.models[0])
+  assert.equal(calls.at(-1).action, "download")
+  await first.state.perform("cancel", first.state.snapshot.models[0])
+  assert.equal(first.state.snapshot.models[0].phase, "paused")
+  assert.equal(downloadButtons(first.state)[0].disabled, false)
+  await first.state.perform("download", first.state.snapshot.models[0])
+  assert.equal(calls.at(-1).action, "download", "内存提示不能拦截续传")
+  await first.state.perform("cancel", first.state.snapshot.models[0])
+}
+data.models[0].phase = "not-downloaded"
+data.models[0].usedBytes = 0
+data.usedBytes = 0
+
+// 系统、磁盘条件不通过或检测结果缺失时，点击下载仍不能发出请求。
 data.models[0].compatibility = {
   allowed: false,
   validation: { passed: true, detail: "上次运行校验通过" },
-  checks: [{ label: "可用内存", passed: false, detail: "当前可用内存不足" }]
+  checks: [{ label: "存储空间", passed: false, detail: "当前磁盘空间不足", advisory: false }]
 }
 await emitChanged()
 const callsBeforeBlocked = calls.length
@@ -322,11 +355,12 @@ assert.deepEqual(calls.at(-1), {
   action: "download",
   payload: { id: "minicpm-ocr-1.0", source: "modelscope" }
 })
+const cancellationsBeforeClose = calls.filter(item => item.action === "cancel").length
 first.state.closeManager()
 assert.deepEqual(first.state.expandedModels, {}, "关闭后再次打开默认显示收起的列表")
 assert.equal(
   calls.filter((item) => item.action === "cancel").length,
-  0,
+  cancellationsBeforeClose,
   "关闭列表不能取消后台下载"
 )
 data.usedBytes = 10
@@ -341,7 +375,7 @@ data.models[0].compatibility = { ...compatibility, allowed: false }
 await emitChanged()
 const callsBeforeResume = calls.length
 await first.state.perform("download", first.state.snapshot.models[0])
-assert.equal(calls.length, callsBeforeResume, "继续下载同样需要满足运行条件")
+assert.equal(calls.length, callsBeforeResume, "继续下载同样需要满足系统和磁盘条件")
 data.models[0].compatibility = compatibility
 await first.state.load(true)
 await first.state.perform("download", first.state.snapshot.models[0])

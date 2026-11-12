@@ -166,7 +166,7 @@
                 <div class="compatibility-title">
                   {{
                     model.compatibility?.allowed
-                      ? "下载前资源检查通过"
+                      ? "下载条件已满足，内存仅供运行参考"
                       : model.compatibility
                         ? "暂不满足下载条件"
                         : "尚未完成本机检测，请刷新后重试"
@@ -177,18 +177,20 @@
                   :key="check.label"
                   class="compatibility-check"
                   :class="{
-                    'check-failed': check.passed === false,
+                    'check-failed': check.passed === false && !check.advisory,
                     'check-unknown': check.passed == null
                   }"
                 >
                   <span class="check-label">{{ check.label }}</span>
                   <span class="check-detail">{{ check.detail }}</span>
                   <span class="check-result">{{
-                    check.passed == null
-                      ? "缺少资源配置"
-                      : check.passed
-                        ? "通过"
-                        : "未通过"
+                    check.advisory
+                      ? "仅供参考"
+                      : check.passed == null
+                        ? "缺少资源配置"
+                        : check.passed
+                          ? "通过"
+                          : "未通过"
                   }}</span>
                 </div>
                 <div
