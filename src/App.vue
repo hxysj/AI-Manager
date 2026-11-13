@@ -47,6 +47,9 @@
       @toggle-theme="toggleTheme"
       @select-view="activeView = $event"
       @title-click="handleSidebarTitleClick"
+      @open-assistant="
+        runAction(() => appApi.openToolWindow({ toolId: 'assistant' }))
+      "
     />
 
     <main class="app-shell__main">
@@ -192,6 +195,7 @@
           :local-backups="localBackups"
           :pending="pending"
           :save-settings="saveSettings"
+          :assistant-request="assistantSettingsRequest"
           @export-data="exportDataBackup"
           @local-backup-now="createLocalBackup"
           @local-backup-restore="previewLocalBackupRestore"
@@ -677,6 +681,11 @@ const showLogsTab = ref(false)
 // 主窗口重建时从 URL 恢复入口，已有窗口通过事件接收工具请求。
 const queryTool = new URLSearchParams(window.location.search).get("tool")
 const toolRequest = ref(queryTool ? { toolId: queryTool } : null)
+const assistantSettingsRequest = ref(queryTool === "assistant-settings" ? 1 : 0)
+if (assistantSettingsRequest.value) {
+  activeView.value = "settings"
+  toolRequest.value = null
+}
 const sidebarTitleClickCount = ref(0)
 const appLogs = ref([])
 const appLogPath = ref("")
@@ -2248,6 +2257,12 @@ onMounted(() => {
   )
 
   unsubscribeTool = appApi.onToolRequested((request) => {
+    if (request.toolId === "assistant-settings") {
+      assistantSettingsRequest.value++
+      activeView.value = "settings"
+      toolWorkspaceActive.value = false
+      return
+    }
     toolRequest.value = request
     activeView.value = "tools"
   })

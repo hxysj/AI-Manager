@@ -31,7 +31,7 @@
     </section>
 
     <section v-else class="tools-view-detail-page">
-      <header class="tools-view-detail-head">
+      <header v-if="activeTool !== 'assistant'" class="tools-view-detail-head">
         <button
           v-if="!standalone"
           class="tools-view-back"
@@ -187,10 +187,7 @@
             :disabled="gatewayRef?.busy || isGatewayLoading"
             @click="refreshGateway"
           >
-            <RefreshCw
-              :size="15"
-              :class="{ spinning: isGatewayLoading }"
-            />
+            <RefreshCw :size="15" :class="{ spinning: isGatewayLoading }" />
           </button>
         </div>
         <button
@@ -217,8 +214,16 @@
         </button>
       </header>
 
+      <ApplicationAssistant
+        v-if="activeTool === 'assistant'"
+        :providers="providers"
+        :codex-accounts="codexAccounts"
+        :runtime-models="runtimeModels"
+        :standalone="standalone"
+        @back="closeTool"
+      />
       <GitToolView
-        v-if="activeTool === 'git'"
+        v-else-if="activeTool === 'git'"
         :repos="repos"
         @add-repo="$emit('add-repo')"
         @status-change="gitToolStatus = $event"
@@ -289,6 +294,11 @@ import StringDiff from "@/features/tools/stringDiff/index.vue"
 
 const JsonAgentTool = defineAsyncComponent(
   () => import("@/features/tools/jsonAgent/index.vue")
+)
+
+// 助手依赖在后台运行，前端仅按需加载会话界面。
+const ApplicationAssistant = defineAsyncComponent(
+  () => import("@/features/tools/assistant/index.vue")
 )
 
 // 网络诊断包含多组明细表，进入工具后再加载页面代码。
@@ -367,9 +377,7 @@ const isGatewayActive = computed(() => {
 })
 
 const isGatewayLoading = computed(() => {
-  return Boolean(
-    gatewayStatus.value?.loading ?? gatewayRef.value?.loading
-  )
+  return Boolean(gatewayStatus.value?.loading ?? gatewayRef.value?.loading)
 })
 
 function refreshGateway() {

@@ -294,7 +294,7 @@ async fn run_agent(
     result
 }
 
-fn node_command(path: &Path) -> Command {
+pub(crate) fn node_command(path: &Path) -> Command {
     let mut script = path.to_string_lossy().into_owned();
     // Node 22 的入口 realpath 不兼容 Windows 扩展路径，传入普通盘符或 UNC 路径。
     if cfg!(windows) {

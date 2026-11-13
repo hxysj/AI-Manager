@@ -1,5 +1,5 @@
 use crate::api::{
-    app, app_logs, claude_desktop, codex_account, data, git_tool, google_account, image_workbench,
+    app, app_logs, assistant, claude_desktop, codex_account, data, git_tool, google_account, image_workbench,
     lan_share, local_models, multi_protocol_gateway, network_quality, proxy, repos, rules,
     runtime_provider, screenshot, sessions, settings, skills, system, tools, translation, usage,
 };
@@ -37,9 +37,37 @@ pub struct AppState {
     close_action: RwLock<String>,
     git_tool_lock: Mutex<()>,
     local_models: local_models::LocalModelService,
+    assistant: assistant::AssistantService,
+    assistant_sync: Mutex<()>,
 }
 
 impl AppState {
+    pub async fn shutdown_assistant(&self) {
+        let _guard = self.assistant_sync.lock().await;
+        self.assistant.shutdown().await;
+    }
+
+    async fn assistant_context(&self) -> assistant::AssistantContext {
+        let manager = self.manager.lock().await;
+        assistant::AssistantContext {
+            paths: manager.paths.clone(),
+            workspace_root: manager.workspace_root.clone(),
+            resource_dir: manager.resource_dir.clone(),
+            cli_targets: manager.state["cliTargets"].clone(),
+            settings: manager.app_settings.agents.assistant.clone(),
+        }
+    }
+
+    pub async fn sync_assistant(&self, app: AppHandle) {
+        // 启停串行后再读取最新配置，快速切换开关不会用旧配置重启后台。
+        let _guard = self.assistant_sync.lock().await;
+        let context = self.assistant_context().await;
+        if let Err(error) = self.assistant.sync(&app, &context).await {
+            let root = self.user_data_path().await;
+            let _ = app_logs::record_background_error(&root, "assistant:startup", error).await;
+        }
+    }
+
     pub fn new(manager: ManagerState) -> Self {
         let close_action = manager.app_settings.system.close_action.clone();
 
@@ -48,6 +76,8 @@ impl AppState {
             close_action: RwLock::new(close_action),
             git_tool_lock: Mutex::new(()),
             local_models: local_models::LocalModelService::default(),
+            assistant: assistant::AssistantService::default(),
+            assistant_sync: Mutex::new(()),
         }
     }
 
@@ -57,6 +87,20 @@ impl AppState {
         channel: &str,
         payload: Option<Value>,
     ) -> Result<Value, ManagerError> {
+        // 模型运行与工具回调不持有全局业务锁，窗口和设置仍可独立响应。
+        if let Some(action) = channel.strip_prefix("assistant:") {
+            let context = self.assistant_context().await;
+            return self.assistant.dispatch(app, context, action, payload.unwrap_or_else(|| json!({}))).await;
+        }
+        if channel == "settings:save" && payload.as_ref().is_some_and(|item| item["agents"].get("assistant").is_some()) {
+            let mut manager = self.manager.lock().await;
+            let result = manager.dispatch(app.clone(), channel, payload).await?;
+            let close_action = manager.app_settings.system.close_action.clone();
+            drop(manager);
+            *self.close_action.write().await = close_action;
+            self.sync_assistant(app).await;
+            return Ok(result);
+        }
         // 模型下载只使用目录快照，不持有全局应用状态锁。
         if let Some(action) = channel.strip_prefix("local-models:") {
             let paths = self.manager.lock().await.paths.clone();

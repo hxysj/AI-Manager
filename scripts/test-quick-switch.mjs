@@ -18,6 +18,7 @@ const messages = []
 let handlers = {}
 const visibilityListeners = new Set()
 const lanShareListeners = new Set()
+const assistantListeners = new Set()
 let lanShareState = { service: {}, totalUnread: 0 }
 let nativeLayout = { centerX: 64, centerY: 64, edge: "" }
 const api = new Proxy(
@@ -70,6 +71,16 @@ function loadComponent(path) {
     if (name === "@/api")
       return {
         appApi: api,
+        assistantApi: {
+          onEvent: async (callback) => {
+            assistantListeners.add(callback)
+            return () => assistantListeners.delete(callback)
+          },
+          getState: async () => ({ status: "idle" }),
+          createThread: api.createThread,
+          send: api.send,
+          cancel: api.cancel
+        },
         lanShareApi: {
           onStateChanged: (callback) => {
             lanShareListeners.add(callback)
@@ -155,9 +166,16 @@ function loadComponent(path) {
   return module.exports.default
 }
 
+const desktopTimers = []
 globalThis.window = {
-  setTimeout,
+  setTimeout(callback, milliseconds) {
+    const handle = setTimeout(callback, milliseconds)
+    if (milliseconds === 10000) desktopTimers.push({ callback, handle })
+    return handle
+  },
   clearTimeout,
+  setInterval,
+  clearInterval,
   addEventListener() {},
   removeEventListener() {}
 }
@@ -276,11 +294,18 @@ function findNodes(root, className) {
   return result
 }
 
+function nodeText(node) {
+  return node.text + node.children.map(nodeText).join("")
+}
+
 function assertNoHoverTitles(node) {
   if (
     String(node.props.class || "")
       .split(" ")
-      .includes("quick-switch-unread-badge")
+      .includes("quick-switch-unread-badge") ||
+    String(node.props.class || "")
+      .split(" ")
+      .includes("quick-switch-assistant-bubble")
   )
     return
   assert.equal(node.props.title, undefined)
@@ -392,7 +417,11 @@ panel.state.rotateCenterPage()
 assert.equal(panel.state.selectedPage, "home")
 await tickDelay(130)
 assert.equal(panel.state.expanded, true)
-assert.equal(findNodes(panel.root, "quick-switch-tool").length, 10)
+assert.equal(
+  findNodes(panel.root, "quick-switch-tool").length,
+  panel.state.visibleTools.length
+)
+assert.ok(panel.state.visibleTools.some((tool) => tool.id === "assistant"))
 assert.deepEqual(
   calls.find(
     (call) => call.name === "setQuickSwitchCollapsed" && !call.payload.collapsed
@@ -483,7 +512,10 @@ state.appSettings.system.quickSwitchTools = { git: false }
 await tick()
 await panel.state.setExpanded(true)
 await tick()
-assert.equal(findNodes(panel.root, "quick-switch-tool").length, 9)
+assert.equal(
+  findNodes(panel.root, "quick-switch-tool").length,
+  panel.state.visibleTools.length
+)
 assert.ok(!panel.state.orbitTools.some((tool) => tool.id === "git"))
 state.appSettings.system.quickSwitchTools = Object.fromEntries(
   panel.state.visibleTools
@@ -841,6 +873,25 @@ assert.equal(findNodes(petPanel.root, "desktop-pet-animation").length, 1)
 assert.equal(findNodes(petPanel.root, "quick-switch-main").length, 0)
 assert.equal(findNodes(petPanel.root, "quick-switch-usage").length, 0)
 assertNoHoverTitles(findNodes(petPanel.root, "quick-switch-center")[0])
+// 后台状态和明确动作驱动桌宠，拖动仍由原有逻辑优先接管。
+for (const callback of assistantListeners)
+  callback({ type: "state", state: { status: "thinking" } })
+await tick()
+assert.equal(petPanel.state.petAction, "think")
+for (const callback of assistantListeners)
+  callback({
+    type: "state",
+    state: {
+      status: "working",
+      petAction: "read_book",
+      petMessage: "正在读书"
+    }
+  })
+await tick()
+assert.equal(petPanel.state.petAction, "read_book")
+for (const callback of assistantListeners)
+  callback({ type: "state", state: { status: "idle" } })
+await tick()
 petPanel.state.rotateCenterPage()
 assert.equal(petPanel.state.selectedPage, "home")
 petState.appSettings.desktop.petId = "removed-pet"
@@ -869,7 +920,10 @@ assert.ok(
 )
 await petPanel.state.setExpanded(true)
 await tick()
-assert.equal(findNodes(petPanel.root, "quick-switch-tool").length, 10)
+assert.equal(
+  findNodes(petPanel.root, "quick-switch-tool").length,
+  petPanel.state.visibleTools.length
+)
 petPanel.state.handleMainClick({ detail: 0 })
 await tick()
 assert.equal(calls.at(-1).name, "showMainPanel")
@@ -885,6 +939,308 @@ assert.equal(petPanel.state.selectedPage, "codex")
 petPanel.unmount()
 assert.deepEqual(petPanel.errors, [])
 assert.deepEqual(petPanel.warnings, [])
+
+// 桌宠原地输入、流式回复和完成后的十秒展示，使用可控计时避免真实等待。
+const chatState = fixture()
+chatState.appSettings.desktop = { enabled: true, petId: "monkey_animations" }
+chatState.appSettings.agents = {
+  assistant: { enabled: true, targetId: "p1", model: "agent-model" }
+}
+const emitAssistant = (event) => {
+  for (const callback of assistantListeners) callback(event)
+}
+let chatRun = 0
+let lastChatTask
+let finishChatThread
+handlers.createThread = () =>
+  new Promise((resolve) => {
+    finishChatThread = () => resolve({ id: "desktop-thread" })
+  })
+handlers.send = (payload) => {
+  lastChatTask = {
+    runId: `chat-${++chatRun}`,
+    threadId: payload.threadId,
+    status: "thinking",
+    text: ""
+  }
+  emitAssistant({ type: "state", state: { ...lastChatTask } })
+  emitAssistant({
+    type: "text-delta",
+    runId: lastChatTask.runId,
+    text: "流式回复"
+  })
+  return { ...lastChatTask }
+}
+handlers.cancel = () => {
+  emitAssistant({
+    type: "state",
+    state: { ...lastChatTask, status: "cancelled", text: "部分回复" }
+  })
+}
+const chat = mount(Quick, { state: chatState })
+await tick()
+assert.equal(findNodes(chat.root, "quick-switch-assistant-bubble").length, 0)
+chat.state.enterPanel()
+await tick()
+assert.equal(findNodes(chat.root, "quick-switch-assistant-bubble").length, 1)
+await tickDelay(110)
+const chatWindows = calls.filter(
+  (call) => call.name === "openToolWindow"
+).length
+findNodes(chat.root, "quick-switch-assistant-bubble")[0].props.onClick({
+  stopPropagation() {}
+})
+await tick()
+assert.equal(chat.state.chatOpen, true)
+assert.equal(findNodes(chat.root, "quick-switch-chat-input").length, 1)
+assert.equal(findNodes(chat.root, "quick-switch-tool").length, 0)
+assert.equal(
+  calls.filter((call) => call.name === "openToolWindow").length,
+  chatWindows,
+  "聊一聊不打开聊天面板"
+)
+chat.state.leavePanel()
+await tickDelay(300)
+assert.equal(chat.state.expanded, true, "输入时移开鼠标仍可编辑")
+assert.equal(findNodes(chat.root, "quick-switch-assistant-bubble").length, 0)
+chat.state.chatDraft = "你好"
+const firstChatSend = chat.state.sendDesktopChat()
+await tick()
+assert.equal(chat.state.chatOpen, false, "发送后立即收起输入框，无需等待 IPC")
+assert.equal(findNodes(chat.root, "quick-switch-chat-input").length, 0)
+assert.equal(findNodes(chat.root, "quick-switch-speech-thinking").length, 1)
+assert.match(nodeText(findNodes(chat.root, "quick-switch-thought")[0]), /思考中/)
+assert.equal(chat.state.petAction, "think", "创建会话时桌宠也进入思考动作")
+finishChatThread()
+await firstChatSend
+await tick()
+assert.equal(chat.state.chatDraft, "")
+assert.equal(chat.state.chatOpen, false)
+assert.equal(
+  chat.state.desktopReply,
+  "流式回复",
+  "旧发送回包不能覆盖已到达的流"
+)
+assert.equal(chat.state.desktopBusy, true)
+assert.equal(findNodes(chat.root, "quick-switch-speech-thinking").length, 0)
+assert.equal(
+  nodeText(findNodes(chat.root, "quick-switch-speech-text")[0]),
+  "流式回复"
+)
+assert.equal(findNodes(chat.root, "quick-switch-composer").length, 0)
+assert.equal(findNodes(chat.root, "quick-switch-chat-header").length, 0)
+assert.equal(findNodes(chat.root, "quick-switch-chat-footer").length, 0)
+assert.equal(desktopTimers.length, 0, "生成过程中不开始计时")
+emitAssistant({
+  type: "state",
+  state: { ...lastChatTask, status: "working", petMessage: "上一次的提示" }
+})
+await tick()
+assert.equal(findNodes(chat.root, "quick-switch-speech-thinking").length, 1)
+assert.match(
+  nodeText(findNodes(chat.root, "quick-switch-thought")[0]),
+  /正在处理/,
+  "思考气泡使用本轮任务状态，不显示旧的桌宠提示"
+)
+emitAssistant({
+  type: "state",
+  state: { ...lastChatTask, petMessage: "上一次的提示" }
+})
+await tick()
+assert.match(nodeText(findNodes(chat.root, "quick-switch-thought")[0]), /思考中/)
+emitAssistant({ type: "text-delta", runId: lastChatTask.runId, text: "流式回复" })
+emitAssistant({ type: "text-delta", runId: "unrelated", text: "其他会话" })
+assert.equal(chat.state.desktopReply, "流式回复")
+const completeChat = (text) =>
+  emitAssistant({
+    type: "state",
+    state: { ...lastChatTask, status: "completed", text }
+  })
+completeChat("流式回复完成")
+await tick()
+assert.equal(
+  chat.state.desktopReply,
+  "流式回复完成",
+  "最终快照替换全文，不重复累加"
+)
+assert.equal(desktopTimers.length, 1)
+completeChat("流式回复完成")
+assert.equal(desktopTimers.length, 1, "重复完成快照不重置计时")
+clearTimeout(desktopTimers[0].handle)
+desktopTimers[0].callback()
+await tick()
+assert.equal(chat.state.desktopReply, "")
+assert.equal(chat.state.expanded, false)
+completeChat("迟到的完成快照")
+await tick()
+assert.equal(chat.state.desktopChatVisible, false, "过期快照不能重弹回复")
+await chat.state.openDesktopChat()
+chat.state.chatDraft = "第二条"
+await chat.state.sendDesktopChat()
+completeChat("第二次回复")
+await tick()
+const staleReplyTimer = desktopTimers.at(-1)
+chat.state.enterPanel()
+await tick()
+assert.equal(
+  findNodes(chat.root, "quick-switch-assistant-bubble").length,
+  1,
+  "回复展示时仍能悬浮桌宠并继续输入"
+)
+findNodes(chat.root, "quick-switch-assistant-bubble")[0].props.onClick({
+  stopPropagation() {}
+})
+await tick()
+assert.equal(findNodes(chat.root, "quick-switch-speech").length, 0)
+assert.equal(findNodes(chat.root, "quick-switch-chat-input").length, 1)
+chat.state.chatDraft = "第三条"
+let finishChatSend
+const sendChat = handlers.send
+handlers.send = (payload) =>
+  new Promise((resolve) => {
+    finishChatSend = () => resolve(sendChat(payload))
+  })
+const thirdSend = chat.state.sendDesktopChat()
+await tick()
+assert.equal(chat.state.desktopReply, "", "发送下一条时旧回复立即消失")
+assert.equal(findNodes(chat.root, "quick-switch-chat-input").length, 0)
+assert.equal(findNodes(chat.root, "quick-switch-speech-thinking").length, 1)
+completeChat("上一轮迟到的快照")
+await tick()
+assert.equal(chat.state.desktopReply, "", "上一轮快照不能冒充新一轮回复")
+assert.equal(findNodes(chat.root, "quick-switch-speech-thinking").length, 1)
+finishChatSend()
+await thirdSend
+await tick()
+staleReplyTimer.callback()
+assert.equal(chat.state.desktopReply, "流式回复", "旧计时器不能清空新一轮回复")
+await chat.state.stopDesktopChat()
+await tick()
+assert.equal(chat.state.desktopBusy, false)
+assert.match(
+  nodeText(findNodes(chat.root, "quick-switch-speech")[0]),
+  /已停止回复/
+)
+chat.state.closeDesktopChat()
+assert.equal(chat.state.desktopReply, "")
+completeChat("关闭后收到的消息")
+await tick()
+assert.equal(chat.state.desktopChatVisible, false)
+handlers.send = sendChat
+chatState.appSettings.system.quickSwitchTools = Object.fromEntries(
+  chat.state.visibleTools.map((tool) => [tool.id, false])
+)
+await tick()
+await chat.state.openDesktopChat()
+assert.equal(chat.state.expanded, true, "关闭所有悬浮工具后仍可展开聊天")
+for (const [center, side] of [
+  [{ x: 64, y: 64 }, "right"],
+  [{ x: 496, y: 64 }, "left"],
+  [{ x: 64, y: 496 }, "right"],
+  [{ x: 496, y: 496 }, "left"],
+  [{ x: 280, y: 280 }, "top"],
+  [{ x: 280, y: 64 }, "bottom"],
+  [{ x: 280, y: 496 }, "top"]
+]) {
+  chat.state.centerPosition = center
+  await tick()
+  const { style } = chat.state.desktopChatLayout
+  assert.equal(
+    findNodes(chat.root, "quick-switch-chat")[0].props["data-side"],
+    side
+  )
+  assert.ok(parseFloat(style.left) >= 12 && parseFloat(style.left) + 320 <= 548)
+  const top = style.top
+    ? parseFloat(style.top)
+    : 560 - parseFloat(style.bottom) - parseFloat(style.maxHeight)
+  assert.ok(top >= 12 && top + parseFloat(style.maxHeight) <= 548)
+}
+handlers.send = (payload) =>
+  new Promise((resolve) => {
+    finishChatSend = () => resolve(sendChat(payload))
+  })
+chat.state.chatDraft = "发送中关闭"
+const closedSend = chat.state.sendDesktopChat()
+await tick()
+chat.state.closeDesktopChat()
+assert.equal(chat.state.desktopChatVisible, false, "发送未返回时关闭也立即隐藏")
+finishChatSend()
+await closedSend
+await tick()
+assert.equal(
+  chat.state.desktopChatVisible,
+  false,
+  "迟到回包不能重开已关闭的输入框"
+)
+handlers.send = sendChat
+completeChat("后台已完成")
+await chat.state.openDesktopChat()
+handlers.send = () => {
+  throw new Error("连接暂时不可用")
+}
+chat.state.chatDraft = "失败后保留这条消息"
+await chat.state.sendDesktopChat()
+await tick()
+assert.equal(chat.state.chatOpen, true)
+assert.equal(chat.state.chatDraft, "失败后保留这条消息")
+assert.match(
+  nodeText(findNodes(chat.root, "quick-switch-chat-error")[0]),
+  /连接暂时不可用/
+)
+assert.equal(findNodes(chat.root, "quick-switch-speech-thinking").length, 0)
+handlers.send = sendChat
+chatState.appSettings.agents.assistant.targetId = "local"
+chat.state.chatDraft = "本地对话"
+const localSendCount = calls.filter((call) => call.name === "send").length
+await chat.state.sendDesktopChat()
+assert.match(chat.state.desktopChatError, /本地助手模型待添加/)
+assert.equal(
+  calls.filter((call) => call.name === "send").length,
+  localSendCount
+)
+chatState.appSettings.agents.assistant.enabled = false
+await tick()
+assert.equal(chat.state.desktopChatVisible, false)
+chat.state.enterPanel()
+await tick()
+assert.equal(findNodes(chat.root, "quick-switch-assistant-bubble").length, 0)
+chatState.appSettings.agents.assistant.enabled = true
+chatState.appSettings.agents.assistant.targetId = "p1"
+await chat.state.openDesktopChat()
+chat.state.handleChatKeydown({
+  key: "Enter",
+  isComposing: true,
+  preventDefault() {
+    assert.fail("输入法选词不能发送")
+  }
+})
+assert.equal(
+  calls.filter((call) => call.name === "send").length,
+  localSendCount
+)
+chat.state.chatDraft = "创建会话时关闭"
+chat.state.desktopThreadId = ""
+const closedThread = chat.state.sendDesktopChat()
+await tick()
+chat.state.closeDesktopChat()
+await chat.state.openDesktopChat()
+finishChatThread()
+await closedThread
+await tick()
+assert.equal(
+  calls.filter((call) => call.name === "send").length,
+  localSendCount,
+  "创建会话期间关闭再打开，旧消息也不能继续发送"
+)
+assert.equal(chat.state.chatOpen, true)
+assert.equal(chat.state.desktopBusy, false)
+chat.state.handleVisibilityChange({ visible: false })
+await tick()
+assert.equal(chat.state.desktopChatVisible, false)
+for (const timer of desktopTimers) clearTimeout(timer.handle)
+chat.unmount()
+assert.deepEqual(chat.errors, [])
+assert.deepEqual(chat.warnings, [])
 
 // 四个边缘偷看时保持在窗口内；悬浮时敬礼，拖动时完整显示行走动作。
 const edgeState = fixture()
@@ -951,7 +1307,10 @@ for (const edge of ["left", "right", "top", "bottom"]) {
   await tickDelay(130)
   assert.equal(edgePanel.state.expanded, true)
   assert.equal(edgePanel.state.screenEdge, edge)
-  assert.equal(findNodes(edgePanel.root, "quick-switch-tool").length, 10)
+  assert.equal(
+    findNodes(edgePanel.root, "quick-switch-tool").length,
+    edgePanel.state.visibleTools.length
+  )
   edgePanel.state.leavePanel()
   await tickDelay(300)
   assert.equal(edgePanel.state.expanded, false)
@@ -1025,7 +1384,7 @@ const spriteConfig = JSON.parse(
   readFileSync("src/assets/pets/monkey_animations/sprite_config.json", "utf8")
 )
 for (const animation of desktopPets[0].animations) {
-  assert.ok(animation.url.endsWith('/' + animation.id + '.webp'))
+  assert.ok(animation.url.endsWith("/" + animation.id + ".webp"))
   assert.ok(spriteConfig.actions[animation.id])
 }
 assert.equal(getDesktopPet("").id, desktopPets[0].id)
@@ -1202,30 +1561,51 @@ assert.deepEqual(pet.errors, [])
 assert.deepEqual(pet.warnings, [])
 
 // 设置与桌宠的完整保存交互由 test-settings.mjs 验证，这里只检查共用工具枚举。
-const SystemSettings = loadComponent("src/features/settings/components/SystemSettings.vue")
+const SystemSettings = loadComponent(
+  "src/features/settings/components/SystemSettings.vue"
+)
 const floatingSettings = { quickSwitchVisible: true, quickSwitchTools: {} }
 const savedSettings = []
 const settings = mount(SystemSettings, {
   settings: floatingSettings,
   cliTargets: fixture().cliTargets,
   pending: false,
-  saveSettings: async patch => {
+  saveSettings: async (patch) => {
     savedSettings.push(patch)
-    Object.assign(floatingSettings.quickSwitchTools, patch.system.quickSwitchTools)
+    Object.assign(
+      floatingSettings.quickSwitchTools,
+      patch.system.quickSwitchTools
+    )
     return true
   }
 })
 await tick()
-assert.equal(findNodes(settings.root, "system-settings-tool").length, 10)
-assert.ok(!settings.state.floatingToolItems.some(tool => tool.id === "screenshot"))
+assert.equal(
+  findNodes(settings.root, "system-settings-tool").length,
+  settings.state.floatingToolItems.length
+)
+assert.ok(
+  !settings.state.floatingToolItems.some((tool) => tool.id === "screenshot")
+)
 await settings.state.saveSetting("quickSwitchTools", false, "git")
-assert.deepEqual(savedSettings.at(-1), { system: { quickSwitchTools: { git: false } } })
-settings.component.props.settings = { ...floatingSettings, quickSwitchVisible: false }
+assert.deepEqual(savedSettings.at(-1), {
+  system: { quickSwitchTools: { git: false } }
+})
+settings.component.props.settings = {
+  ...floatingSettings,
+  quickSwitchVisible: false
+}
 await tick()
 assert.equal(findNodes(settings.root, "system-settings-tool").length, 0)
-settings.component.props.settings = { ...floatingSettings, quickSwitchVisible: true }
+settings.component.props.settings = {
+  ...floatingSettings,
+  quickSwitchVisible: true
+}
 await tick()
-assert.equal(findNodes(settings.root, "system-settings-tool").length, 10)
+assert.equal(
+  findNodes(settings.root, "system-settings-tool").length,
+  settings.state.floatingToolItems.length
+)
 assert.equal(settings.state.draft.quickSwitchTools.git, false)
 settings.unmount()
 assert.deepEqual(settings.errors, [])

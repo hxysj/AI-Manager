@@ -84,6 +84,23 @@ fn default_translation_clipboard_shortcut() -> String {
 #[serde(rename_all = "camelCase")]
 pub struct AgentSettings {
     pub translation: TranslationAgentSettings,
+    #[serde(default)]
+    pub assistant: AssistantSettings,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AssistantSettings {
+    pub enabled: bool,
+    pub target_id: String,
+    pub model: String,
+    pub protocol: String,
+}
+
+impl Default for AssistantSettings {
+    fn default() -> Self {
+        Self { enabled: true, target_id: String::new(), model: String::new(), protocol: "auto".into() }
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -197,6 +214,12 @@ pub fn normalize_app_settings(settings_file_path: PathBuf, payload: Option<Value
             pet_id: string_value(desktop.get("petId")),
         },
         agents: AgentSettings {
+            assistant: AssistantSettings {
+                enabled: bool_value(input["agents"]["assistant"].get("enabled"), true),
+                target_id: string_value(input["agents"]["assistant"].get("targetId")),
+                model: string_value(input["agents"]["assistant"].get("model")),
+                protocol: non_empty_string(input["agents"]["assistant"].get("protocol"), "auto"),
+            },
             translation: TranslationAgentSettings {
                 enabled: bool_value(translation.get("enabled"), false),
                 target_id: string_value(translation.get("targetId")),
@@ -294,6 +317,29 @@ mod floating_tools_tests {
                 .system
                 .log_enabled
         );
+    }
+
+    #[test]
+    fn assistant_settings_keep_model_and_restore_legacy_defaults() {
+        let path = PathBuf::from("settings.json");
+        let settings = normalize_app_settings(path.clone(), Some(json!({
+            "agents": {"assistant": {"targetId": "provider-1", "model": "agent-model"}}
+        })));
+        let restored = normalize_app_settings(path.clone(), Some(serialize_app_settings(&settings)));
+        assert_eq!(restored.agents.assistant.target_id, "provider-1");
+        assert_eq!(restored.agents.assistant.model, "agent-model");
+        let mut legacy = serialize_app_settings(&settings);
+        legacy["agents"].as_object_mut().unwrap().remove("assistant");
+        let restored: AppSettings = serde_json::from_value(legacy).unwrap();
+        assert!(restored.agents.assistant.target_id.is_empty());
+        assert!(restored.agents.assistant.enabled);
+        assert!(normalize_app_settings(path, None).agents.assistant.model.is_empty());
+        let disabled = normalize_app_settings(PathBuf::from("settings.json"), Some(json!({
+            "agents": {"assistant": {"enabled": false, "targetId": "local", "model": "future-model"}}
+        })));
+        let restored: AppSettings = serde_json::from_value(serialize_app_settings(&disabled)).unwrap();
+        assert!(!restored.agents.assistant.enabled);
+        assert_eq!(restored.agents.assistant.model, "future-model");
     }
 
     #[test]

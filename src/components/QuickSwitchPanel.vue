@@ -13,10 +13,10 @@
     @pointermove="handlePointerMove"
     @focusin="enterPanel"
     @focusout="handleFocusOut"
-    @keydown.esc="setExpanded(false)"
+    @keydown.esc="closeDesktopChat"
     @dragstart.prevent
   >
-    <template v-if="expanded">
+    <template v-if="expanded && !desktopChatVisible">
       <svg
         v-if="orbitLayout === 'radial'"
         class="quick-switch-connections"
@@ -77,6 +77,7 @@
       :class="{ 'quick-switch-center-pet': desktopPet }"
       @pointerdown="startDrag"
       @click="handleMainClick"
+      @contextmenu.prevent="openAssistant"
     >
       <button
         v-if="desktopPet"
@@ -166,6 +167,18 @@
         </nav>
       </template>
       <button
+        v-if="
+          desktopPet && hovered && !chatOpen && !desktopBusy && assistantEnabled
+        "
+        class="quick-switch-assistant-bubble"
+        type="button"
+        title="和桌宠聊一聊"
+        @pointerdown.stop
+        @click.stop="openDesktopChat"
+      >
+        聊一聊
+      </button>
+      <button
         v-if="lanShareUnreadCount"
         class="quick-switch-unread-badge"
         :class="{
@@ -180,6 +193,122 @@
         {{ displayUnreadCount }}
       </button>
     </article>
+    <aside
+      v-if="expanded && desktopChatVisible"
+      class="quick-switch-chat"
+      :style="desktopChatLayout.style"
+      :data-side="desktopChatLayout.side"
+      aria-label="桌宠对话"
+      @pointerdown.stop
+      @click.stop
+    >
+      <div
+        v-if="!chatOpen"
+        class="quick-switch-speech"
+        :class="{
+          'quick-switch-speech-thinking': desktopThinking
+        }"
+        :aria-label="desktopThinking ? '桌宠正在思考' : '桌宠说话'"
+        aria-live="polite"
+      >
+        <span v-if="desktopThinking" class="quick-switch-thought">
+          {{ desktopThoughtLabel }}
+          <span class="quick-switch-thinking-dots" aria-hidden="true">
+            <i class="quick-switch-thinking-dot"></i>
+            <i class="quick-switch-thinking-dot"></i>
+            <i class="quick-switch-thinking-dot"></i>
+          </span>
+        </span>
+        <div
+          v-if="desktopReply"
+          ref="desktopReplyElement"
+          class="quick-switch-speech-text"
+          :class="{ 'quick-switch-speech-text-streaming': desktopBusy }"
+        >
+          {{ desktopReply }}
+        </div>
+        <span
+          v-if="desktopChatError"
+          class="quick-switch-speech-error-text"
+          role="alert"
+        >
+          {{ desktopChatError }}
+        </span>
+        <div class="quick-switch-speech-actions">
+          <button
+            v-if="desktopBusy"
+            class="quick-switch-speech-button"
+            type="button"
+            aria-label="停止回复"
+            title="停止回复"
+            :disabled="!desktopRunId || assistantState.status === 'cancelling'"
+            @click="stopDesktopChat"
+          >
+            <Square :size="11" />
+          </button>
+          <button
+            class="quick-switch-speech-button"
+            type="button"
+            aria-label="关闭桌宠对话"
+            title="收起气泡"
+            @click="closeDesktopChat"
+          >
+            <X :size="13" />
+          </button>
+        </div>
+      </div>
+      <div v-else class="quick-switch-composer">
+        <textarea
+          ref="chatInput"
+          v-model="chatDraft"
+          class="quick-switch-chat-input"
+          aria-label="给桌宠发消息"
+          placeholder="想和我说些什么？"
+          rows="2"
+          maxlength="30000"
+          :disabled="!assistantEnabled"
+          @keydown="handleChatKeydown"
+        ></textarea>
+        <div
+          v-if="desktopChatError"
+          class="quick-switch-chat-error"
+          role="alert"
+        >
+          {{ desktopChatError }}
+          <button
+            class="quick-switch-chat-settings"
+            type="button"
+            @click="openAssistantSettings"
+          >
+            设置模型
+          </button>
+        </div>
+        <div class="quick-switch-composer-actions">
+          <span class="quick-switch-chat-hint">
+            Enter 发送 · Shift+Enter 换行
+          </span>
+          <button
+            class="quick-switch-chat-button"
+            type="button"
+            aria-label="关闭桌宠对话"
+            title="收起输入框"
+            @click="closeDesktopChat"
+          >
+            <X :size="14" />
+          </button>
+          <button
+            class="quick-switch-chat-send"
+            type="button"
+            aria-label="发送消息"
+            title="发送"
+            :disabled="!canSendDesktopChat"
+            @click="sendDesktopChat"
+          >
+            <ArrowUp :size="16" />
+          </button>
+        </div>
+      </div>
+    </aside>
   </section>
 </template>
 
@@ -193,7 +322,8 @@ import {
   ref,
   watch
 } from "vue"
-import { appApi, lanShareApi, usageApi } from "@/api"
+import { ArrowUp, Square, X } from "lucide-vue-next"
+import { appApi, assistantApi, lanShareApi, usageApi } from "@/api"
 import AiIcon from "@/components/AiIcon.vue"
 import DesktopPet from "@/components/DesktopPet.vue"
 import { getDesktopPet } from "@/constants/desktop-pets"
@@ -217,6 +347,234 @@ const usageSummary = ref(null)
 const usageError = ref("")
 const lanShareUnreadCount = ref(0)
 let unsubscribeLanShare = null
+const assistantState = ref({})
+let unsubscribeAssistant
+const assistantEnabled = computed(
+  () => props.state.appSettings?.agents?.assistant?.enabled !== false
+)
+const chatOpen = ref(false)
+const chatDraft = ref("")
+const chatInput = ref(null)
+const desktopReplyElement = ref(null)
+const desktopThreadId = ref("")
+const desktopRunId = ref("")
+const desktopReply = ref("")
+const desktopChatError = ref("")
+const chatSubmitting = ref(false)
+const chatWaiting = ref(false)
+let desktopReplyTimer = null
+let desktopEventVersion = 0
+let desktopChatSequence = 0
+let desktopLastRunId = ""
+const desktopBusy = computed(() => chatSubmitting.value || chatWaiting.value)
+const desktopThinking = computed(
+  () => desktopBusy.value && !desktopReply.value && !desktopChatError.value
+)
+const desktopThoughtLabel = computed(
+  () =>
+    ({
+      working: "正在处理",
+      cancelling: "正在停止"
+    })[assistantState.value.status] || "思考中"
+)
+const desktopChatVisible = computed(() =>
+  Boolean(
+    desktopPet.value &&
+    assistantEnabled.value &&
+    (chatOpen.value ||
+      desktopReply.value ||
+      desktopChatError.value ||
+      desktopBusy.value)
+  )
+)
+const canSendDesktopChat = computed(
+  () =>
+    assistantEnabled.value &&
+    chatDraft.value.trim() &&
+    !desktopBusy.value &&
+    !["thinking", "working", "replying", "cancelling"].includes(
+      assistantState.value.status
+    )
+)
+// 对话窗口独立保留，主面板切换工具时仍能继续交流。
+function openAssistant() {
+  appApi.openToolWindow({ toolId: "assistant" }).catch((error) => {
+    createMessage.error(error.message || String(error))
+  })
+}
+
+// 气泡朝向桌宠；靠近下边缘时向上生长，长回复也不会被窗口裁切。
+const desktopChatLayout = computed(() => {
+  const { x, y } = centerPosition.value
+  const width = 320
+  let left = Math.max(12, Math.min(548 - width, x - width / 2))
+  let top
+  let bottom
+  let height = 240
+  let side
+  if (x + 68 + width <= 548) {
+    side = "right"
+    left = x + 68
+  } else if (x - 68 - width >= 12) {
+    side = "left"
+    left = x - 68 - width
+  } else if (y >= 280) {
+    side = "top"
+    height = Math.min(height, y - 80)
+    bottom = 560 - y + 68
+  } else {
+    side = "bottom"
+    height = Math.min(height, 480 - y)
+    top = y + 68
+  }
+  if (side === "left" || side === "right") {
+    if (y < 280) top = Math.max(12, y - 30)
+    else bottom = Math.max(12, 560 - y - 30)
+  }
+  return {
+    side,
+    style: {
+      left: `${left}px`,
+      top: top === undefined ? undefined : `${top}px`,
+      bottom: bottom === undefined ? undefined : `${bottom}px`,
+      width: `${width}px`,
+      maxHeight: `${height}px`,
+      "--chat-height": `${height}px`,
+      "--speech-tail-y": y < 280 ? "30px" : "calc(100% - 30px)"
+    }
+  }
+})
+
+async function openDesktopChat() {
+  if (!assistantEnabled.value) return
+  clearTimeout(hoverTimer)
+  chatOpen.value = true
+  await setExpanded(true)
+  await nextTick()
+  chatInput.value?.focus()
+}
+
+function closeDesktopChat() {
+  desktopChatSequence += 1
+  clearTimeout(hoverTimer)
+  hoverTimer = null
+  clearTimeout(desktopReplyTimer)
+  desktopReplyTimer = null
+  chatOpen.value = false
+  desktopReply.value = ""
+  desktopChatError.value = ""
+  // 关闭展示不取消后台任务，迟到的事件也不能重新弹出气泡。
+  desktopRunId.value = ""
+  chatSubmitting.value = false
+  chatWaiting.value = false
+  setExpanded(false)
+}
+
+async function openAssistantSettings() {
+  try {
+    await appApi.showMainPanel({ toolId: "assistant-settings" })
+  } catch (error) {
+    desktopChatError.value = error.message || String(error)
+  }
+}
+
+function applyDesktopTask(snapshot) {
+  desktopEventVersion += 1
+  chatSubmitting.value = false
+  desktopRunId.value = snapshot.runId
+  desktopLastRunId = snapshot.runId
+  desktopReply.value = snapshot.text || ""
+  const waiting = ["thinking", "working", "replying", "cancelling"].includes(
+    snapshot.status
+  )
+  // 只在本轮结束时计时，配置同步等重复快照不会延长回复展示。
+  const finished = chatWaiting.value && !waiting
+  chatWaiting.value = waiting
+  if (!finished) return
+  desktopChatError.value =
+    snapshot.error || (snapshot.status === "cancelled" ? "已停止回复" : "")
+  clearTimeout(desktopReplyTimer)
+  const runId = snapshot.runId
+  desktopReplyTimer = window.setTimeout(() => {
+    if (disposed || desktopRunId.value !== runId) return
+    desktopReplyTimer = null
+    desktopReply.value = ""
+    desktopChatError.value = ""
+    desktopRunId.value = ""
+    if (!chatOpen.value && !hovered.value) setExpanded(false)
+  }, 10000)
+}
+
+async function sendDesktopChat() {
+  if (!canSendDesktopChat.value) return
+  clearTimeout(desktopReplyTimer)
+  desktopReplyTimer = null
+  desktopReply.value = ""
+  desktopChatError.value = ""
+  desktopRunId.value = ""
+  const settings = props.state.appSettings?.agents?.assistant || {}
+  if (settings.targetId === "local" || !settings.targetId || !settings.model) {
+    desktopChatError.value =
+      settings.targetId === "local"
+        ? "本地助手模型待添加，请先在设置中选择 Provider 模型。"
+        : "请先在设置 → 功能扩展中选择助手模型。"
+    return
+  }
+  const message = chatDraft.value.trim()
+  const sequence = ++desktopChatSequence
+  chatSubmitting.value = true
+  chatOpen.value = false
+  chatDraft.value = ""
+  try {
+    if (!desktopThreadId.value) {
+      const thread = await assistantApi.createThread()
+      if (disposed || sequence !== desktopChatSequence) return
+      desktopThreadId.value = thread.id
+    }
+    if (disposed || sequence !== desktopChatSequence) return
+    chatWaiting.value = true
+    const version = desktopEventVersion
+    const snapshot = await assistantApi.send({
+      threadId: desktopThreadId.value,
+      message
+    })
+    if (
+      disposed ||
+      sequence !== desktopChatSequence ||
+      (!chatWaiting.value && !desktopRunId.value)
+    )
+      return
+    // 流式事件可能早于发送回包，保留已经收到的回复和完成状态。
+    if (version === desktopEventVersion) applyDesktopTask(snapshot)
+  } catch (error) {
+    if (!disposed && sequence === desktopChatSequence) {
+      chatWaiting.value = false
+      desktopChatError.value = error.message || String(error)
+      chatDraft.value = message
+      chatOpen.value = true
+      await nextTick()
+      chatInput.value?.focus()
+    }
+  } finally {
+    if (sequence === desktopChatSequence) chatSubmitting.value = false
+  }
+}
+
+async function stopDesktopChat() {
+  if (!desktopRunId.value) return
+  try {
+    await assistantApi.cancel(desktopRunId.value)
+  } catch (error) {
+    desktopChatError.value = error.message || String(error)
+  }
+}
+
+function handleChatKeydown(event) {
+  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+    event.preventDefault()
+    sendDesktopChat()
+  }
+}
 
 // 统一使用后端快照，避免主窗口和悬浮窗各自累加产生偏差。
 function applyLanShareState(payload) {
@@ -314,11 +672,17 @@ const petAction = computed(() => {
   if (!desktopPet.value) return ""
   const action = drag.active
     ? "walk"
-    : hovered.value
-      ? "salute"
-      : screenEdge.value === "left" || screenEdge.value === "right"
-        ? "peek"
-        : ""
+    : (chatSubmitting.value ? "think" : "") ||
+      assistantState.value.petAction ||
+      (["thinking", "replying"].includes(assistantState.value.status)
+        ? "think"
+        : "") ||
+      (assistantState.value.status === "working" ? "work_laptop" : "") ||
+      (hovered.value
+        ? "salute"
+        : screenEdge.value === "left" || screenEdge.value === "right"
+          ? "peek"
+          : "")
   return desktopPet.value.animations.some(
     (animation) => animation.id === action
   )
@@ -451,7 +815,8 @@ function formatCost(value) {
 
 // 原生窗口按中心扩缩；串行处理，避免快速进出时旧请求覆盖新状态。
 async function setExpanded(value) {
-  wantedExpanded = value && visibleTools.value.length > 0
+  wantedExpanded =
+    value && (visibleTools.value.length > 0 || desktopChatVisible.value)
   if (!windowVisible.value || drag.active || resizing || disposed) return
   resizing = true
   try {
@@ -510,7 +875,7 @@ function leavePanel() {
   clearTimeout(hoverTimer)
   hoverTimer = null
   // 给鼠标从中心经过透明间隔到工具节点留出时间。
-  if (windowVisible.value && !drag.active)
+  if (windowVisible.value && !drag.active && !desktopChatVisible.value)
     hoverTimer = setTimeout(() => {
       hoverTimer = null
       setExpanded(false)
@@ -617,6 +982,7 @@ function stopDrag(event) {
 // 复用窗口时清掉上次悬浮和拖动状态，显示位置由原生窗口一次性同步。
 function handleVisibilityChange(layout) {
   visibilitySequence += 1
+  closeDesktopChat()
   // 先停止交互，再恢复可见性，避免拖动结束时重新安排悬浮计时。
   windowVisible.value = false
   clearTimeout(hoverTimer)
@@ -687,8 +1053,19 @@ watch(cliTargets, () => {
     selectedPage.value = "home"
 })
 watch(visibleTools, () => {
-  if (!visibleTools.value.length) setExpanded(false)
+  if (!visibleTools.value.length && !desktopChatVisible.value)
+    setExpanded(false)
 })
+watch([assistantEnabled, desktopPet], () => {
+  if (!assistantEnabled.value || !desktopPet.value) closeDesktopChat()
+})
+watch(desktopReply, () =>
+  nextTick(() => {
+    if (desktopReplyElement.value)
+      desktopReplyElement.value.scrollTop =
+        desktopReplyElement.value.scrollHeight
+  })
+)
 // 初始化同步保存的屏幕位置和贴边状态，配置和布局就绪后才显示主节点。
 watch(
   () => props.ready,
@@ -767,20 +1144,57 @@ onBeforeUnmount(() => {
   disposed = true
   usageSequence += 1
   clearTimeout(hoverTimer)
+  clearTimeout(desktopReplyTimer)
   clearInterval(usageTimer)
   clearInterval(pageTimer)
   unsubscribeVisibility?.()
   unsubscribeLanShare?.()
+  unsubscribeAssistant?.()
   stopDrag()
 })
 
-onMounted(() => {
+onMounted(async () => {
   // 悬浮窗单独加载设备快传状态，主窗口隐藏时也能及时更新气泡。
   unsubscribeLanShare = lanShareApi.onStateChanged(applyLanShareState)
   lanShareApi
     .getState()
     .then(applyLanShareState)
     .catch(() => {})
+  try {
+    let updated = false
+    const unsubscribe = await assistantApi.onEvent((event) => {
+      if (disposed) return
+      if (event.type === "state") {
+        updated = true
+        assistantState.value = event.state
+        if (
+          (desktopRunId.value && event.state.runId === desktopRunId.value) ||
+          (chatWaiting.value &&
+            !desktopRunId.value &&
+            event.state.runId !== desktopLastRunId &&
+            event.state.threadId === desktopThreadId.value)
+        ) {
+          applyDesktopTask(event.state)
+        }
+      } else if (
+        event.type === "text-delta" &&
+        event.runId === desktopRunId.value &&
+        chatWaiting.value
+      ) {
+        desktopEventVersion += 1
+        desktopReply.value += event.text || ""
+      }
+    })
+    if (disposed) {
+      unsubscribe()
+      return
+    }
+    unsubscribeAssistant = unsubscribe
+    const snapshot = await assistantApi.getState()
+    if (!disposed && !updated) assistantState.value = snapshot
+  } catch {
+    // 助手尚未启动时不干扰悬浮窗既有功能。
+  }
 })
 </script>
 
@@ -792,6 +1206,364 @@ onMounted(() => {
   overflow: hidden;
   color: var(--color-text);
   user-select: none;
+
+  .quick-switch-chat {
+    position: absolute;
+    z-index: 2;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    font-size: 13px;
+    user-select: text;
+
+    .quick-switch-speech {
+      position: relative;
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      box-sizing: border-box;
+      min-width: 120px;
+      max-width: 100%;
+      min-height: 60px;
+      max-height: var(--chat-height);
+      padding: 16px 20px;
+      border: 1px solid var(--color-line);
+      border-radius: 22px;
+      background: var(--color-panel);
+      box-shadow: 0 5px 18px rgba(29, 71, 129, 0.12);
+      line-height: 1.8;
+      animation: quick-switch-speech-enter 180ms ease-out both;
+
+      &::before,
+      &::after {
+        position: absolute;
+        box-sizing: border-box;
+        background: var(--color-panel);
+        pointer-events: none;
+      }
+
+      &::before {
+        width: 14px;
+        height: 14px;
+        transform: rotate(45deg);
+        content: "";
+      }
+
+      .quick-switch-speech-text {
+        min-height: 0;
+        overflow: auto;
+        overflow-wrap: anywhere;
+        white-space: pre-wrap;
+        scrollbar-width: thin;
+
+        &.quick-switch-speech-text-streaming::after {
+          display: inline-block;
+          width: 3px;
+          height: 13px;
+          margin-left: 4px;
+          border-radius: 2px;
+          background: var(--color-primary);
+          vertical-align: -1px;
+          animation: quick-switch-thinking 1.2s ease-in-out infinite;
+          content: "";
+        }
+      }
+
+      .quick-switch-speech-error-text {
+        overflow: auto;
+        color: var(--color-danger);
+        overflow-wrap: anywhere;
+      }
+
+      .quick-switch-thought {
+        display: flex;
+        align-items: center;
+        gap: 4px;
+        color: var(--color-text-muted);
+
+        .quick-switch-thinking-dots {
+          display: inline-flex;
+          align-items: center;
+          gap: 3px;
+
+          .quick-switch-thinking-dot {
+            width: 3px;
+            height: 3px;
+            border-radius: 50%;
+            background: currentColor;
+            animation: quick-switch-thinking 1.2s ease-in-out infinite;
+
+            &:nth-child(2) {
+              animation-delay: 150ms;
+            }
+
+            &:nth-child(3) {
+              animation-delay: 300ms;
+            }
+          }
+        }
+      }
+
+      .quick-switch-speech-actions {
+        position: absolute;
+        top: -10px;
+        right: 8px;
+        display: flex;
+        gap: 4px;
+        opacity: 0;
+        pointer-events: none;
+        transition: opacity 120ms;
+
+        .quick-switch-speech-button {
+          display: flex;
+          width: 22px;
+          height: 22px;
+          align-items: center;
+          justify-content: center;
+          padding: 0;
+          border: 1px solid var(--color-line);
+          border-radius: 50%;
+          background: var(--color-panel);
+          color: var(--color-text-muted);
+          cursor: pointer;
+
+          &:hover,
+          &:focus-visible {
+            color: var(--color-primary);
+          }
+
+          &:disabled {
+            opacity: 0.45;
+            cursor: default;
+          }
+        }
+      }
+
+      &:hover,
+      &:focus-within {
+        .quick-switch-speech-actions {
+          opacity: 1;
+          pointer-events: auto;
+        }
+      }
+
+      &.quick-switch-speech-thinking {
+        border-radius: 30px;
+
+        &::before,
+        &::after {
+          border: 1px solid var(--color-line);
+          border-radius: 50%;
+          transform: none;
+          content: "";
+        }
+
+        &::before {
+          width: 10px;
+          height: 10px;
+        }
+
+        &::after {
+          width: 5px;
+          height: 5px;
+        }
+      }
+    }
+
+    &[data-side="right"] {
+      align-items: flex-start;
+
+      .quick-switch-speech {
+        &::before {
+          top: calc(var(--speech-tail-y) - 7px);
+          left: -7px;
+          border-bottom: 1px solid var(--color-line);
+          border-left: 1px solid var(--color-line);
+        }
+
+        &.quick-switch-speech-thinking {
+          &::before {
+            top: calc(var(--speech-tail-y) - 2px);
+            left: -15px;
+          }
+
+          &::after {
+            top: calc(var(--speech-tail-y) + 9px);
+            left: -25px;
+          }
+        }
+      }
+    }
+
+    &[data-side="left"] {
+      align-items: flex-end;
+
+      .quick-switch-speech {
+        &::before {
+          top: calc(var(--speech-tail-y) - 7px);
+          right: -7px;
+          border-top: 1px solid var(--color-line);
+          border-right: 1px solid var(--color-line);
+        }
+
+        &.quick-switch-speech-thinking {
+          &::before {
+            top: calc(var(--speech-tail-y) - 2px);
+            right: -15px;
+          }
+
+          &::after {
+            top: calc(var(--speech-tail-y) + 9px);
+            right: -25px;
+          }
+        }
+      }
+    }
+
+    &[data-side="top"] {
+      .quick-switch-speech {
+        &::before {
+          bottom: -7px;
+          left: calc(50% - 7px);
+          border-right: 1px solid var(--color-line);
+          border-bottom: 1px solid var(--color-line);
+        }
+
+        &.quick-switch-speech-thinking {
+          &::before {
+            bottom: -15px;
+            left: calc(50% + 2px);
+          }
+
+          &::after {
+            bottom: -25px;
+            left: calc(50% - 7px);
+          }
+        }
+      }
+    }
+
+    &[data-side="bottom"] {
+      .quick-switch-speech {
+        &::before {
+          top: -7px;
+          left: calc(50% - 7px);
+          border-top: 1px solid var(--color-line);
+          border-left: 1px solid var(--color-line);
+        }
+
+        &.quick-switch-speech-thinking {
+          &::before {
+            top: -15px;
+            left: calc(50% + 2px);
+          }
+
+          &::after {
+            top: -25px;
+            left: calc(50% - 7px);
+          }
+        }
+      }
+    }
+
+    .quick-switch-composer {
+      display: flex;
+      width: 100%;
+      max-height: var(--chat-height);
+      flex-direction: column;
+      gap: 8px;
+      box-sizing: border-box;
+      padding: 10px;
+      border: 1px solid var(--color-line);
+      border-radius: 16px;
+      background: var(--color-panel);
+      box-shadow: 0 5px 18px rgba(29, 71, 129, 0.12);
+      font-size: 12px;
+
+      &:focus-within {
+        border-color: color-mix(
+          in srgb,
+          var(--color-primary) 55%,
+          var(--color-line)
+        );
+      }
+
+      .quick-switch-chat-input {
+        flex: none;
+        box-sizing: border-box;
+        width: 100%;
+        height: 54px;
+        padding: 4px 6px;
+        resize: none;
+        border: 0;
+        outline: none;
+        background: transparent;
+        color: var(--color-text);
+        font: inherit;
+        line-height: 1.7;
+
+        &::placeholder {
+          color: var(--color-text-muted);
+        }
+      }
+
+      .quick-switch-chat-error {
+        min-height: 0;
+        overflow: auto;
+        color: var(--color-danger);
+        overflow-wrap: anywhere;
+        line-height: 1.7;
+
+        .quick-switch-chat-settings {
+          padding: 0 4px;
+          border: 0;
+          background: transparent;
+          color: var(--color-primary);
+          font: inherit;
+          cursor: pointer;
+        }
+      }
+
+      .quick-switch-composer-actions {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        flex: none;
+
+        .quick-switch-chat-hint {
+          flex: 1;
+          color: var(--color-text-muted);
+          font-size: 10px;
+        }
+
+        .quick-switch-chat-button,
+        .quick-switch-chat-send {
+          display: flex;
+          width: 26px;
+          height: 26px;
+          align-items: center;
+          justify-content: center;
+          flex: none;
+          padding: 0;
+          border: 0;
+          border-radius: 50%;
+          background: var(--color-panel-soft);
+          color: var(--color-text-muted);
+          cursor: pointer;
+
+          &:disabled {
+            opacity: 0.4;
+            cursor: default;
+          }
+        }
+
+        .quick-switch-chat-send {
+          background: var(--color-primary);
+          color: #fff;
+        }
+      }
+    }
+  }
 
   .quick-switch-connections {
     position: absolute;
@@ -1026,6 +1798,27 @@ onMounted(() => {
         outline-offset: -3px;
       }
     }
+    .quick-switch-assistant-bubble {
+      position: absolute;
+      bottom: -13px;
+      left: 0;
+      width: 88px;
+      padding: 3px 6px;
+      box-sizing: border-box;
+      overflow: hidden;
+      border: 1px solid var(--color-line);
+      border-radius: 8px;
+      background: var(--color-panel);
+      color: var(--color-text);
+      cursor: pointer;
+      font-size: 10px;
+      line-height: 14px;
+      white-space: nowrap;
+      text-overflow: ellipsis;
+      &:hover {
+        color: var(--color-primary);
+      }
+    }
     .quick-switch-main {
       display: flex;
       width: 100%;
@@ -1182,6 +1975,28 @@ onMounted(() => {
   to {
     opacity: 1;
     transform: translate(-50%, -50%) scale(1);
+  }
+}
+
+@keyframes quick-switch-speech-enter {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+@keyframes quick-switch-thinking {
+  0%,
+  70%,
+  100% {
+    opacity: 0.3;
+  }
+  35% {
+    opacity: 1;
   }
 }
 </style>

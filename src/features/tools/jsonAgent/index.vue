@@ -552,7 +552,7 @@ import {
   Wrench,
   X
 } from "lucide-vue-next"
-import { toolboxApi } from "@/api"
+import { assistantApi, toolboxApi } from "@/api"
 import { createMessage } from "@/utils/message"
 import JsonTreeNode from "./components/JsonTreeNode.vue"
 
@@ -1601,12 +1601,56 @@ async function runAgent() {
   }
 }
 
-onMounted(() => {
+let assistantDisposed = false
+let unsubscribeAssistantEditor
+const assistantRequests = new Set()
+
+// 事件和待处理快照共用认领协议，两个 JSON 窗口也只会执行一次写入。
+async function handleAssistantEditor(request) {
+  if (assistantDisposed || assistantRequests.has(request.id)) return
+  assistantRequests.add(request.id)
+  try {
+    const claimed = await assistantApi.editorClaim({ id: request.id, runId: request.runId })
+    if (!claimed || assistantDisposed) return
+    if (request.operation === "write") {
+      const parsed = JSON.parse(request.result)
+      if (typeof request.source === "string") sourceText.value = request.source
+      parsedJson.value = parsed
+      formattedJson.value = JSON.stringify(parsed, null, 2)
+      parseError.value = ""
+      expandRoot(parsed)
+      saveHistory()
+      await nextTick()
+      sourceInput.value?.focus()
+    }
+    await assistantApi.editorResult({
+      id: request.id,
+      result: { source: sourceText.value, result: formattedJson.value, error: parseError.value }
+    })
+  } catch (error) {
+    await assistantApi.editorResult({ id: request.id, error: error.message || String(error) }).catch(() => {})
+  } finally {
+    assistantRequests.delete(request.id)
+  }
+}
+
+onMounted(async () => {
   loadStoredHistory()
   window.addEventListener("resize", clampAgentPosition)
   window.addEventListener("keydown", handleGlobalKeydown)
+  try {
+    const unsubscribe = await assistantApi.onEditorRequest(handleAssistantEditor)
+    if (assistantDisposed) { unsubscribe(); return }
+    unsubscribeAssistantEditor = unsubscribe
+    const pending = await assistantApi.editorPending()
+    if (!assistantDisposed) pending.forEach(handleAssistantEditor)
+  } catch (error) {
+    if (!assistantDisposed) createMessage.error(error.message || String(error))
+  }
 })
 onBeforeUnmount(() => {
+  assistantDisposed = true
+  unsubscribeAssistantEditor?.()
   window.clearTimeout(copiedTimer)
   window.clearTimeout(historySaveTimer)
   window.removeEventListener("resize", clampAgentPosition)

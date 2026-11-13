@@ -18,12 +18,20 @@
       </span>
       <button
         v-if="!collapsed"
+        class="app-sidebar-assistant"
+        type="button"
+        title="打开应用助手"
+        aria-label="打开应用助手"
+        @click="$emit('open-assistant')"
+      >
+        <Bot :size="17" :stroke-width="1.9" />
+      </button>
+      <button
+        v-if="!collapsed"
         class="app-sidebar__theme-toggle"
         type="button"
         :title="themeMode === 'dark' ? '切换为亮色模式' : '切换为暗色模式'"
-        :aria-label="
-          themeMode === 'dark' ? '切换为亮色模式' : '切换为暗色模式'
-        "
+        :aria-label="themeMode === 'dark' ? '切换为亮色模式' : '切换为暗色模式'"
         @click="$emit('toggle-theme')"
       >
         <Sun v-if="themeMode === 'dark'" :size="17" :stroke-width="1.9" />
@@ -104,16 +112,15 @@
         </article>
       </div>
     </section>
-
   </aside>
 </template>
 
 <script setup>
-import { Moon, Sun } from 'lucide-vue-next'
-import { ElScrollbar } from 'element-plus'
-import 'element-plus/es/components/scrollbar/style/css'
-import AiIcon from '@/components/AiIcon.vue'
-import logoUrl from '@/assets/ai-manager-logo.png?url'
+import { Bot, Moon, Sun } from "lucide-vue-next"
+import { ElScrollbar } from "element-plus"
+import "element-plus/es/components/scrollbar/style/css"
+import AiIcon from "@/components/AiIcon.vue"
+import logoUrl from "@/assets/ai-manager-logo.png?url"
 
 defineProps({
   activeView: {
@@ -134,19 +141,25 @@ defineProps({
   },
   themeMode: {
     type: String,
-    default: 'light'
+    default: "light"
   }
 })
 
-defineEmits(['toggle', 'toggle-theme', 'select-view', 'title-click'])
+defineEmits([
+  "toggle",
+  "toggle-theme",
+  "select-view",
+  "title-click",
+  "open-assistant"
+])
 
 const colorMap = {
-  claude: '#c58f72',
-  codex: '#7d8aa3',
+  claude: "#c58f72",
+  codex: "#7d8aa3",
   // 当前版本暂不启用 Gemini 和 OpenCode。
   // gemini: '#9fb5d6',
   // ['open' + 'code']: '#aaa3c7',
-  default: '#a8b0bd'
+  default: "#a8b0bd"
 }
 </script>
 
@@ -227,9 +240,28 @@ const colorMap = {
     display: flex;
     flex: none;
     align-items: center;
-    gap: 12px;
+    gap: 8px;
     padding: 18px 18px 14px;
     border-bottom: 1px solid var(--color-line);
+    .app-sidebar-assistant {
+      display: flex;
+      flex: none;
+      align-items: center;
+      justify-content: center;
+      width: 26px;
+      height: 32px;
+      margin-left: auto;
+      padding: 0;
+      border: 0;
+      border-radius: 7px;
+      background: transparent;
+      color: var(--color-text-muted);
+      cursor: pointer;
+      &:hover {
+        color: var(--color-primary);
+        background: var(--color-primary-soft);
+      }
+    }
   }
 
   &__logo-button {
@@ -267,7 +299,7 @@ const colorMap = {
   }
 
   &:not(.app-sidebar--collapsed) &__theme-toggle {
-    margin-left: auto;
+    margin-left: -8px;
   }
 
   &__theme-toggle:hover {
@@ -295,8 +327,8 @@ const colorMap = {
       height: 100%;
       min-height: calc(
         var(--sidebar-nav-count) * var(--sidebar-nav-item-min-height) +
-        (var(--sidebar-nav-count) - 1) * var(--sidebar-nav-gap) +
-        var(--sidebar-nav-padding) * 2
+          (var(--sidebar-nav-count) - 1) * var(--sidebar-nav-gap) +
+          var(--sidebar-nav-padding) * 2
       );
       flex-direction: column;
       gap: var(--sidebar-nav-gap);
@@ -320,9 +352,9 @@ const colorMap = {
     cursor: pointer;
     text-align: left;
     transition:
-    transform 0.18s ease,
-    background-color 0.18s ease,
-    color 0.18s ease;
+      transform 0.18s ease,
+      background-color 0.18s ease,
+      color 0.18s ease;
   }
 
   &__nav-item:hover {
@@ -336,7 +368,7 @@ const colorMap = {
   }
 
   &__nav-item--active::before {
-    content: '';
+    content: "";
     position: absolute;
     left: -4px;
     top: 9px;
@@ -441,6 +473,5 @@ const colorMap = {
   &__cli-dot--offline {
     background: #9ca3af;
   }
-
 }
 </style>

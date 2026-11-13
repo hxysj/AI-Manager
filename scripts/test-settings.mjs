@@ -239,7 +239,12 @@ async function tick() {
   }
 }
 
-for (const name of ["DesktopPetList", "DesktopPetDetail", "SystemSettings"]) {
+for (const name of [
+  "DesktopPetList",
+  "DesktopPetDetail",
+  "SystemSettings",
+  "AssistantExtension"
+]) {
   const filename = `src/features/settings/components/${name}.vue`
   components.set(`@/${filename.slice(4)}`, await loadComponent(filename))
 }
@@ -682,6 +687,53 @@ assert.equal(translationReopened.state.modelOptions.length, 0)
 assert.match(translationReopened.state.localModelsError, /翻译模型读取失败/)
 translationReopened.unmount()
 assert.equal(modelListeners.size, 0, "翻译配置卸载时清理模型监听")
+
+// 助手开关与模型复用自动保存队列，失败恢复且不提交其他功能的草稿。
+props.assistantRequest = 1
+const assistantSettings = mount(Settings, props)
+await tick()
+assert.equal(assistantSettings.state.activeTab, "agents")
+const assistantSwitch = () =>
+  find(
+    assistantSettings.root,
+    (item) => item.props["aria-label"] === "启用应用助手"
+  )[0]
+assert.equal(assistantSwitch().props["aria-checked"], true)
+assistantSettings.state.draft.agents.translation.model = "未提交的翻译模型"
+let assistantRequestIndex = calls.length
+trigger(assistantSwitch(), "click")
+await tick()
+assert.deepEqual(calls[assistantRequestIndex].patch, {
+  agents: { assistant: { enabled: false } }
+})
+await finish(assistantRequestIndex)
+assert.equal(assistantSwitch().props["aria-checked"], false)
+assistantRequestIndex = calls.length
+trigger(assistantSwitch(), "click")
+await tick()
+await finish(assistantRequestIndex, "模拟助手设置保存失败")
+assert.equal(assistantSwitch().props["aria-checked"], false)
+assert.equal(
+  assistantSettings.state.draft.agents.translation.model,
+  "未提交的翻译模型"
+)
+assistantRequestIndex = calls.length
+const saveAssistant = assistantSettings.state.saveChanges({
+  agents: {
+    assistant: { targetId: "provider", model: "agent-model", protocol: "chat" }
+  }
+})
+await tick()
+assert.deepEqual(calls[assistantRequestIndex].patch, {
+  agents: {
+    assistant: { targetId: "provider", model: "agent-model", protocol: "chat" }
+  }
+})
+await finish(assistantRequestIndex)
+await saveAssistant
+assert.equal(server.agents.assistant.model, "agent-model")
+assert.equal(server.agents.assistant.enabled, false)
+assistantSettings.unmount()
 assert.deepEqual(runtimeErrors, [])
 console.log(
   "设置自动保存：字段隔离、连续修改、失败恢复、日志、桌宠及本地翻译多模型切换、语言范围、删除和刷新验证通过"

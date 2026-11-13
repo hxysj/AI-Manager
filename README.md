@@ -64,6 +64,15 @@ Monkey Thief 集中管理 Claude Code 与 Codex 的 Provider、账号、API Key�
 - 内置提示词库支持分类浏览、搜索、查看提示词与推荐模型，并将提示词填入工作台继续编辑。
 - 工具中心还提供 JSON 格式化与 Codex Agent 修复、文本和 JSON 差异对比、图片链接提取与导出、本机端口监测、Git 分支与 stash 归档，以及 Codex 宠物管理。宠物管理在检测到 Codex 后显示。
 
+### 应用助手（Mastra）
+
+- 点击侧栏顶部标题旁的助手图标，或在“工具中心 → 应用助手”打开完整会话窗口，在助手操作其他工具时继续交流。
+- 在“设置 → 功能扩展 → 应用助手”开启或关闭助手，并设置模型来源、模型和 API 协议。支持已有的 Codex / Claude Provider API 或 Codex 官方账号；默认按 Provider 类型选择 Responses / Anthropic Messages，Codex Provider 也可选择 OpenAI Chat。所选模型须支持工具调用。
+- 鼠标悬停桌宠时出现“聊一聊”，点击后在桌宠旁输入并接收流式回复。回复完成后 10 秒自动收起，发送下一条消息时立即清除上一条回复；完整对话历史仍保留。Enter 发送，Shift+Enter 换行，输入法选词不会误发送。
+- 支持查询应用配置、修改桌宠与部分应用设置、打开并聚焦工具窗口、读取和写入 JSON 编辑器、控制桌宠动作。执行进度和工具结果在对话中显示，任务可以停止。
+- 本地模型来源已预留，助手模型待添加。当前内置 OCR 与专用翻译模型不具备助手能力；后续添加通用模型时需配套接入推理适配器，目前此来源不能发送任务。
+- 运行环境需要 Node.js 22.13 或更高版本。启用后助手随应用启动预热，发送消息时才请求模型；关闭助手会停止后台进程。Mastra Memory / libSQL 将历史存放在配置数据目录的 `workspace/storage/assistant/assistant.db`，关闭对话窗口后任务继续执行。Provider 密钥由 Rust 后台注入，配置查询会过滤认证信息。
+
 ## 为什么需要这个项目
 
 Claude Code 与 Codex 都依赖本地配置文件和目录。Provider、认证、Skills、Prompt、Session 与用量数据分散在不同位置后，日常切换和维护很容易变成重复的手工操作。

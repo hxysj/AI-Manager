@@ -2,9 +2,9 @@ use crate::api::proxy::LlmTarget;
 use crate::core::{error::ManagerError, paths::AppPaths, translation_store};
 use bytes::Bytes;
 use futures_util::StreamExt;
-use http_body_util::{BodyExt, Full};
+use http_body_util::{combinators::UnsyncBoxBody, BodyExt, Full, StreamBody};
 use hyper::{
-    body::Incoming, server::conn::http1, service::service_fn, Request, Response, StatusCode,
+    body::{Frame, Incoming}, server::conn::http1, service::service_fn, Request, Response, StatusCode,
 };
 use hyper_util::rt::TokioIo;
 use serde_json::{json, Value};
@@ -35,6 +35,19 @@ impl LlmProxy {
         target: LlmTarget,
         translation_id: String,
     ) -> Result<Self, ManagerError> {
+        Self::start_mode(paths, target, translation_id, false).await
+    }
+
+    pub async fn start_assistant(paths: AppPaths, target: LlmTarget) -> Result<Self, ManagerError> {
+        Self::start_mode(paths, target, String::new(), true).await
+    }
+
+    async fn start_mode(
+        paths: AppPaths,
+        target: LlmTarget,
+        translation_id: String,
+        assistant: bool,
+    ) -> Result<Self, ManagerError> {
         let listener = TcpListener::bind("127.0.0.1:0").await?;
         let base_url = format!("http://{}/v1", listener.local_addr()?);
         let token = uuid::Uuid::new_v4().to_string();
@@ -45,6 +58,7 @@ impl LlmProxy {
             translation_id,
             token: token.clone(),
             records: records.clone(),
+            assistant,
         });
         let task = tokio::spawn(async move {
             let mut connections = JoinSet::new();
@@ -79,29 +93,36 @@ struct ProxyContext {
     translation_id: String,
     token: String,
     records: Arc<Mutex<Vec<Value>>>,
+    assistant: bool,
 }
 
-fn error_response(status: StatusCode, message: &str) -> Response<Full<Bytes>> {
+type ProxyBody = UnsyncBoxBody<Bytes, reqwest::Error>;
+
+fn error_response(status: StatusCode, message: &str) -> Response<ProxyBody> {
     Response::builder()
         .status(status)
         .header("content-type", "application/json")
         .body(Full::new(Bytes::from(
             json!({"error": {"message": message}}).to_string(),
-        )))
+        )).map_err(|error| match error {}).boxed_unsync())
         .unwrap()
 }
 
-async fn handle(request: Request<Incoming>, context: Arc<ProxyContext>) -> Response<Full<Bytes>> {
-    if request
-        .headers()
-        .get("authorization")
-        .and_then(|value| value.to_str().ok())
-        != Some(&format!("Bearer {}", context.token))
-    {
-        return error_response(StatusCode::UNAUTHORIZED, "翻译代理凭据无效");
+async fn handle(request: Request<Incoming>, context: Arc<ProxyContext>) -> Response<ProxyBody> {
+    let authorized = request.headers().get("authorization").and_then(|value| value.to_str().ok())
+        == Some(&format!("Bearer {}", context.token))
+        || (context.assistant && context.target.info["api"] == "messages"
+            && request.headers().get("x-api-key").and_then(|value| value.to_str().ok()) == Some(&context.token));
+    if !authorized {
+        return error_response(StatusCode::UNAUTHORIZED, "模型代理凭据无效");
     }
-    if request.method() != hyper::Method::POST || request.uri().path() != "/v1/responses" {
-        return error_response(StatusCode::NOT_FOUND, "翻译代理仅支持 POST /v1/responses");
+    let endpoint = match context.target.info["api"].as_str().filter(|_| context.assistant) {
+        Some("messages") => "/v1/messages",
+        Some("chat") => "/v1/chat/completions",
+        _ => "/v1/responses",
+    };
+    if request.method() != hyper::Method::POST || request.uri().path() != endpoint {
+        return error_response(StatusCode::NOT_FOUND, "模型代理请求路径无效");
     }
     let body = match http_body_util::Limited::new(request.into_body(), 2 * 1024 * 1024)
         .collect()
@@ -114,6 +135,52 @@ async fn handle(request: Request<Incoming>, context: Arc<ProxyContext>) -> Respo
         Ok(body) if body.is_object() => body,
         _ => return error_response(StatusCode::BAD_REQUEST, "翻译请求格式无效"),
     };
+    // 助手保留工具定义并逐块转发，不写入翻译记录；API Key 统计仍共用原有链路。
+    if context.assistant {
+        let mut tracking = context.target.tracking(&context.paths);
+        if let Some(tracking) = &mut tracking {
+            tracking.start();
+        }
+        let response = match context.target.send_agent(body).await {
+            Ok(response) => response,
+            Err(error) => {
+                if let Some(tracking) = &mut tracking {
+                    tracking.fail("network");
+                }
+                return error_response(StatusCode::BAD_GATEWAY, &error.to_string());
+            }
+        };
+        let status = response.status();
+        let content_type = response.headers().get("content-type")
+            .and_then(|value| value.to_str().ok()).unwrap_or("application/json").to_string();
+        if let Some(tracking) = &mut tracking {
+            tracking.response(status.as_u16(), content_type.contains("text/event-stream"));
+        }
+        let stream = futures_util::stream::unfold(
+            (response.bytes_stream(), tracking),
+            |(mut stream, mut tracking)| async move {
+                match stream.next().await {
+                    Some(chunk) => {
+                        if let Some(tracking) = &mut tracking {
+                            match &chunk {
+                                Ok(bytes) => tracking.observe(bytes),
+                                Err(_) => tracking.fail("network"),
+                            }
+                        }
+                        Some((chunk.map(Frame::data), (stream, tracking)))
+                    }
+                    None => {
+                        if let Some(tracking) = &mut tracking {
+                            tracking.finish();
+                        }
+                        None
+                    }
+                }
+            },
+        );
+        return Response::builder().status(status).header("content-type", content_type)
+            .body(StreamBody::new(stream).boxed_unsync()).unwrap();
+    }
     let started = std::time::Instant::now();
     let mut record = json!({
         "id": uuid::Uuid::new_v4().to_string(), "translationId": context.translation_id,
@@ -191,7 +258,7 @@ async fn handle(request: Request<Incoming>, context: Arc<ProxyContext>) -> Respo
         Ok((status, content_type)) => Response::builder()
             .status(status)
             .header("content-type", content_type)
-            .body(Full::new(Bytes::from(bytes)))
+            .body(Full::new(Bytes::from(bytes)).map_err(|error| match error {}).boxed_unsync())
             .unwrap(),
         Err(error) => error_response(StatusCode::BAD_GATEWAY, &error.to_string()),
     }

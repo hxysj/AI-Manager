@@ -525,6 +525,7 @@ pub fn show_main_panel(
 
 fn tool_window_title(tool_id: &str) -> Result<&'static str, ManagerError> {
     match tool_id {
+        "assistant" => Ok("应用助手"),
         "image-workbench" => Ok("图片工作台"),
         "json-agent" => Ok("JSON 智能解析"),
         "string-diff" => Ok("差异对比"),
@@ -563,7 +564,7 @@ pub fn open_tool_window(app: &tauri::AppHandle, tool_id: &str) -> Result<Value, 
         .remove(&label);
     let large = matches!(
         tool_id,
-        "image-workbench" | "git" | "network-quality" | "lan-share" | "multi-protocol-gateway"
+        "assistant" | "image-workbench" | "git" | "network-quality" | "lan-share" | "multi-protocol-gateway"
     );
     let builder = WebviewWindowBuilder::new(
         app,
@@ -630,7 +631,7 @@ pub fn mark_tool_window_ready(
 
 fn show_tool_window(app: &tauri::AppHandle, window: &WebviewWindow) -> Result<bool, ManagerError> {
     if let Some(main) = app.get_webview_window("main") {
-        if main
+        if window.label() != "tool-window-assistant" && main
             .is_visible()
             .map_err(|error| ManagerError::System(error.to_string()))?
             && !main
@@ -657,7 +658,7 @@ fn hide_tool_windows(app: &tauri::AppHandle) -> Result<(), ManagerError> {
     let labels = app
         .webview_windows()
         .keys()
-        .filter(|label| label.starts_with("tool-window-"))
+        .filter(|label| label.starts_with("tool-window-") && label.as_str() != "tool-window-assistant")
         .cloned()
         .collect::<Vec<_>>();
     for label in labels {

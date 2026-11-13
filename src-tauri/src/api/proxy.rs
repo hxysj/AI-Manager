@@ -120,7 +120,62 @@ pub(crate) async fn prepare_llm_target(
     target_id: &str,
     model: &str,
 ) -> Result<LlmTarget, ManagerError> {
-    let target = get_target(paths, "codex", &json!({}), target_id)?;
+    prepare_text_target(paths, cli_targets, target_id, model, "codex", "responses").await
+}
+
+// 助手按 Provider 类型选择协议，也允许显式使用 OpenAI Chat 接口。
+pub(crate) async fn prepare_assistant_target(
+    paths: &AppPaths,
+    cli_targets: &Value,
+    settings: &crate::core::settings::AssistantSettings,
+) -> Result<LlmTarget, ManagerError> {
+    if settings.target_id == "local" {
+        return Err(ManagerError::System("本地助手模型尚未提供；当前 OCR 和翻译模型不支持通用对话及工具调用".into()));
+    }
+    let provider = if is_account_target(&settings.target_id) {
+        None
+    } else {
+        Some(runtime_provider::find_provider(paths, &settings.target_id)?)
+    };
+    let cli = if provider.is_none() {
+        "codex".to_string()
+    } else {
+        string_value(provider.as_ref().and_then(|item| item.get("cli")))
+    };
+    if !matches!(cli.as_str(), "codex" | "claude") {
+        return Err(ManagerError::System("助手目前支持 Codex 和 Claude 类型的 Provider API".into()));
+    }
+    let api = match settings.protocol.as_str() {
+        "" | "auto" => {
+            // 完整 Chat 地址按其协议发送，避免把 Responses 请求体发到 Chat 接口。
+            let base_url = string_value(provider.as_ref().and_then(|item| item.get("baseUrl")));
+            if cli == "claude" {
+                "messages"
+            } else if base_url.trim().trim_end_matches('/').to_ascii_lowercase().ends_with("/chat/completions") {
+                "chat"
+            } else {
+                "responses"
+            }
+        },
+        "responses" | "chat" if cli == "codex" => settings.protocol.as_str(),
+        "messages" if cli == "claude" => "messages",
+        _ => return Err(ManagerError::System("所选 API 协议与 Provider 类型不匹配".into())),
+    };
+    if is_account_target(&settings.target_id) && api != "responses" {
+        return Err(ManagerError::System("Codex 官方账号仅支持 Responses 协议".into()));
+    }
+    prepare_text_target(paths, cli_targets, &settings.target_id, &settings.model, &cli, api).await
+}
+
+async fn prepare_text_target(
+    paths: &AppPaths,
+    cli_targets: &Value,
+    target_id: &str,
+    model: &str,
+    cli: &str,
+    api: &str,
+) -> Result<LlmTarget, ManagerError> {
+    let target = get_target(paths, cli, &json!({}), target_id)?;
     let mut headers = hyper::HeaderMap::new();
     headers.insert("content-type", HeaderValue::from_static("application/json"));
     if let Some(custom) = target
@@ -136,15 +191,18 @@ pub(crate) async fn prepare_llm_target(
             headers.insert(name, value);
         }
     }
+    if api == "messages" {
+        headers.insert("anthropic-version", HeaderValue::from_static("2023-06-01"));
+    }
     let (headers, tracking) =
-        build_forward_headers(paths, cli_targets, "codex", &headers, target_id).await?;
+        build_forward_headers(paths, cli_targets, cli, &headers, target_id).await?;
     let key_id = tracking
         .as_ref()
         .map(|item| item.key_id().to_string())
         .unwrap_or_default();
     let api_key = if tracking.is_some() {
         headers
-            .get("authorization")
+            .get(if cli == "claude" { "x-api-key" } else { "authorization" })
             .and_then(|item| item.to_str().ok())
             .unwrap_or("")
             .trim_start_matches("Bearer ")
@@ -153,9 +211,13 @@ pub(crate) async fn prepare_llm_target(
         String::new()
     };
     Ok(LlmTarget {
-        info: json!({"targetId": target_id, "providerName": target.name, "model": model}),
+        info: json!({"targetId": target_id, "providerName": target.name, "model": model, "api": api}),
         client: target_http_client(&target)?,
-        upstream_url: build_upstream_url(&target.base_url, "/responses", "")?,
+        upstream_url: if api == "messages" {
+            build_anthropic_upstream_url(&target.base_url, "/messages", "")?
+        } else {
+            build_upstream_url(&target.base_url, if api == "chat" { "/chat/completions" } else { "/responses" }, "")?
+        },
         headers,
         key_id,
         api_key,
@@ -177,10 +239,16 @@ impl LlmTarget {
 
     pub(crate) async fn send(&self, mut body: Value) -> Result<reqwest::Response, ManagerError> {
         // 翻译只生成文本；即使原文含指令，也不给 agent 暴露执行工具。
-        body["model"] = self.info["model"].clone();
         body["tools"] = json!([]);
         body["tool_choice"] = json!("none");
-        body["store"] = json!(false);
+        self.send_agent(body).await
+    }
+
+    pub(crate) async fn send_agent(&self, mut body: Value) -> Result<reqwest::Response, ManagerError> {
+        body["model"] = self.info["model"].clone();
+        if self.info["api"] != "messages" {
+            body["store"] = json!(false);
+        }
         // 在真正发送上游前统一限制，官方 CLI 和 LangChain 都不能提升翻译推理强度。
         if self.low_reasoning {
             body["reasoning"] = json!({ "effort": "low" });
@@ -2457,6 +2525,90 @@ mod tests {
         .unwrap();
         provider_store::write_provider_bundle(paths, &providers, &models, &profiles, &keys)
             .unwrap();
+    }
+
+    #[test]
+    fn assistant_proxy_preserves_tools_streams_and_uses_provider_auth() {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+            for (cli, protocol, api, base_path, endpoint) in [
+                ("codex", "responses", "responses", "/v1", "/v1/responses"),
+                ("codex", "chat", "chat", "/v1", "/v1/chat/completions"),
+                ("claude", "auto", "messages", "/v1", "/v1/messages"),
+                ("codex", "auto", "responses", "/v1", "/v1/responses"),
+                ("codex", "auto", "chat", "/v1/chat/completions/", "/v1/chat/completions"),
+            ] {
+                let (paths, root) = create_json_agent_paths();
+                let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+                write_json_agent_provider(&paths, &format!("http://{}{base_path}", listener.local_addr().unwrap()));
+                let mut providers = provider_store::read_providers(&paths).unwrap();
+                providers[0]["cli"] = json!(cli);
+                provider_store::write_provider_bundle(
+                    &paths, &providers, &provider_store::read_models(&paths).unwrap(),
+                    &provider_store::read_profiles(&paths).unwrap(), &provider_store::read_keys(&paths).unwrap(),
+                ).unwrap();
+                let (release, wait) = tokio::sync::oneshot::channel::<()>();
+                let wait = Arc::new(tokio::sync::Mutex::new(Some(wait)));
+                let server = tokio::spawn(async move {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    http1::Builder::new().serve_connection(TokioIo::new(stream), service_fn(
+                        move |request: hyper::Request<hyper::body::Incoming>| {
+                            let wait = wait.clone();
+                            async move {
+                                assert_eq!(request.uri().path(), endpoint);
+                                assert_eq!(
+                                    request.headers().get(if cli == "claude" { "x-api-key" } else { "authorization" }).unwrap(),
+                                    if cli == "claude" { "secret-test-key" } else { "Bearer secret-test-key" },
+                                );
+                                let bytes = request.into_body().collect().await.unwrap().to_bytes();
+                                let body: Value = serde_json::from_slice(&bytes).unwrap();
+                                assert_eq!(body["model"], "assistant-model");
+                                assert_eq!(body["tools"][0]["name"], "read_app_config");
+                                assert_eq!(body["tool_choice"], "auto");
+                                assert_eq!(body.get("store"), if cli == "claude" { None } else { Some(&json!(false)) });
+                                let wait = wait.lock().await.take().unwrap();
+                                let chunks = futures_util::stream::unfold((0, Some(wait)), |(step, wait)| async move {
+                                    match step {
+                                        0 => Some((Ok::<_, Infallible>(hyper::body::Frame::data(Bytes::from_static(b"data: first\n\n"))), (1, wait))),
+                                        1 => {
+                                            let _ = wait.unwrap().await;
+                                            Some((Ok(hyper::body::Frame::data(Bytes::from_static(b"data: last\n\n"))), (2, None)))
+                                        }
+                                        _ => None,
+                                    }
+                                });
+                                Ok::<_, Infallible>(Response::builder()
+                                    .header("content-type", "text/event-stream").header("connection", "close")
+                                    .body(http_body_util::StreamBody::new(chunks)).unwrap())
+                            }
+                        }
+                    )).await.unwrap();
+                });
+                let settings = crate::core::settings::AssistantSettings {
+                    enabled: true,
+                    target_id: "provider-active".into(), model: "assistant-model".into(), protocol: protocol.into(),
+                };
+                let target = super::prepare_assistant_target(&paths, &json!([]), &settings).await.unwrap();
+                assert_eq!(target.info["api"], api);
+                let proxy = crate::api::llm_proxy::LlmProxy::start_assistant(paths.clone(), target).await.unwrap();
+                let client = reqwest::Client::new();
+                let url = format!("{}{endpoint}", proxy.base_url.trim_end_matches("/v1"));
+                assert_eq!(client.post(&url).json(&json!({})).send().await.unwrap().status(), 401);
+                assert_eq!(client.post(format!("{}/wrong", proxy.base_url)).bearer_auth(&proxy.token)
+                    .json(&json!({})).send().await.unwrap().status(), 404);
+                let mut request = client.post(&url).json(&json!({
+                    "model": "ignored", "tools": [{"name": "read_app_config"}], "tool_choice": "auto",
+                }));
+                request = if cli == "claude" { request.header("x-api-key", &proxy.token) } else { request.bearer_auth(&proxy.token) };
+                let mut response = request.send().await.unwrap();
+                assert_eq!(response.chunk().await.unwrap().unwrap(), Bytes::from_static(b"data: first\n\n"));
+                release.send(()).unwrap();
+                assert_eq!(response.bytes().await.unwrap(), Bytes::from_static(b"data: last\n\n"));
+                server.await.unwrap();
+                assert!(proxy.records.lock().await.is_empty(), "助手不应写入翻译记录");
+                drop(proxy);
+                std::fs::remove_dir_all(&root).unwrap();
+            }
+        });
     }
 
     #[test]

@@ -58,7 +58,11 @@ async fn dispatch_api(
             .map_err(|error| error.to_string());
     }
     let record_call = app_logs::should_record_call(&channel, payload.as_ref());
-    let started = app_logs::begin_call(payload.as_ref(), window.label(), context);
+    // 助手正文保存在会话库，诊断日志只记录方法、耗时和错误。
+    let started = app_logs::begin_call(
+        if channel.starts_with("assistant:") { None } else { payload.as_ref() },
+        window.label(), context,
+    );
     let path = if record_call {
         let path = state.user_data_path().await;
         if let Err(error) = app_logs::record_start(&path, &channel, &started).await {
@@ -74,7 +78,12 @@ async fn dispatch_api(
             Some(path) => path,
             None => state.user_data_path().await,
         };
-        if let Err(error) = app_logs::record_finish(&path, &channel, &started, &result).await {
+        let assistant_result = channel.starts_with("assistant:").then(|| result.as_ref()
+            .map(|_| serde_json::json!({"completed": true}))
+            .map_err(|error| ManagerError::System(error.to_string())));
+        if let Err(error) = app_logs::record_finish(
+            &path, &channel, &started, assistant_result.as_ref().unwrap_or(&result),
+        ).await {
             eprintln!("[日志错误] 无法记录操作结束：{error}");
         }
     }
@@ -91,7 +100,7 @@ async fn dispatch_command(
     if let Some(action) = channel.strip_prefix("translation:desktop-") {
         return translation::desktop::dispatch(&app, action, payload);
     }
-    if channel.starts_with("translation:") || channel == "screenshot:ocr" {
+    if channel.starts_with("translation:") || channel.starts_with("assistant:") || channel == "screenshot:ocr" {
         return state.dispatch(app, channel, payload).await;
     }
     // 截图数据走独立服务，业务调用由入口记录脱敏摘要，不重建 Provider 托盘。
@@ -228,6 +237,11 @@ pub fn run() {
             let quick_switch_collapsed = manager_state.quick_switch_collapsed();
             // 预热窗口会立即调用 IPC，先注册共享状态。
             app.manage(AppState::new(manager_state));
+            // 助手随应用预热会话库，未发送消息时不会请求模型服务。
+            let assistant_handle = app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                assistant_handle.state::<AppState>().sync_assistant(assistant_handle.clone()).await;
+            });
             // 启动即清理，运行中每分钟复查；即使关闭记录或没有新操作也会删除过期文件。
             let log_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {
@@ -335,6 +349,9 @@ pub fn run() {
         .run(|app, event| {
             if matches!(event, tauri::RunEvent::ExitRequested { .. }) {
                 screenshot::flush(app);
+            }
+            if matches!(event, tauri::RunEvent::Exit) {
+                tauri::async_runtime::block_on(app.state::<AppState>().shutdown_assistant());
             }
         })
 }

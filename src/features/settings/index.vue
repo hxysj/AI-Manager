@@ -452,6 +452,15 @@
         class="settings-view__panel settings-agent-panel"
       >
         <div class="settings-agent-list">
+          <AssistantExtension
+            :model-value="draft.agents.assistant"
+            :providers="providers"
+            :codex-accounts="codexAccounts"
+            :runtime-models="runtimeModels"
+            :pending="pending"
+            :open-request="assistantRequest"
+            @save="saveChanges({ agents: { assistant: $event } })"
+          />
           <LocalModelExtension />
           <ScreenshotExtension
             :providers="providers"
@@ -600,12 +609,14 @@ import { desktopPets, getDesktopPet } from "@/constants/desktop-pets"
 import SystemSettings from "@/features/settings/components/SystemSettings.vue"
 import ScreenshotExtension from "@/features/settings/components/ScreenshotExtension.vue"
 import LocalModelExtension from "@/features/settings/components/LocalModelExtension.vue"
+import AssistantExtension from "@/features/settings/components/AssistantExtension.vue"
 import DesktopPetList from "@/features/settings/components/DesktopPetList.vue"
 import DesktopPetDetail from "@/features/settings/components/DesktopPetDetail.vue"
 import TranslationConfigModal from "./components/TranslationConfigModal.vue"
 import TranslationHistoryModal from "./components/TranslationHistoryModal.vue"
 
 const props = defineProps({
+  assistantRequest: { type: Number, default: 0 },
   appSettings: {
     type: Object,
     required: true
@@ -680,6 +691,7 @@ const cloudSyncItems = [
 const draft = reactive({
   desktop: { enabled: false, petId: "" },
   agents: {
+    assistant: { enabled: true, targetId: "", model: "", protocol: "auto" },
     translation: {
       enabled: false,
       targetId: "",
@@ -876,6 +888,13 @@ function syncDraft() {
     clipboardShortcut: "Ctrl+Alt+Shift+T",
     ...props.appSettings.agents?.translation
   }
+  nextDraft.agents.assistant = {
+    enabled: true,
+    targetId: "",
+    model: "",
+    protocol: "auto",
+    ...props.appSettings.agents?.assistant
+  }
   nextDraft.dataPath = props.appSettings.dataPath || ""
   nextDraft.cliConfigPaths.claude =
     props.appSettings.cliConfigPaths?.claude || ""
@@ -956,6 +975,14 @@ function toggleTranslationAgent() {
     agents: { translation: { enabled: draft.agents.translation.enabled } }
   })
 }
+
+watch(
+  () => props.assistantRequest,
+  (value) => {
+    if (value) activeTab.value = "agents"
+  },
+  { immediate: true }
+)
 
 function saveTranslationChanges(changes) {
   saveChanges({ agents: { translation: changes } })

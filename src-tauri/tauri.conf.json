@@ -33,7 +33,8 @@
       "../assets/image-prompts/gpt-image-2-prompts.json": "assets/image-prompts/gpt-image-2-prompts.json",
       "../src/assets/ai-manager-logo.png": "assets/ai-manager-logo.png",
       "../build/icon.png": "assets/icon.png",
-      "node/translation-agent.cjs": "node/translation-agent.cjs"
+      "node/translation-agent.cjs": "node/translation-agent.cjs",
+      "node/assistant": "node/assistant"
     },
     "windows": {
       "nsis": {
