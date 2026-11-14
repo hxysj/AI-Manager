@@ -167,18 +167,6 @@
         </nav>
       </template>
       <button
-        v-if="
-          desktopPet && hovered && !chatOpen && !desktopBusy && assistantEnabled
-        "
-        class="quick-switch-assistant-bubble"
-        type="button"
-        title="和桌宠聊一聊"
-        @pointerdown.stop
-        @click.stop="openDesktopChat"
-      >
-        聊一聊
-      </button>
-      <button
         v-if="lanShareUnreadCount"
         class="quick-switch-unread-badge"
         :class="{
@@ -199,11 +187,14 @@
       :style="desktopChatLayout.style"
       :data-side="desktopChatLayout.side"
       aria-label="桌宠对话"
+      @pointerenter="pauseDesktopReply"
+      @pointerleave="resumeDesktopReply"
+      @focusin="pauseDesktopReply"
+      @focusout="resumeDesktopReply"
       @pointerdown.stop
       @click.stop
     >
       <div
-        v-if="!chatOpen"
         class="quick-switch-speech"
         :class="{
           'quick-switch-speech-thinking': desktopThinking
@@ -219,14 +210,13 @@
             <i class="quick-switch-thinking-dot"></i>
           </span>
         </span>
-        <div
+        <MarkdownContent
           v-if="desktopReply"
           ref="desktopReplyElement"
           class="quick-switch-speech-text"
           :class="{ 'quick-switch-speech-text-streaming': desktopBusy }"
-        >
-          {{ desktopReply }}
-        </div>
+          :text="desktopReply"
+        />
         <span
           v-if="desktopChatError"
           class="quick-switch-speech-error-text"
@@ -257,57 +247,6 @@
           </button>
         </div>
       </div>
-      <div v-else class="quick-switch-composer">
-        <textarea
-          ref="chatInput"
-          v-model="chatDraft"
-          class="quick-switch-chat-input"
-          aria-label="给桌宠发消息"
-          placeholder="想和我说些什么？"
-          rows="2"
-          maxlength="30000"
-          :disabled="!assistantEnabled"
-          @keydown="handleChatKeydown"
-        ></textarea>
-        <div
-          v-if="desktopChatError"
-          class="quick-switch-chat-error"
-          role="alert"
-        >
-          {{ desktopChatError }}
-          <button
-            class="quick-switch-chat-settings"
-            type="button"
-            @click="openAssistantSettings"
-          >
-            设置模型
-          </button>
-        </div>
-        <div class="quick-switch-composer-actions">
-          <span class="quick-switch-chat-hint">
-            Enter 发送 · Shift+Enter 换行
-          </span>
-          <button
-            class="quick-switch-chat-button"
-            type="button"
-            aria-label="关闭桌宠对话"
-            title="收起输入框"
-            @click="closeDesktopChat"
-          >
-            <X :size="14" />
-          </button>
-          <button
-            class="quick-switch-chat-send"
-            type="button"
-            aria-label="发送消息"
-            title="发送"
-            :disabled="!canSendDesktopChat"
-            @click="sendDesktopChat"
-          >
-            <ArrowUp :size="16" />
-          </button>
-        </div>
-      </div>
     </aside>
   </section>
 </template>
@@ -322,10 +261,11 @@ import {
   ref,
   watch
 } from "vue"
-import { ArrowUp, Square, X } from "lucide-vue-next"
+import { Square, X } from "lucide-vue-next"
 import { appApi, assistantApi, lanShareApi, usageApi } from "@/api"
 import AiIcon from "@/components/AiIcon.vue"
 import DesktopPet from "@/components/DesktopPet.vue"
+import MarkdownContent from "@/components/MarkdownContent.vue"
 import { getDesktopPet } from "@/constants/desktop-pets"
 import logoUrl from "@/assets/ai-manager-logo.png?url"
 import { getToolItems } from "@/features/tools/constant"
@@ -352,21 +292,17 @@ let unsubscribeAssistant
 const assistantEnabled = computed(
   () => props.state.appSettings?.agents?.assistant?.enabled !== false
 )
-const chatOpen = ref(false)
-const chatDraft = ref("")
-const chatInput = ref(null)
 const desktopReplyElement = ref(null)
-const desktopThreadId = ref("")
 const desktopRunId = ref("")
 const desktopReply = ref("")
 const desktopChatError = ref("")
-const chatSubmitting = ref(false)
 const chatWaiting = ref(false)
 let desktopReplyTimer = null
-let desktopEventVersion = 0
-let desktopChatSequence = 0
+let assistantStateVersion = 0
 let desktopLastRunId = ""
-const desktopBusy = computed(() => chatSubmitting.value || chatWaiting.value)
+let desktopReplyPaused = false
+let desktopTimerVersion = 0
+const desktopBusy = computed(() => chatWaiting.value)
 const desktopThinking = computed(
   () => desktopBusy.value && !desktopReply.value && !desktopChatError.value
 )
@@ -381,20 +317,8 @@ const desktopChatVisible = computed(() =>
   Boolean(
     desktopPet.value &&
     assistantEnabled.value &&
-    (chatOpen.value ||
-      desktopReply.value ||
-      desktopChatError.value ||
-      desktopBusy.value)
+    (desktopReply.value || desktopChatError.value || desktopBusy.value)
   )
-)
-const canSendDesktopChat = computed(
-  () =>
-    assistantEnabled.value &&
-    chatDraft.value.trim() &&
-    !desktopBusy.value &&
-    !["thinking", "working", "replying", "cancelling"].includes(
-      assistantState.value.status
-    )
 )
 // 对话窗口独立保留，主面板切换工具时仍能继续交流。
 function openAssistant() {
@@ -403,19 +327,22 @@ function openAssistant() {
   })
 }
 
-// 气泡朝向桌宠；靠近下边缘时向上生长，长回复也不会被窗口裁切。
+// 侧边气泡抬到头部斜上方；顶部空间不足时留在屏幕内，尾巴仍指向头部。
 const desktopChatLayout = computed(() => {
   const { x, y } = centerPosition.value
-  const width = 320
+  // 气泡宽度按内容收缩，最大宽度受桌宠所在一侧的可用空间限制。
+  let width = 440
   let left = Math.max(12, Math.min(548 - width, x - width / 2))
   let top
   let bottom
-  let height = 240
+  let height = 280
   let side
-  if (x + 68 + width <= 548) {
+  if (548 - x - 68 >= 320) {
+    width = Math.min(width, 548 - x - 68)
     side = "right"
     left = x + 68
-  } else if (x - 68 - width >= 12) {
+  } else if (x - 68 - 12 >= 320) {
+    width = Math.min(width, x - 68 - 12)
     side = "left"
     left = x - 68 - width
   } else if (y >= 280) {
@@ -428,8 +355,10 @@ const desktopChatLayout = computed(() => {
     top = y + 68
   }
   if (side === "left" || side === "right") {
-    if (y < 280) top = Math.max(12, y - 30)
-    else bottom = Math.max(12, 560 - y - 30)
+    if (y >= 104) {
+      bottom = 560 - y + 32
+      height = Math.min(height, y - 44)
+    } else top = 12
   }
   return {
     side,
@@ -440,47 +369,74 @@ const desktopChatLayout = computed(() => {
       width: `${width}px`,
       maxHeight: `${height}px`,
       "--chat-height": `${height}px`,
-      "--speech-tail-y": y < 280 ? "30px" : "calc(100% - 30px)"
+      "--speech-tail-y":
+        y >= 104 ? "calc(100% - 14px)" : `${Math.max(18, y - 40)}px`
     }
   }
 })
 
-async function openDesktopChat() {
-  if (!assistantEnabled.value) return
-  clearTimeout(hoverTimer)
-  chatOpen.value = true
-  await setExpanded(true)
-  await nextTick()
-  chatInput.value?.focus()
+let desktopReplyPointer = false
+let desktopReplyFocused = false
+function pauseDesktopReply(event) {
+  if (event?.type === "focusin") desktopReplyFocused = true
+  else desktopReplyPointer = true
+  desktopReplyPaused = true
+  desktopTimerVersion += 1
+  clearTimeout(desktopReplyTimer)
+  desktopReplyTimer = null
+}
+
+function resumeDesktopReply(event) {
+  if (
+    event?.type === "focusout" &&
+    event.currentTarget?.contains(event.relatedTarget)
+  )
+    return
+  if (event?.type === "focusout") desktopReplyFocused = false
+  else desktopReplyPointer = false
+  desktopReplyPaused = desktopReplyPointer || desktopReplyFocused
+  if (!desktopReplyPaused && !desktopBusy.value && desktopChatVisible.value)
+    startDesktopReplyTimer()
+}
+
+// 计时只收起气泡；移出后重新计满十秒，过期回调不能清除新回复。
+function startDesktopReplyTimer(delay = 10000) {
+  const version = ++desktopTimerVersion
+  clearTimeout(desktopReplyTimer)
+  if (desktopReplyPaused) return
+  const runId = desktopRunId.value
+  desktopReplyTimer = window.setTimeout(() => {
+    if (
+      disposed ||
+      version !== desktopTimerVersion ||
+      desktopRunId.value !== runId
+    )
+      return
+    desktopReplyTimer = null
+    desktopReply.value = ""
+    desktopChatError.value = ""
+    desktopRunId.value = ""
+    if (!hovered.value) setExpanded(false)
+  }, delay)
 }
 
 function closeDesktopChat() {
-  desktopChatSequence += 1
   clearTimeout(hoverTimer)
   hoverTimer = null
   clearTimeout(desktopReplyTimer)
   desktopReplyTimer = null
-  chatOpen.value = false
+  desktopTimerVersion += 1
+  desktopReplyPaused = false
+  desktopReplyPointer = false
+  desktopReplyFocused = false
   desktopReply.value = ""
   desktopChatError.value = ""
-  // 关闭展示不取消后台任务，迟到的事件也不能重新弹出气泡。
   desktopRunId.value = ""
-  chatSubmitting.value = false
   chatWaiting.value = false
   setExpanded(false)
 }
 
-async function openAssistantSettings() {
-  try {
-    await appApi.showMainPanel({ toolId: "assistant-settings" })
-  } catch (error) {
-    desktopChatError.value = error.message || String(error)
-  }
-}
-
 function applyDesktopTask(snapshot) {
-  desktopEventVersion += 1
-  chatSubmitting.value = false
   desktopRunId.value = snapshot.runId
   desktopLastRunId = snapshot.runId
   desktopReply.value = snapshot.text || ""
@@ -493,71 +449,37 @@ function applyDesktopTask(snapshot) {
   if (!finished) return
   desktopChatError.value =
     snapshot.error || (snapshot.status === "cancelled" ? "已停止回复" : "")
-  clearTimeout(desktopReplyTimer)
-  const runId = snapshot.runId
-  desktopReplyTimer = window.setTimeout(() => {
-    if (disposed || desktopRunId.value !== runId) return
-    desktopReplyTimer = null
-    desktopReply.value = ""
-    desktopChatError.value = ""
-    desktopRunId.value = ""
-    if (!chatOpen.value && !hovered.value) setExpanded(false)
-  }, 10000)
+  startDesktopReplyTimer(
+    snapshot.finishedAt
+      ? Math.max(0, snapshot.finishedAt + 10000 - Date.now())
+      : 10000
+  )
 }
 
-async function sendDesktopChat() {
-  if (!canSendDesktopChat.value) return
-  clearTimeout(desktopReplyTimer)
-  desktopReplyTimer = null
-  desktopReply.value = ""
-  desktopChatError.value = ""
-  desktopRunId.value = ""
-  const settings = props.state.appSettings?.agents?.assistant || {}
-  if (settings.targetId === "local" || !settings.targetId || !settings.model) {
-    desktopChatError.value =
-      settings.targetId === "local"
-        ? "本地助手模型待添加，请先在设置中选择 Provider 模型。"
-        : "请先在设置 → 功能扩展中选择助手模型。"
+function applyAssistantState(snapshot) {
+  assistantState.value = snapshot
+  const current = desktopRunId.value && snapshot.runId === desktopRunId.value
+  const fresh =
+    snapshot.surface === "desktop" &&
+    snapshot.replyAtPet &&
+    snapshot.runId !== desktopLastRunId &&
+    windowVisible.value &&
+    (["thinking", "working", "replying", "cancelling"].includes(
+      snapshot.status
+    ) ||
+      snapshot.finishedAt > Date.now() - 10000)
+  if (!assistantEnabled.value || !desktopPet.value || (!current && !fresh))
     return
-  }
-  const message = chatDraft.value.trim()
-  const sequence = ++desktopChatSequence
-  chatSubmitting.value = true
-  chatOpen.value = false
-  chatDraft.value = ""
-  try {
-    if (!desktopThreadId.value) {
-      const thread = await assistantApi.createThread()
-      if (disposed || sequence !== desktopChatSequence) return
-      desktopThreadId.value = thread.id
-    }
-    if (disposed || sequence !== desktopChatSequence) return
+  if (!current) {
+    clearTimeout(desktopReplyTimer)
+    desktopReplyTimer = null
+    desktopTimerVersion += 1
+    desktopReply.value = ""
+    desktopChatError.value = ""
     chatWaiting.value = true
-    const version = desktopEventVersion
-    const snapshot = await assistantApi.send({
-      threadId: desktopThreadId.value,
-      message
-    })
-    if (
-      disposed ||
-      sequence !== desktopChatSequence ||
-      (!chatWaiting.value && !desktopRunId.value)
-    )
-      return
-    // 流式事件可能早于发送回包，保留已经收到的回复和完成状态。
-    if (version === desktopEventVersion) applyDesktopTask(snapshot)
-  } catch (error) {
-    if (!disposed && sequence === desktopChatSequence) {
-      chatWaiting.value = false
-      desktopChatError.value = error.message || String(error)
-      chatDraft.value = message
-      chatOpen.value = true
-      await nextTick()
-      chatInput.value?.focus()
-    }
-  } finally {
-    if (sequence === desktopChatSequence) chatSubmitting.value = false
   }
+  applyDesktopTask(snapshot)
+  if (desktopChatVisible.value) setExpanded(true)
 }
 
 async function stopDesktopChat() {
@@ -566,13 +488,6 @@ async function stopDesktopChat() {
     await assistantApi.cancel(desktopRunId.value)
   } catch (error) {
     desktopChatError.value = error.message || String(error)
-  }
-}
-
-function handleChatKeydown(event) {
-  if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
-    event.preventDefault()
-    sendDesktopChat()
   }
 }
 
@@ -672,8 +587,7 @@ const petAction = computed(() => {
   if (!desktopPet.value) return ""
   const action = drag.active
     ? "walk"
-    : (chatSubmitting.value ? "think" : "") ||
-      assistantState.value.petAction ||
+    : assistantState.value.petAction ||
       (["thinking", "replying"].includes(assistantState.value.status)
         ? "think"
         : "") ||
@@ -1059,11 +973,22 @@ watch(visibleTools, () => {
 watch([assistantEnabled, desktopPet], () => {
   if (!assistantEnabled.value || !desktopPet.value) closeDesktopChat()
 })
+watch(windowVisible, async (visible) => {
+  if (!visible) return
+  const version = assistantStateVersion
+  try {
+    const snapshot = await assistantApi.getState()
+    if (!disposed && version === assistantStateVersion && windowVisible.value)
+      applyAssistantState(snapshot)
+  } catch {
+    // 预热中的窗口等待后续助手事件，不阻塞桌宠。
+  }
+})
 watch(desktopReply, () =>
   nextTick(() => {
     if (desktopReplyElement.value)
-      desktopReplyElement.value.scrollTop =
-        desktopReplyElement.value.scrollHeight
+      desktopReplyElement.value.$el.scrollTop =
+        desktopReplyElement.value.$el.scrollHeight
   })
 )
 // 初始化同步保存的屏幕位置和贴边状态，配置和布局就绪后才显示主节点。
@@ -1166,22 +1091,13 @@ onMounted(async () => {
       if (disposed) return
       if (event.type === "state") {
         updated = true
-        assistantState.value = event.state
-        if (
-          (desktopRunId.value && event.state.runId === desktopRunId.value) ||
-          (chatWaiting.value &&
-            !desktopRunId.value &&
-            event.state.runId !== desktopLastRunId &&
-            event.state.threadId === desktopThreadId.value)
-        ) {
-          applyDesktopTask(event.state)
-        }
+        assistantStateVersion += 1
+        applyAssistantState(event.state)
       } else if (
         event.type === "text-delta" &&
         event.runId === desktopRunId.value &&
         chatWaiting.value
       ) {
-        desktopEventVersion += 1
         desktopReply.value += event.text || ""
       }
     })
@@ -1191,7 +1107,7 @@ onMounted(async () => {
     }
     unsubscribeAssistant = unsubscribe
     const snapshot = await assistantApi.getState()
-    if (!disposed && !updated) assistantState.value = snapshot
+    if (!disposed && !updated) applyAssistantState(snapshot)
   } catch {
     // 助手尚未启动时不干扰悬浮窗既有功能。
   }
@@ -1213,7 +1129,7 @@ onMounted(async () => {
     display: flex;
     flex-direction: column;
     align-items: center;
-    font-size: 13px;
+    font-size: var(--font-size-sm);
     user-select: text;
 
     .quick-switch-speech {
@@ -1222,13 +1138,14 @@ onMounted(async () => {
       flex-direction: column;
       gap: 6px;
       box-sizing: border-box;
-      min-width: 120px;
+      width: max-content;
+      min-width: 200px;
       max-width: 100%;
       min-height: 60px;
       max-height: var(--chat-height);
-      padding: 16px 20px;
+      padding: 12px 16px;
       border: 1px solid var(--color-line);
-      border-radius: 22px;
+      border-radius: 16px;
       background: var(--color-panel);
       box-shadow: 0 5px 18px rgba(29, 71, 129, 0.12);
       line-height: 1.8;
@@ -1253,7 +1170,7 @@ onMounted(async () => {
         min-height: 0;
         overflow: auto;
         overflow-wrap: anywhere;
-        white-space: pre-wrap;
+        white-space: normal;
         scrollbar-width: thin;
 
         &.quick-switch-speech-text-streaming::after {
@@ -1462,104 +1379,6 @@ onMounted(async () => {
             top: -25px;
             left: calc(50% - 7px);
           }
-        }
-      }
-    }
-
-    .quick-switch-composer {
-      display: flex;
-      width: 100%;
-      max-height: var(--chat-height);
-      flex-direction: column;
-      gap: 8px;
-      box-sizing: border-box;
-      padding: 10px;
-      border: 1px solid var(--color-line);
-      border-radius: 16px;
-      background: var(--color-panel);
-      box-shadow: 0 5px 18px rgba(29, 71, 129, 0.12);
-      font-size: 12px;
-
-      &:focus-within {
-        border-color: color-mix(
-          in srgb,
-          var(--color-primary) 55%,
-          var(--color-line)
-        );
-      }
-
-      .quick-switch-chat-input {
-        flex: none;
-        box-sizing: border-box;
-        width: 100%;
-        height: 54px;
-        padding: 4px 6px;
-        resize: none;
-        border: 0;
-        outline: none;
-        background: transparent;
-        color: var(--color-text);
-        font: inherit;
-        line-height: 1.7;
-
-        &::placeholder {
-          color: var(--color-text-muted);
-        }
-      }
-
-      .quick-switch-chat-error {
-        min-height: 0;
-        overflow: auto;
-        color: var(--color-danger);
-        overflow-wrap: anywhere;
-        line-height: 1.7;
-
-        .quick-switch-chat-settings {
-          padding: 0 4px;
-          border: 0;
-          background: transparent;
-          color: var(--color-primary);
-          font: inherit;
-          cursor: pointer;
-        }
-      }
-
-      .quick-switch-composer-actions {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        flex: none;
-
-        .quick-switch-chat-hint {
-          flex: 1;
-          color: var(--color-text-muted);
-          font-size: 10px;
-        }
-
-        .quick-switch-chat-button,
-        .quick-switch-chat-send {
-          display: flex;
-          width: 26px;
-          height: 26px;
-          align-items: center;
-          justify-content: center;
-          flex: none;
-          padding: 0;
-          border: 0;
-          border-radius: 50%;
-          background: var(--color-panel-soft);
-          color: var(--color-text-muted);
-          cursor: pointer;
-
-          &:disabled {
-            opacity: 0.4;
-            cursor: default;
-          }
-        }
-
-        .quick-switch-chat-send {
-          background: var(--color-primary);
-          color: #fff;
         }
       }
     }
@@ -1796,27 +1615,6 @@ onMounted(async () => {
       &:focus-visible {
         outline: 1px solid #448bea;
         outline-offset: -3px;
-      }
-    }
-    .quick-switch-assistant-bubble {
-      position: absolute;
-      bottom: -13px;
-      left: 0;
-      width: 88px;
-      padding: 3px 6px;
-      box-sizing: border-box;
-      overflow: hidden;
-      border: 1px solid var(--color-line);
-      border-radius: 8px;
-      background: var(--color-panel);
-      color: var(--color-text);
-      cursor: pointer;
-      font-size: 10px;
-      line-height: 14px;
-      white-space: nowrap;
-      text-overflow: ellipsis;
-      &:hover {
-        color: var(--color-primary);
       }
     }
     .quick-switch-main {

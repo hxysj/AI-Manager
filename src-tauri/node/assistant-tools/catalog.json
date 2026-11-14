@@ -1,0 +1,62 @@
+[
+  {
+    "id": "read_app_config",
+    "name": "读取应用配置",
+    "description": "按模块读取应用设置、Provider、运行时和规则，认证信息会被过滤。",
+    "module": "配置"
+  },
+  {
+    "id": "update_app_settings",
+    "name": "修改应用设置",
+    "description": "按用户要求更新允许修改的应用设置。",
+    "module": "配置"
+  },
+  {
+    "id": "open_app_window",
+    "name": "打开和聚焦窗口",
+    "description": "打开主面板或指定工具。",
+    "module": "窗口"
+  },
+  {
+    "id": "set_pet_action",
+    "name": "控制桌宠",
+    "description": "切换动作和气泡内容。",
+    "module": "桌宠"
+  },
+  {
+    "id": "read_json_editor",
+    "name": "读取 JSON 编辑器",
+    "description": "读取原文、格式化结果与校验信息。",
+    "module": "JSON"
+  },
+  {
+    "id": "write_json_editor",
+    "name": "写入 JSON 编辑器",
+    "description": "写入合法 JSON 并等待编辑器确认。",
+    "module": "JSON"
+  },
+  {
+    "id": "read_software_skills",
+    "name": "读取软件 Skills",
+    "description": "查看软件技能配置，按需读取 SKILL.md 正文。",
+    "module": "Skills"
+  },
+  {
+    "id": "read_assistant_skills",
+    "name": "读取助手 Skills",
+    "description": "按需加载助手独立启用的技能正文。",
+    "module": "Skills"
+  },
+  {
+    "id": "read_conversation_history",
+    "name": "回读会话原文",
+    "description": "读取当前会话的原始消息和工具结果。",
+    "module": "记忆"
+  },
+  {
+    "id": "update_public_memory",
+    "name": "更新公共记忆",
+    "description": "用户明确要求记住或忘记时更新公共记忆。",
+    "module": "记忆"
+  }
+]

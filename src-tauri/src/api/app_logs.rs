@@ -130,7 +130,7 @@ pub fn begin_call(payload: Option<&Value>, window: &str, context: Option<Value>)
 // 高频窗口操作只在失败时落盘，识别、翻译、设置等业务调用保留完整调用链。
 pub fn should_record_call(channel: &str, payload: Option<&Value>) -> bool {
     if channel.starts_with("assistant:") {
-        return matches!(channel, "assistant:send" | "assistant:cancel" | "assistant:delete-thread");
+        return matches!(channel, "assistant:send" | "assistant:desktop-send" | "assistant:cancel" | "assistant:delete-thread");
     }
     if channel == "settings:save"
         && payload.is_some_and(|value| value["system"].get("logEnabled").is_some())

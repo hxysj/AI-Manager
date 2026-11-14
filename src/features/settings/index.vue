@@ -691,7 +691,13 @@ const cloudSyncItems = [
 const draft = reactive({
   desktop: { enabled: false, petId: "" },
   agents: {
-    assistant: { enabled: true, targetId: "", model: "", protocol: "auto" },
+    assistant: {
+      enabled: true,
+      targetId: "",
+      model: "",
+      protocol: "auto",
+      shortcut: "Ctrl+Alt+Space"
+    },
     translation: {
       enabled: false,
       targetId: "",
@@ -893,6 +899,7 @@ function syncDraft() {
     targetId: "",
     model: "",
     protocol: "auto",
+    shortcut: "Ctrl+Alt+Space",
     ...props.appSettings.agents?.assistant
   }
   nextDraft.dataPath = props.appSettings.dataPath || ""

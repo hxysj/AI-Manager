@@ -31,7 +31,7 @@
     </section>
 
     <section v-else class="tools-view-detail-page">
-      <header v-if="activeTool !== 'assistant'" class="tools-view-detail-head">
+      <header class="tools-view-detail-head">
         <button
           v-if="!standalone"
           class="tools-view-back"
@@ -214,16 +214,8 @@
         </button>
       </header>
 
-      <ApplicationAssistant
-        v-if="activeTool === 'assistant'"
-        :providers="providers"
-        :codex-accounts="codexAccounts"
-        :runtime-models="runtimeModels"
-        :standalone="standalone"
-        @back="closeTool"
-      />
       <GitToolView
-        v-else-if="activeTool === 'git'"
+        v-if="activeTool === 'git'"
         :repos="repos"
         @add-repo="$emit('add-repo')"
         @status-change="gitToolStatus = $event"
@@ -294,11 +286,6 @@ import StringDiff from "@/features/tools/stringDiff/index.vue"
 
 const JsonAgentTool = defineAsyncComponent(
   () => import("@/features/tools/jsonAgent/index.vue")
-)
-
-// 助手依赖在后台运行，前端仅按需加载会话界面。
-const ApplicationAssistant = defineAsyncComponent(
-  () => import("@/features/tools/assistant/index.vue")
 )
 
 // 网络诊断包含多组明细表，进入工具后再加载页面代码。

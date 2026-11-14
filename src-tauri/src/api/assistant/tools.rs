@@ -1,8 +1,19 @@
-use super::{AssistantService, EditorRequest};
+use super::AssistantService;
 use crate::core::{error::ManagerError, state::AppState};
 use serde_json::{json, Value};
-use tauri::{AppHandle, Emitter, Manager};
-use tokio::sync::oneshot;
+use tauri::{AppHandle, Manager};
+
+
+mod config;
+mod settings;
+mod windows;
+mod pet;
+mod json_editor;
+mod skills;
+
+pub(super) fn catalog() -> Value {
+    serde_json::from_str(include_str!("../../../node/assistant-tools/catalog.json")).expect("助手工具目录必须是合法 JSON")
+}
 
 // 显式擦除 Future 类型，工具回调可复用应用 dispatch 而不形成异步类型递归。
 pub(super) fn execute<'a>(
@@ -21,124 +32,17 @@ pub(super) fn execute<'a>(
     drop(active);
     let state = app.state::<AppState>();
     let args = &request["args"];
+    let snapshot = state.state_snapshot().await;
+    if snapshot["appSettings"]["agents"]["assistant"]["disabledTools"].as_array().is_some_and(|items| items.iter().any(|id| id == &request["name"])) {
+        return Err(ManagerError::System("此助手工具已被停用".into()));
+    }
     match request["name"].as_str().unwrap_or("") {
-        "read_app_config" => {
-            let snapshot = state.state_snapshot().await;
-            let result = match args["module"].as_str().unwrap_or("") {
-                "overview" => json!({
-                    "name": "Monkey Thief",
-                    "settings": snapshot["appSettings"],
-                    "cliTargets": snapshot["cliTargets"],
-                    "paths": snapshot["paths"],
-                    "pet": service.state.lock().await["petAction"],
-                }),
-                "settings" => snapshot["appSettings"].clone(),
-                "providers" => snapshot["providers"].clone(),
-                "runtime" => json!({
-                    "models": snapshot["runtimeModels"], "profiles": snapshot["runtimeProfiles"],
-                    "state": snapshot["runtimeProviderState"],
-                    "schemas": snapshot["runtimeConfigSchemas"],
-                }),
-                "repos" => snapshot["repos"].clone(),
-                "skills" => json!({
-                    "skills": snapshot["skills"], "groups": snapshot["skillGroups"],
-                    "repositories": snapshot["skillRepositories"],
-                }),
-                "rules" => snapshot["rules"].clone(),
-                _ => return Err(ManagerError::System("未知配置模块".into())),
-            };
-            Ok(redact_config(result))
-        }
-        "update_app_settings" => {
-            validate_settings_patch(args)?;
-            let result = Box::pin(state.dispatch(
-                app.clone(), "settings:save", Some(args.clone()),
-            )).await?;
-            Ok(redact_config(result))
-        }
-        "open_app_window" => {
-            let tool_id = args["toolId"].as_str().unwrap_or("");
-            if tool_id == "assistant" {
-                return Box::pin(state.dispatch(app.clone(), "tool-window:open",
-                    Some(json!({"toolId": "assistant"})))).await;
-            }
-            if tool_id != "main" && ![
-                "json-agent", "image-workbench", "string-diff", "image-link-extractor",
-                "coordinate-overlay", "port-monitor", "network-quality",
-                "multi-protocol-gateway", "git", "lan-share", "codex-pets",
-            ].contains(&tool_id) {
-                return Err(ManagerError::System("未知应用窗口".into()));
-            }
-            if tool_id != "main" && app.get_webview_window(&format!("tool-window-{tool_id}")).is_some() {
-                return crate::api::app::open_tool_window(app, tool_id);
-            }
-            Box::pin(state.dispatch(app.clone(), "quick-switch:show-main",
-                Some(if tool_id == "main" { json!({}) } else { json!({"toolId": tool_id}) }))).await
-        }
-        "set_pet_action" => {
-            let action = args["action"].as_str().unwrap_or("");
-            if ![
-                "auto", "idle", "walk", "greeting", "jump", "read_book", "use_phone",
-                "sleep", "think", "work", "work_laptop", "exercise", "salute",
-                "steal", "peek", "run", "wake_up",
-            ].contains(&action) {
-                return Err(ManagerError::System("桌宠动作不存在".into()));
-            }
-            let snapshot = state.state_snapshot().await;
-            if snapshot["appSettings"]["desktop"]["enabled"] != true {
-                return Err(ManagerError::System("桌宠未启用，请先在桌宠设置中启用".into()));
-            }
-            let message = args["message"].as_str().unwrap_or("");
-            if message.chars().count() > 160 {
-                return Err(ManagerError::System("桌宠气泡最多 160 个字符".into()));
-            }
-            let mut current = service.state.lock().await;
-            current["petAction"] = json!(if action == "auto" { "" } else { action });
-            current["petMessage"] = json!(message);
-            drop(current);
-            service.emit_state(app).await;
-            Ok(json!({"action": action, "message": message}))
-        }
-        "read_json_editor" | "write_json_editor" => {
-            if request["name"] == "write_json_editor" {
-                let result = args["result"].as_str().ok_or_else(|| ManagerError::System("缺少 JSON 结果".into()))?;
-                if result.chars().count() > 60_000 || args["source"].as_str().is_some_and(|text| text.chars().count() > 60_000) {
-                    return Err(ManagerError::System("编辑内容最多 60000 个字符".into()));
-                }
-                serde_json::from_str::<Value>(result)
-                    .map_err(|error| ManagerError::System(format!("JSON 校验失败：{error}")))?;
-            }
-            let id = uuid::Uuid::new_v4().to_string();
-            let payload = json!({
-                "id": id, "operation": if request["name"] == "write_json_editor" { "write" } else { "read" },
-                "source": args["source"], "result": args["result"], "runId": request["runId"],
-            });
-            let (reply, received) = oneshot::channel();
-            service.editors.lock().await.insert(id.clone(), EditorRequest { payload: payload.clone(), reply });
-            let result = async {
-                if app.get_webview_window("tool-window-json-agent").is_some() {
-                    crate::api::app::open_tool_window(app, "json-agent")?;
-                } else {
-                    Box::pin(state.dispatch(app.clone(), "quick-switch:show-main",
-                        Some(json!({"toolId": "json-agent"})))).await?;
-                }
-                app.emit("assistant:editor-request", payload)
-                    .map_err(|error| ManagerError::System(error.to_string()))?;
-                // 窗口启动和编辑回执有界等待，未收到回执不能向模型宣称已写入。
-                match futures_util::future::select(
-                    Box::pin(cancellation.cancelled()),
-                    Box::pin(tokio::time::timeout(std::time::Duration::from_secs(15), received)),
-                ).await {
-                    futures_util::future::Either::Left(_) => Err(ManagerError::System("任务已停止".into())),
-                    futures_util::future::Either::Right((result, _)) =>
-                        result.map_err(|_| ManagerError::System("JSON 工具未就绪，请打开工具后重试".into()))?
-                            .map_err(|_| ManagerError::System("JSON 编辑请求已关闭".into()))?
-                            .map_err(ManagerError::System),
-                }
-            }.await;
-            service.editors.lock().await.remove(&id);
-            result
-        }
+        "read_app_config" => config::execute(service, app, args).await,
+        "update_app_settings" => settings::execute(app, args).await,
+        "open_app_window" => windows::execute(app, args).await,
+        "set_pet_action" => pet::execute(service, app, args).await,
+        "read_json_editor" | "write_json_editor" => json_editor::execute(service, app, args, cancellation, request).await,
+        "read_software_skills" | "read_assistant_skills" => skills::execute(app, args, request["name"].as_str().unwrap_or("")).await,
         _ => Err(ManagerError::System("未注册的助手工具".into())),
     }
     })

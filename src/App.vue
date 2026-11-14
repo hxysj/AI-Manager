@@ -6,8 +6,16 @@
   />
 
   <section v-else-if="isToolWindow" class="tool-window">
+    <AssistantView
+      v-if="quickSwitchReady && queryTool === 'assistant'"
+      standalone
+      :providers="state.providers"
+      :codex-accounts="state.codexAccounts"
+      :runtime-models="state.runtimeModels"
+      @vue:mounted="markToolWindowReady"
+    />
     <ToolsView
-      v-if="quickSwitchReady"
+      v-else-if="quickSwitchReady"
       standalone
       :tool-request="toolRequest"
       :cli-targets="state.cliTargets"
@@ -47,9 +55,7 @@
       @toggle-theme="toggleTheme"
       @select-view="activeView = $event"
       @title-click="handleSidebarTitleClick"
-      @open-assistant="
-        runAction(() => appApi.openToolWindow({ toolId: 'assistant' }))
-      "
+      @open-assistant="activeView = 'assistant'"
     />
 
     <main class="app-shell__main">
@@ -182,6 +188,13 @@
           @detail-change="toolWorkspaceActive = $event"
           @tool-request-handled="toolRequest = null"
           @toggle-theme="toggleTheme"
+        />
+
+        <AssistantView
+          v-else-if="activeView === 'assistant'"
+          :providers="state.providers"
+          :codex-accounts="state.codexAccounts"
+          :runtime-models="state.runtimeModels"
         />
 
         <SettingsView
@@ -493,6 +506,9 @@ const ProvidersView = defineAsyncComponent(
 const ToolsView = defineAsyncComponent(
   () => import("@/features/tools/index.vue")
 )
+const AssistantView = defineAsyncComponent(
+  () => import("@/features/assistant/index.vue")
+)
 const AddRepoModal = defineAsyncComponent(
   () => import("@/features/repos/components/AddRepoModal.vue")
 )
@@ -684,6 +700,10 @@ const toolRequest = ref(queryTool ? { toolId: queryTool } : null)
 const assistantSettingsRequest = ref(queryTool === "assistant-settings" ? 1 : 0)
 if (assistantSettingsRequest.value) {
   activeView.value = "settings"
+  toolRequest.value = null
+}
+if (queryTool === "assistant") {
+  activeView.value = "assistant"
   toolRequest.value = null
 }
 const sidebarTitleClickCount = ref(0)
@@ -2257,6 +2277,12 @@ onMounted(() => {
   )
 
   unsubscribeTool = appApi.onToolRequested((request) => {
+    if (request.toolId === "assistant") {
+      toolRequest.value = null
+      toolWorkspaceActive.value = false
+      activeView.value = "assistant"
+      return
+    }
     if (request.toolId === "assistant-settings") {
       assistantSettingsRequest.value++
       activeView.value = "settings"

@@ -1,7 +1,6 @@
 import {
   Activity,
   Braces,
-  Bot,
   FileDiff,
   GitBranchIcon,
   Image as ImageIcon,
@@ -16,15 +15,6 @@ import {
 // 工具中心、悬浮窗和设置共用入口，保持名称、图标及可用条件一致。
 export function getToolItems({ cliTargets = [], repos = [] } = {}) {
   const items = [
-    {
-      id: "assistant",
-      label: "应用助手",
-      summary:
-        "与 Mastra 助手对话，查询配置、操作工具窗口、编辑 JSON 和控制桌宠。",
-      meta: "Mastra / 工具调用",
-      icon: Bot,
-      theme: "purple"
-    },
     {
       id: "image-workbench",
       label: "图片工作台",

@@ -216,6 +216,7 @@ import { RotateCcw, Settings, X } from "lucide-vue-next"
 import { translationApi } from "@/api"
 import { localModelsApi } from "@/api/modules/local-models"
 import { subscribeReady } from "@/api/request"
+import { shortcutFromEvent } from "@/utils/shortcuts"
 import { ElOption, ElOptionGroup, ElSelect } from "element-plus"
 import "element-plus/es/components/select/style/css"
 import BaseModal from "@/components/BaseModal.vue"
@@ -412,45 +413,14 @@ function selectModel(modelId, targetId = props.modelValue.targetId) {
 }
 
 function recordShortcut(event, field) {
-  if (event.key === "Tab") return
-  event.preventDefault()
-  if (["Control", "Alt", "Shift", "Meta"].includes(event.key)) return
-
-  const key =
-    event.code === "Space"
-      ? "Space"
-      : event.key.length === 1
-        ? event.key.toUpperCase()
-        : event.key
-
-  if (!/^[A-Z0-9]$|^F([1-9]|1[0-9]|2[0-4])$|^(PrintScreen|Space)$/.test(key)) {
-    shortcutError.value = "请使用字母、数字、F1–F24、PrintScreen 或空格"
-    return
+  try {
+    const shortcut = shortcutFromEvent(event)
+    if (!shortcut) return
+    shortcutError.value = ""
+    update({ [field]: shortcut })
+  } catch (error) {
+    shortcutError.value = error.message
   }
-
-  if (
-    !event.ctrlKey &&
-    !event.altKey &&
-    !event.shiftKey &&
-    !event.metaKey &&
-    !/^F\d+$|^PrintScreen$/.test(key)
-  ) {
-    shortcutError.value = "请同时按下 Ctrl、Alt、Shift 或 Win 修饰键"
-    return
-  }
-
-  const combination = [
-    event.ctrlKey && "Ctrl",
-    event.altKey && "Alt",
-    event.shiftKey && "Shift",
-    event.metaKey && "Win",
-    key
-  ]
-    .filter(Boolean)
-    .join("+")
-
-  shortcutError.value = ""
-  update({ [field]: combination })
 }
 
 function resetShortcuts() {

@@ -42,6 +42,11 @@ pub struct AppState {
 }
 
 impl AppState {
+    pub async fn show_assistant_reply(&self, app: &AppHandle, visible: bool) -> Result<bool, ManagerError> {
+        let settings = self.manager.lock().await.app_settings.clone();
+        app::show_assistant_reply(app, &settings, visible)
+    }
+
     pub async fn shutdown_assistant(&self) {
         let _guard = self.assistant_sync.lock().await;
         self.assistant.shutdown().await;
@@ -62,6 +67,10 @@ impl AppState {
         // 启停串行后再读取最新配置，快速切换开关不会用旧配置重启后台。
         let _guard = self.assistant_sync.lock().await;
         let context = self.assistant_context().await;
+        assistant::desktop::sync(&app, &context.settings);
+        if !context.settings.enabled {
+            self.show_assistant_reply(&app, false).await.ok();
+        }
         if let Err(error) = self.assistant.sync(&app, &context).await {
             let root = self.user_data_path().await;
             let _ = app_logs::record_background_error(&root, "assistant:startup", error).await;

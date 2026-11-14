@@ -95,12 +95,36 @@ pub struct AssistantSettings {
     pub target_id: String,
     pub model: String,
     pub protocol: String,
+    pub shortcut: String,
+    pub context_window: u64,
+    pub auto_compress: bool,
+    pub compression_threshold: u64,
+    pub compression_prompt: String,
+    pub shared_memory_enabled: bool,
+    pub disabled_tools: Vec<String>,
+    pub skills: Vec<AssistantSkillSettings>,
 }
 
 impl Default for AssistantSettings {
     fn default() -> Self {
-        Self { enabled: true, target_id: String::new(), model: String::new(), protocol: "auto".into() }
+        Self { enabled: true, target_id: String::new(), model: String::new(), protocol: "auto".into(), shortcut: "Ctrl+Alt+Space".into(),
+            context_window: 128_000, auto_compress: true, compression_threshold: 75,
+            compression_prompt: String::new(), shared_memory_enabled: true, disabled_tools: Vec::new(), skills: Vec::new() }
     }
+}
+
+// 助手技能独立于软件的 Skills 安装配置，只保存正文和启用状态。
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct AssistantSkillSettings {
+    pub id: String,
+    pub name: String,
+    pub description: String,
+    pub instructions: String,
+    pub enabled: bool,
+}
+impl Default for AssistantSkillSettings {
+    fn default() -> Self { Self { id: String::new(), name: String::new(), description: String::new(), instructions: String::new(), enabled: true } }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -219,6 +243,14 @@ pub fn normalize_app_settings(settings_file_path: PathBuf, payload: Option<Value
                 target_id: string_value(input["agents"]["assistant"].get("targetId")),
                 model: string_value(input["agents"]["assistant"].get("model")),
                 protocol: non_empty_string(input["agents"]["assistant"].get("protocol"), "auto"),
+                shortcut: non_empty_string(input["agents"]["assistant"].get("shortcut"), "Ctrl+Alt+Space"),
+                context_window: input["agents"]["assistant"]["contextWindow"].as_u64().unwrap_or(128_000).clamp(4096, 2_000_000),
+                auto_compress: bool_value(input["agents"]["assistant"].get("autoCompress"), true),
+                compression_threshold: input["agents"]["assistant"]["compressionThreshold"].as_u64().unwrap_or(75).clamp(30, 95),
+                compression_prompt: string_value(input["agents"]["assistant"].get("compressionPrompt")).chars().take(16_000).collect(),
+                shared_memory_enabled: bool_value(input["agents"]["assistant"].get("sharedMemoryEnabled"), true),
+                disabled_tools: input["agents"]["assistant"]["disabledTools"].as_array().map(|items| items.iter().filter_map(Value::as_str).filter(|id| id.len() <= 100).take(64).map(str::to_string).collect()).unwrap_or_default(),
+                skills: input["agents"]["assistant"]["skills"].as_array().map(|items| items.iter().take(32).filter_map(|item| serde_json::from_value::<AssistantSkillSettings>(item.clone()).ok()).filter(|skill| !skill.id.is_empty() && !skill.name.trim().is_empty() && skill.id.len() <= 200 && skill.name.chars().count() <= 100 && skill.description.chars().count() <= 500 && skill.instructions.chars().count() <= 16_000).collect()).unwrap_or_default(),
             },
             translation: TranslationAgentSettings {
                 enabled: bool_value(translation.get("enabled"), false),
@@ -328,18 +360,47 @@ mod floating_tools_tests {
         let restored = normalize_app_settings(path.clone(), Some(serialize_app_settings(&settings)));
         assert_eq!(restored.agents.assistant.target_id, "provider-1");
         assert_eq!(restored.agents.assistant.model, "agent-model");
+        assert_eq!(restored.agents.assistant.shortcut, "Ctrl+Alt+Space");
+        assert_eq!(restored.agents.assistant.context_window, 128_000);
+        assert!(restored.agents.assistant.auto_compress);
+        assert!(restored.agents.assistant.shared_memory_enabled);
+        assert_eq!(restored.agents.assistant.compression_threshold, 75);
         let mut legacy = serialize_app_settings(&settings);
         legacy["agents"].as_object_mut().unwrap().remove("assistant");
         let restored: AppSettings = serde_json::from_value(legacy).unwrap();
         assert!(restored.agents.assistant.target_id.is_empty());
         assert!(restored.agents.assistant.enabled);
+        assert!(restored.agents.assistant.skills.is_empty());
+        assert!(restored.agents.assistant.disabled_tools.is_empty());
         assert!(normalize_app_settings(path, None).agents.assistant.model.is_empty());
         let disabled = normalize_app_settings(PathBuf::from("settings.json"), Some(json!({
-            "agents": {"assistant": {"enabled": false, "targetId": "local", "model": "future-model"}}
+            "agents": {"assistant": {"enabled": false, "targetId": "local", "model": "future-model", "shortcut": "Ctrl+Shift+A"}}
         })));
         let restored: AppSettings = serde_json::from_value(serialize_app_settings(&disabled)).unwrap();
         assert!(!restored.agents.assistant.enabled);
         assert_eq!(restored.agents.assistant.model, "future-model");
+        assert_eq!(restored.agents.assistant.shortcut, "Ctrl+Shift+A");
+    }
+
+    #[test]
+    fn assistant_skills_and_tool_switches_survive_round_trip() {
+        let path = PathBuf::from("settings.json");
+        let settings = normalize_app_settings(path.clone(), Some(json!({
+            "agents": {"assistant": {
+                "disabledTools": ["set_pet_action"],
+                "skills": [
+                    {"id":"own","name":"助手技能","description":"读取配置","instructions":"先读取再回答。"},
+                    {"id":"off","name":"停用技能","instructions":"保留正文","enabled":false}
+                ]
+            }}
+        })));
+        let restored = normalize_app_settings(path, Some(serialize_app_settings(&settings)));
+        assert_eq!(restored.agents.assistant.disabled_tools, vec!["set_pet_action"]);
+        assert_eq!(restored.agents.assistant.skills.len(), 2);
+        assert!(restored.agents.assistant.skills[0].enabled);
+        assert_eq!(restored.agents.assistant.skills[0].instructions, "先读取再回答。");
+        assert!(!restored.agents.assistant.skills[1].enabled);
+        assert_eq!(restored.agents.assistant.skills[1].instructions, "保留正文");
     }
 
     #[test]

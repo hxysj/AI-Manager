@@ -29,6 +29,18 @@ if (new URLSearchParams(location.search).get("panel") === "screenshot") {
       ).mount("#app")
     }
   )
+} else if (
+  new URLSearchParams(location.search).get("panel") === "assistant-input"
+) {
+  document.documentElement.style.background = "transparent"
+  document.body.style.background = "transparent"
+  document.documentElement.dataset.theme =
+    window.localStorage.getItem("ai-manager-theme") || "light"
+  import("./features/assistant/components/DesktopInput.vue").then(
+    ({ default: DesktopInput }) => {
+      installAppLogging(createApp(DesktopInput)).mount("#app")
+    }
+  )
 } else {
   Promise.all([
     import("./App.vue"),

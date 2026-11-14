@@ -12,6 +12,12 @@ import { transformSync } from "esbuild"
 // 真实挂载 Vue 助手和 JSON 工具，仅模拟 IPC 与浏览器宿主。
 const require = createRequire(import.meta.url)
 const vue = require("vue")
+const realComponents = new Map()
+const markdownModules = {
+  micromark: await import("micromark"),
+  "micromark-extension-gfm": await import("micromark-extension-gfm")
+}
+let publicMemoryText = ""
 const listeners = new Set()
 const editorListeners = new Set()
 const localListeners = new Set()
@@ -40,7 +46,16 @@ const history = [
   {
     id: "earlier-user",
     role: "user",
-    content: { parts: [{ type: "text", text: "重复指令" }] }
+    content: {
+      parts: [
+        { type: "text", text: "重复指令" },
+        {
+          type: "file",
+          mimeType: "image/png",
+          data: "data:image/png;base64,iVBORw0KGgo="
+        }
+      ]
+    }
   },
   {
     id: "earlier-answer",
@@ -62,6 +77,38 @@ const emit = (event) => {
   for (const callback of listeners) callback(event)
 }
 const assistantApi = {
+  catalog: async () => ({
+    tools: JSON.parse(
+      readFileSync("src-tauri/node/assistant-tools/catalog.json", "utf8")
+    ),
+    softwareSkills: []
+  }),
+  context: async () => ({
+    contextWindow: 128000,
+    pendingTokens: 100,
+    summaryTokens: 0,
+    promptReserve: 1000,
+    summary: "",
+    sharedMemory: { text: publicMemoryText }
+  }),
+  publicMemory: async () => ({ text: publicMemoryText }),
+  savePublicMemory: async (text, previous) => {
+    calls.push(["memory", { text, previous }])
+    if (previous !== publicMemoryText)
+      throw new Error("公共记忆已在其他窗口更新")
+    publicMemoryText = text
+    return { text }
+  },
+  compress: async (threadId) => {
+    calls.push(["compress", threadId])
+    return {
+      ...baseTask,
+      status: "thinking",
+      operation: "compress",
+      threadId,
+      runId: "compress-run"
+    }
+  },
   onEvent: (callback) =>
     deferListener
       ? new Promise((resolve) => {
@@ -238,8 +285,22 @@ async function compile(filename) {
     ).code
   )(
     (name) => {
+      if (markdownModules[name]) return markdownModules[name]
+      if (realComponents.has(name))
+        return { default: realComponents.get(name), __esModule: true }
       if (name === "@/api")
-        return { assistantApi, settingsApi, appApi, toolboxApi: {} }
+        return {
+          assistantApi,
+          settingsApi,
+          appApi,
+          systemApi: {
+            openExternal: async (payload) => calls.push(["external", payload])
+          },
+          skillsApi: {
+            getSkillContent: async () => ({ content: "软件技能正文" })
+          },
+          toolboxApi: {}
+        }
       if (name === "@/api/modules/local-models")
         return {
           localModelsApi: {
@@ -263,17 +324,37 @@ async function compile(filename) {
             () =>
               vue.h("div", slots.default?.())
         }
-        return { ElOption: stub, ElOptionGroup: stub, ElSelect: stub }
+        return {
+          ElOption: stub,
+          ElOptionGroup: stub,
+          ElSelect: stub,
+          ElDrawer: {
+            props: ["modelValue"],
+            setup:
+              (props, { slots }) =>
+              () =>
+                props.modelValue ? vue.h("aside", slots.default?.()) : null
+          }
+        }
       }
       if (name.endsWith(".css") || name.startsWith("element-plus/")) return {}
-      if (name === "@/utils/formatters") {
+      if (
+        [
+          "@/utils/formatters",
+          "@/utils/shortcuts",
+          "@/features/assistant/attachments"
+        ].includes(name)
+      ) {
         const result = { exports: {} }
         new Function(
           "module",
           "exports",
-          transformSync(readFileSync("src/utils/formatters.js", "utf8"), {
-            format: "cjs"
-          }).code
+          transformSync(
+            readFileSync(name.replace("@/", "src/") + ".js", "utf8"),
+            {
+              format: "cjs"
+            }
+          ).code
         )(result, result.exports)
         return result.exports
       }
@@ -303,6 +384,7 @@ function mount(component, props = {}) {
   renderer.render(vnode, root)
   return {
     state: vnode.component.setupState,
+    vnode,
     root,
     errors,
     unmount: () => renderer.render(null, root)
@@ -314,11 +396,83 @@ async function tick() {
     await vue.nextTick()
   }
 }
+const Markdown = await compile("src/components/MarkdownContent.vue")
+realComponents.set("@/components/MarkdownContent.vue", Markdown)
+const MemoryPanel = await compile(
+  "src/features/assistant/components/AssistantMemory.vue"
+)
+realComponents.set(
+  "@/features/assistant/components/AssistantMemory.vue",
+  MemoryPanel
+)
+const ModelSelect = await compile(
+  "src/features/assistant/components/AssistantModelSelect.vue"
+)
+const Capabilities = await compile(
+  "src/features/assistant/components/AssistantCapabilities.vue"
+)
+realComponents.set(
+  "@/features/assistant/components/AssistantModelSelect.vue",
+  ModelSelect
+)
+realComponents.set(
+  "@/features/assistant/components/AssistantCapabilities.vue",
+  Capabilities
+)
+realComponents.set(
+  "@/features/assistant/components/AssistantImages.vue",
+  await compile("src/features/assistant/components/AssistantImages.vue")
+)
 const [Assistant, JsonEditor, AssistantExtension] = await Promise.all([
-  compile("src/features/tools/assistant/index.vue"),
+  compile("src/features/assistant/index.vue"),
   compile("src/features/tools/jsonAgent/index.vue"),
   compile("src/features/settings/components/AssistantExtension.vue")
 ])
+// 技能保存和工具开关只修改助手自己的对应配置。
+const capabilitySettings = vue.reactive({
+  skills: [],
+  disabledTools: [],
+  model: "preserved-model"
+})
+const capabilityView = mount(Capabilities, {
+  settings: capabilitySettings,
+  onChange: (value) => Object.assign(capabilitySettings, value)
+})
+await tick()
+await capabilityView.state.toggleTool("set_pet_action", false)
+assert.deepEqual(capabilitySettings.disabledTools, ["set_pet_action"])
+await capabilityView.state.toggleTool("set_pet_action", true)
+assert.deepEqual(capabilitySettings.disabledTools, [])
+capabilityView.state.editSkill()
+capabilityView.state.editing.name = "助手专属流程"
+capabilityView.state.editing.instructions = "执行前读取配置，保留无关内容。"
+await capabilityView.state.saveSkill()
+assert.equal(capabilitySettings.skills.length, 1)
+assert.equal(capabilitySettings.model, "preserved-model")
+await capabilityView.state.copySoftwareSkill({
+  name: "软件技能",
+  description: "软件中的技能"
+})
+assert.equal(capabilityView.state.editing.instructions, "软件技能正文")
+assert.equal(
+  capabilitySettings.skills.length,
+  1,
+  "软件技能复制为草稿，保存前不影响助手技能"
+)
+const saveBeforeCapabilityCheck = settingsApi.saveSettings
+settingsApi.saveSettings = async () => ({
+  appSettings: { agents: { assistant: { model: "stale-model" } } }
+})
+await capabilityView.state.toggleTool("set_pet_action", false)
+assert.equal(
+  capabilitySettings.model,
+  "preserved-model",
+  "管理工具时保留当前模型"
+)
+settingsApi.saveSettings = saveBeforeCapabilityCheck
+capabilityView.unmount()
+calls.length = 0
+
 const view = mount(Assistant, {
   providers: [
     {
@@ -339,6 +493,11 @@ await tick()
 assert.equal(view.state.initialized, true)
 assert.equal(view.state.threadId, "t1")
 assert.equal(view.state.visibleMessages.length, 3, "同名指令的旧轮次不能被隐藏")
+assert.equal(
+  view.state.visibleMessages[0].images[0].dataUrl,
+  "data:image/png;base64,iVBORw0KGgo=",
+  "重新加载历史时恢复 Mastra file part 中的图片"
+)
 view.state.draft = "打开 JSON 工具"
 assert.equal(view.state.canSend, true)
 await view.state.sendMessage()
@@ -390,41 +549,139 @@ assert.deepEqual(calls.at(-1), ["main", { toolId: "assistant" }])
 await view.state.openJsonEditor()
 assert.deepEqual(calls.at(-1), ["window", { toolId: "json-agent" }])
 
-// 新布局中的模型切换只保存模型字段，失败保留当前配置。
-await view.state.selectModel("claude-new")
-assert.deepEqual(calls.at(-1), ["settings", { agents: { assistant: { model: "claude-new" } } }])
+const modelErrors = []
+const modelView = mount(ModelSelect, {
+  onError: (value) => modelErrors.push(value),
+  settings: view.state.settings,
+  providers: [
+    {
+      id: "codex-provider",
+      cli: "codex",
+      name: "API",
+      runtimeConfig: { mainModel: "agent-model" }
+    },
+    {
+      id: "claude-provider",
+      cli: "claude",
+      name: "Claude",
+      runtimeConfig: { mainModel: "claude-model" }
+    }
+  ],
+  onChange: (value) => {
+    view.state.settings = value
+    modelView.vnode.component.props.settings = value
+  }
+})
+// 同 Provider 的自定义模型保留协议，跨 Provider 切换同时保存来源和自动协议。
+await modelView.state.selectModel("claude-new")
+assert.deepEqual(calls.at(-1), [
+  "settings",
+  { agents: { assistant: { model: "claude-new" } } }
+])
 assert.equal(view.state.settings.model, "claude-new")
 assert.equal(view.state.settings.targetId, "claude-provider")
 assert.equal(view.state.settings.protocol, "messages")
 const originalSaveSettings = settingsApi.saveSettings
-settingsApi.saveSettings = async () => { throw new Error("模型保存失败") }
-await view.state.selectModel("not-saved")
+settingsApi.saveSettings = async () => {
+  throw new Error("模型保存失败")
+}
+await modelView.state.selectModel("not-saved")
 assert.equal(view.state.settings.model, "claude-new")
-assert.equal(view.state.errorMessage, "模型保存失败")
+assert.equal(modelErrors.at(-1), "模型保存失败")
+settingsApi.saveSettings = originalSaveSettings
+await modelView.state.selectModel(
+  JSON.stringify(["codex-provider", "agent-model"])
+)
+assert.deepEqual(calls.at(-1), [
+  "settings",
+  {
+    agents: {
+      assistant: {
+        targetId: "codex-provider",
+        model: "agent-model",
+        protocol: "auto"
+      }
+    }
+  }
+])
+assert.equal(view.state.settings.targetId, "codex-provider")
+assert.equal(view.state.settings.protocol, "auto")
+view.state.settings.targetId = "local"
+await modelView.state.selectModel(
+  JSON.stringify(["claude-provider", "claude-model"])
+)
+assert.equal(
+  view.state.settings.targetId,
+  "claude-provider",
+  "可直接从本地占位切换到 Provider"
+)
+
+// 保存回包晚于其他窗口的修改时，不能覆盖较新的模型和无关设置。
+let finishModelSave
+settingsApi.saveSettings = () =>
+  new Promise((resolve) => {
+    finishModelSave = resolve
+  })
+const staleSelection = modelView.state.selectModel("late-model")
+view.state.settings = { ...view.state.settings, model: "other-window-model" }
+modelView.vnode.component.props.settings = view.state.settings
+finishModelSave({
+  appSettings: { agents: { assistant: { model: "late-model" } } }
+})
+await staleSelection
+assert.equal(view.state.settings.model, "other-window-model")
+const mergedSelection = modelView.state.selectModel("saved-model")
+view.state.settings = { ...view.state.settings, sharedMemoryEnabled: false }
+modelView.vnode.component.props.settings = view.state.settings
+finishModelSave({
+  appSettings: {
+    agents: { assistant: { model: "saved-model", sharedMemoryEnabled: true } }
+  }
+})
+await mergedSelection
+assert.equal(view.state.settings.model, "saved-model")
+assert.equal(view.state.settings.sharedMemoryEnabled, false)
 settingsApi.saveSettings = originalSaveSettings
 
 const copiedTexts = []
 Object.defineProperty(globalThis, "navigator", {
   configurable: true,
-  value: { clipboard: { writeText: async text => copiedTexts.push(text) } }
+  value: { clipboard: { writeText: async (text) => copiedTexts.push(text) } }
 })
-const answer = view.state.displayMessages.find(message => message.role === "assistant" && message.text)
+const answer = view.state.displayMessages.find(
+  (message) => message.role === "assistant" && message.text
+)
 await view.state.copyMessage(answer)
 assert.equal(copiedTexts.at(-1), answer.text)
 assert.equal(view.state.copiedMessageId, answer.id)
-view.state.rateMessage(answer.id, "up")
-assert.equal(view.state.messageRatings[answer.id], "up")
-view.state.rateMessage(answer.id, "up")
-assert.equal(view.state.messageRatings[answer.id], "")
-view.state.rateMessage(answer.id, "down")
-assert.equal(view.state.messageRatings[answer.id], "down")
+const userMessage = view.state.displayMessages.find(
+  (message) => message.role === "user"
+)
+await view.state.copyMessage(userMessage)
+assert.equal(
+  copiedTexts.at(-1),
+  userMessage.text,
+  "用户消息与助手回复共用一键复制"
+)
+view.state.historyOpen = true
+await view.state.selectThread("t1")
+assert.equal(view.state.historyOpen, false, "选择历史会话后自动收起抽屉")
+modelView.unmount()
 view.state.draft = "请检查附件"
-const attachment = { value: "test.json", files: [{ name: "test.json", size: 15, text: async () => '{"enabled":true}' }] }
+const attachment = {
+  value: "test.json",
+  files: [{ name: "test.json", size: 15, text: async () => '{"enabled":true}' }]
+}
 await view.state.attachTextFile({ target: attachment })
-assert.equal(view.state.draft, '请检查附件\n\n文件：test.json\n{"enabled":true}')
+assert.equal(
+  view.state.draft,
+  '请检查附件\n\n文件：test.json\n{"enabled":true}'
+)
 assert.equal(attachment.value, "")
 const validDraft = view.state.draft
-await view.state.attachTextFile({ target: { value: "large.txt", files: [{ name: "large.txt", size: 120001 }] } })
+await view.state.attachTextFile({
+  target: { value: "large.txt", files: [{ name: "large.txt", size: 120001 }] }
+})
 assert.match(view.state.errorMessage, /附件过大/)
 assert.equal(view.state.draft, validDraft, "附件读取失败不能覆盖草稿")
 delayedMessages = true
@@ -441,6 +698,40 @@ assert.equal(listeners.size, 0)
 assert.equal(localListeners.size, 0)
 assert.equal(settingsListeners.size, 0)
 assert.deepEqual(view.errors, [])
+
+// Markdown 真实解析，覆盖代码、表格、链接及原始 HTML/危险协议。
+const markdown = mount(Markdown, {
+  text: "**加粗**\n\n```js\nconst x = 1\n```\n\n| A | B |\n| - | - |\n| 1 | 2 |\n\n<script>alert(1)</script>\n\n[危险](javascript:alert(1))"
+})
+await tick()
+assert.match(
+  markdown.root.children[0].props.innerHTML,
+  /<strong>加粗<\/strong>/
+)
+assert.match(markdown.root.children[0].props.innerHTML, /<table>/)
+assert.match(markdown.root.children[0].props.innerHTML, /<pre><code/)
+assert.ok(!markdown.root.children[0].props.innerHTML.includes("<script>"))
+assert.ok(
+  !markdown.root.children[0].props.innerHTML.includes('href="javascript:')
+)
+markdown.unmount()
+const memoryPanel = mount(MemoryPanel, { threadId: "t1", settings: {} })
+await tick()
+memoryPanel.state.draft = "用户偏好简体中文"
+await memoryPanel.state.save(memoryPanel.state.draft)
+assert.equal(publicMemoryText, "用户偏好简体中文")
+memoryPanel.state.draft = "尚未保存"
+await memoryPanel.state.load()
+assert.equal(memoryPanel.state.draft, "尚未保存", "上下文刷新保留公共记忆草稿")
+publicMemoryText = "其他窗口刚更新"
+await memoryPanel.state.save("不应覆盖")
+assert.equal(publicMemoryText, "其他窗口刚更新")
+assert.match(memoryPanel.state.error, /其他窗口/)
+await memoryPanel.state.reloadMemory()
+await memoryPanel.state.save("")
+assert.equal(publicMemoryText, "")
+memoryPanel.unmount()
+assert.deepEqual(memoryPanel.errors, [])
 
 // 配置组件只提交修改字段，Provider、协议和本地占位共用设置保存流程。
 const savedPatches = []

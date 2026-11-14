@@ -139,7 +139,7 @@ impl Settings {
     }
 }
 
-fn parse_shortcut(value: &str) -> Result<(u32, u32), ManagerError> {
+pub(crate) fn parse_shortcut(value: &str) -> Result<(u32, u32), ManagerError> {
     let mut modifiers = 0;
     let mut key = None;
     for part in value.split('+') {

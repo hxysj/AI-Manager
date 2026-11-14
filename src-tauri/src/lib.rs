@@ -1,7 +1,7 @@
 mod api;
 mod core;
 
-use crate::api::{app, app_logs, screenshot, translation};
+use crate::api::{app, app_logs, assistant, screenshot, translation};
 use crate::core::error::ManagerError;
 use crate::core::state::{AppState, ManagerState};
 use serde_json::Value;
@@ -100,6 +100,9 @@ async fn dispatch_command(
     if let Some(action) = channel.strip_prefix("translation:desktop-") {
         return translation::desktop::dispatch(&app, action, payload);
     }
+    if let Some(action @ ("status" | "open" | "ready" | "close")) = channel.strip_prefix("assistant:desktop-") {
+        return assistant::desktop::dispatch(&app, action);
+    }
     if channel.starts_with("translation:") || channel.starts_with("assistant:") || channel == "screenshot:ocr" {
         return state.dispatch(app, channel, payload).await;
     }
@@ -163,6 +166,7 @@ pub fn run() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .on_window_event(|window, event| {
             translation::desktop::window_event(window.app_handle(), window.label(), event);
+            assistant::desktop::window_event(window.app_handle(), window.label(), event);
             screenshot::window_event(window.app_handle(), window.label(), event);
             if window.label() != "main" {
                 return;
@@ -236,6 +240,7 @@ pub fn run() {
             let app_settings = manager_state.app_settings().clone();
             let quick_switch_collapsed = manager_state.quick_switch_collapsed();
             // 预热窗口会立即调用 IPC，先注册共享状态。
+            app.manage(assistant::desktop::DesktopAssistant::default());
             app.manage(AppState::new(manager_state));
             // 助手随应用预热会话库，未发送消息时不会请求模型服务。
             let assistant_handle = app.handle().clone();

@@ -22,6 +22,9 @@ pub async fn save_settings(
         PathBuf::from(&app_settings.settings_file_path),
         Some(merged),
     );
+    if payload["agents"].get("assistant").is_some() {
+        crate::api::screenshot::parse_shortcut(&next_settings.agents.assistant.shortcut)?;
+    }
     if payload
         .get("agents")
         .and_then(|agents| agents.get("translation"))

@@ -32,6 +32,7 @@ static QUICK_SWITCH_WINDOW_POSITION: SyncMutex<Option<PhysicalPosition<f64>>> =
     SyncMutex::new(None);
 // 隐藏窗口提前加载，配置和布局就绪后才允许显示。
 static QUICK_SWITCH_WINDOW_READY: AtomicBool = AtomicBool::new(false);
+static ASSISTANT_REPLY_VISIBLE: AtomicBool = AtomicBool::new(false);
 // 工具窗口与主面板共用窗口锁，避免迟到的初始化在主面板打开后重新显示。
 static READY_TOOL_WINDOWS: LazyLock<SyncMutex<HashSet<String>>> =
     LazyLock::new(|| SyncMutex::new(HashSet::new()));
@@ -502,6 +503,7 @@ pub fn show_main_panel(
         None => create_main_window(app, tool_id)?,
     };
 
+    ASSISTANT_REPLY_VISIBLE.store(false, Ordering::SeqCst);
     hide_tool_windows(app)?;
 
     if window
@@ -854,6 +856,10 @@ pub fn sync_quick_switch_window(
     if main_visible && !main_minimized {
         hide_tool_windows(app)?;
     }
+    let assistant_visible = ASSISTANT_REPLY_VISIBLE.load(Ordering::SeqCst)
+        && app_settings.agents.assistant.enabled
+        && app_settings.desktop.enabled
+        && app_settings.system.quick_switch_visible;
     if !app_settings.system.quick_switch_visible {
         destroy_quick_switch_window(app)?;
         return Ok(());
@@ -863,7 +869,7 @@ pub fn sync_quick_switch_window(
     let visible = window
         .is_visible()
         .map_err(|error| ManagerError::System(error.to_string()))?;
-    if !main_visible || main_minimized {
+    if !main_visible || main_minimized || assistant_visible {
         if QUICK_SWITCH_WINDOW_READY.load(Ordering::SeqCst) && !visible {
             let (center_x, center_y, edge) =
                 apply_quick_switch_collapsed(&window, true, &mut center)?;
@@ -887,6 +893,21 @@ pub fn sync_quick_switch_window(
     }
 
     Ok(())
+}
+
+pub fn show_assistant_reply(
+    app: &tauri::AppHandle,
+    settings: &AppSettings,
+    visible: bool,
+) -> Result<bool, ManagerError> {
+    let visible = visible && settings.agents.assistant.enabled
+        && settings.desktop.enabled && settings.system.quick_switch_visible;
+    let previous = ASSISTANT_REPLY_VISIBLE.swap(visible, Ordering::SeqCst);
+    if let Err(error) = sync_quick_switch_window(app, settings, true) {
+        ASSISTANT_REPLY_VISIBLE.store(previous, Ordering::SeqCst);
+        return Err(error);
+    }
+    Ok(visible)
 }
 
 fn create_main_window(
@@ -978,6 +999,7 @@ fn hide_quick_switch_window(app: &tauri::AppHandle) -> Result<(), ManagerError> 
 }
 
 fn destroy_quick_switch_window(app: &tauri::AppHandle) -> Result<(), ManagerError> {
+    ASSISTANT_REPLY_VISIBLE.store(false, Ordering::SeqCst);
     QUICK_SWITCH_WINDOW_READY.store(false, Ordering::SeqCst);
     if let Some(window) = app.get_webview_window(QUICK_SWITCH_LABEL) {
         window

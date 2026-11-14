@@ -36,6 +36,8 @@ const components = new Map()
 const modelListeners = new Set()
 let installedTranslationModels = []
 let translationModelsFailure = false
+let assistantDesktopStatus = {}
+const assistantStatusListeners = new Set()
 
 async function loadComponent(filename) {
   const { descriptor, errors } = parse(readFileSync(filename, "utf8"), {
@@ -82,6 +84,13 @@ async function loadComponent(filename) {
               return logStatsResponse
             }
           },
+          assistantApi: {
+            desktopStatus: async () => assistantDesktopStatus,
+            onDesktopStatus: async (callback) => {
+              assistantStatusListeners.add(callback)
+              return () => assistantStatusListeners.delete(callback)
+            }
+          },
           systemApi: { selectDirectory: async () => selectedDirectory },
           translationApi: {
             desktopStatus: async () => ({}),
@@ -99,6 +108,17 @@ async function loadComponent(filename) {
             }
           }
         }
+      if (name === "@/utils/shortcuts") {
+        const imported = { exports: {} }
+        new Function(
+          "module",
+          "exports",
+          transformSync(readFileSync("src/utils/shortcuts.js", "utf8"), {
+            format: "cjs"
+          }).code
+        )(imported, imported.exports)
+        return imported.exports
+      }
       if (name === "@/api/request")
         return {
           subscribeReady: async (event, callback) => {
@@ -733,8 +753,41 @@ await finish(assistantRequestIndex)
 await saveAssistant
 assert.equal(server.agents.assistant.model, "agent-model")
 assert.equal(server.agents.assistant.enabled, false)
+const shortcutInput = () => find(
+  assistantSettings.root,
+  item => item.props["aria-label"] === "唤出输入框快捷键"
+)[0]
+assert.equal(shortcutInput().props.value, "Ctrl+Alt+Space")
+assistantRequestIndex = calls.length
+shortcutInput().props.onKeydown({
+  key: "a", code: "KeyA", ctrlKey: true, shiftKey: true, preventDefault() {}
+})
+await tick()
+assert.deepEqual(calls[assistantRequestIndex].patch, {
+  agents: { assistant: { shortcut: "Ctrl+Shift+A" } }
+})
+await finish(assistantRequestIndex)
+assert.equal(shortcutInput().props.value, "Ctrl+Shift+A")
+assert.equal(server.agents.assistant.model, "agent-model")
+const invalidShortcutIndex = calls.length
+shortcutInput().props.onKeydown({ key: "Escape", preventDefault() {} })
+await tick()
+assert.equal(calls.length, invalidShortcutIndex)
+assert.match(find(assistantSettings.root, item => item.props.role === "alert")
+  .map(item => item.text).join(""), /请使用字母/)
+shortcutInput().props.onKeydown({
+  key: "a", ctrlKey: true, shiftKey: true, preventDefault() {}
+})
+await tick()
+if (calls.length > invalidShortcutIndex) await finish(invalidShortcutIndex)
+assistantDesktopStatus = { error: "助手快捷键已被占用，请更换快捷键" }
+await Promise.all([...assistantStatusListeners].map(callback => callback()))
+await tick()
+assert.match(find(assistantSettings.root, item => item.props.role === "alert")
+  .map(item => item.text).join(""), /已被占用/)
 assistantSettings.unmount()
+assert.equal(assistantStatusListeners.size, 0)
 assert.deepEqual(runtimeErrors, [])
 console.log(
-  "设置自动保存：字段隔离、连续修改、失败恢复、日志、桌宠及本地翻译多模型切换、语言范围、删除和刷新验证通过"
+  "设置自动保存：字段隔离、失败恢复、助手快捷键录制与冲突提示、日志、桌宠和本地翻译配置验证通过"
 )

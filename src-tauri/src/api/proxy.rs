@@ -2586,6 +2586,7 @@ mod tests {
                 let settings = crate::core::settings::AssistantSettings {
                     enabled: true,
                     target_id: "provider-active".into(), model: "assistant-model".into(), protocol: protocol.into(),
+                    ..Default::default()
                 };
                 let target = super::prepare_assistant_target(&paths, &json!([]), &settings).await.unwrap();
                 assert_eq!(target.info["api"], api);

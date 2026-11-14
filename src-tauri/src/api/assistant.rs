@@ -4,7 +4,7 @@ use crate::core::{
 };
 use serde_json::{json, Value};
 use std::{collections::HashMap, path::PathBuf, process::Stdio, sync::Arc};
-use tauri::{AppHandle, Emitter};
+use tauri::{AppHandle, Emitter, Manager};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
     process::{Child, ChildStdin},
@@ -13,6 +13,8 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 mod tools;
+mod images;
+pub mod desktop;
 
 type Reply = oneshot::Sender<Result<Value, String>>;
 #[derive(Default)]
@@ -48,6 +50,7 @@ pub struct AssistantService {
     state: Arc<Mutex<Value>>,
     active: Arc<Mutex<Option<(String, CancellationToken)>>>,
     editors: Arc<Mutex<HashMap<String, EditorRequest>>>,
+    desktop_thread: Arc<Mutex<(String, String)>>,
 }
 
 impl Default for AssistantService {
@@ -61,6 +64,7 @@ impl Default for AssistantService {
             }))),
             active: Default::default(),
             editors: Default::default(),
+            desktop_thread: Default::default(),
         }
     }
 }
@@ -285,6 +289,16 @@ impl AssistantService {
                 }
                 Ok(json!(false))
             }
+            "catalog" => {
+                let snapshot = app.state::<crate::core::state::AppState>().state_snapshot().await;
+                Ok(json!({
+                    "tools": tools::catalog(),
+                    "providers": snapshot["providers"].as_array().map(|items| items.iter().map(|item| json!({"id": item["id"], "name": item["name"], "cli": item["cli"], "enabled": item["enabled"], "runtimeConfig": {"mainModel": item["runtimeConfig"]["mainModel"]}})).collect::<Vec<_>>()).unwrap_or_default(),
+                    "codexAccounts": snapshot["codexAccounts"].as_array().map(|items| items.iter().map(|item| json!({"id": item["id"], "email": item["email"], "accountId": item["accountId"], "disabled": item["disabled"]})).collect::<Vec<_>>()).unwrap_or_default(),
+                    "runtimeModels": snapshot["runtimeModels"],
+                    "softwareSkills": snapshot["skills"].as_array().map(|items| items.iter().map(|item| json!({"id": item["id"], "name": item["name"], "description": item["description"], "disabled": item["disabled"], "installedTargets": item["installedTargets"]})).collect::<Vec<_>>()).unwrap_or_default(),
+                }))
+            }
             "bootstrap" => {
                 if !context.settings.enabled {
                     return Ok(json!({"threads": {"threads": [], "hasMore": false},
@@ -293,6 +307,14 @@ impl AssistantService {
                 let threads = self.rpc(&app, &context, "threads", json!({})).await?;
                 Ok(json!({"threads": threads, "state": self.state.lock().await.clone(),
                     "settings": context.settings}))
+            }
+            "public-memory" | "save-public-memory" | "context" => {
+                let mut params = payload;
+                if action == "context" {
+                    validate_thread_id(&params)?;
+                    params["settings"] = json!(context.settings);
+                }
+                self.rpc(&app, &context, action, params).await
             }
             "threads" | "create-thread" | "messages" | "delete-thread" => {
                 if matches!(action, "messages" | "delete-thread") {
@@ -303,17 +325,27 @@ impl AssistantService {
                     if is_running(&state) && state["threadId"] == payload["threadId"] {
                         return Err(ManagerError::System("请先停止当前会话的任务".into()));
                     }
+                    drop(state);
+                    let mut thread = self.desktop_thread.lock().await;
+                    if payload["threadId"] == thread.1 {
+                        thread.1.clear();
+                    }
                 }
                 self.rpc(&app, &context, action, payload).await
             }
-            "send" => {
+            "send" | "desktop-send" | "compress" => {
+                let desktop = action == "desktop-send";
+                let compress = action == "compress";
                 if !context.settings.enabled {
                     return Err(ManagerError::System("应用助手已关闭，请在设置 → 功能扩展中启用".into()));
                 }
-                validate_thread_id(&payload)?;
+                if !desktop {
+                    validate_thread_id(&payload)?;
+                }
                 let message = payload["message"].as_str().unwrap_or("").trim().to_string();
-                if message.is_empty() || message.chars().count() > 30_000 {
-                    return Err(ManagerError::System("请输入 1 至 30000 个字符".into()));
+                let images = if compress { Vec::new() } else { images::validate(&payload["images"])? };
+                if !compress && ((message.is_empty() && images.is_empty()) || message.chars().count() > 30_000) {
+                    return Err(ManagerError::System("请输入消息或粘贴图片，文字最多 30000 个字符".into()));
                 }
                 if context.settings.target_id.is_empty() || context.settings.model.is_empty() {
                     return Err(ManagerError::System("请先选择模型来源和模型".into()));
@@ -322,6 +354,9 @@ impl AssistantService {
                 if active.is_some() {
                     return Err(ManagerError::System("已有任务正在执行，请先停止或等待完成".into()));
                 }
+                let reply_at_pet = if desktop {
+                    app.state::<crate::core::state::AppState>().show_assistant_reply(&app, true).await?
+                } else { false };
                 let run_id = uuid::Uuid::new_v4().to_string();
                 let cancel = CancellationToken::new();
                 *active = Some((run_id.clone(), cancel.clone()));
@@ -332,9 +367,15 @@ impl AssistantService {
                     state["runId"] = json!(run_id);
                     state["threadId"] = payload["threadId"].clone();
                     state["message"] = json!(message);
+                    state["images"] = json!(images);
                     state["text"] = json!("");
                     state["error"] = json!("");
+                    state["finishedAt"] = json!(0);
                     state["tools"] = json!([]);
+                    state["surface"] = json!(if desktop { "desktop" } else { "panel" });
+                    state["replyAtPet"] = json!(reply_at_pet);
+                    state["operation"] = json!(if compress { "compress" } else { "chat" });
+                    state["contextPhase"] = json!("");
                 }
                 self.emit_state(&app).await;
                 let service = self.clone();
@@ -342,6 +383,19 @@ impl AssistantService {
                 let response = self.state.lock().await.clone();
                 tauri::async_runtime::spawn(async move {
                     let result = async {
+                        // 桌面对话复用同一会话；先返回任务，再在后台建会话，输入框可继续编辑。
+                        let thread_id = if desktop {
+                            let mut thread = service.desktop_thread.lock().await;
+                            if thread.0 != context.paths.storage_dir || thread.1.is_empty() {
+                                let created = service.rpc(&app, &context, "create-thread", json!({})).await?;
+                                *thread = (context.paths.storage_dir.clone(), created["id"].as_str().unwrap_or("").to_string());
+                            }
+                            let id = json!(thread.1);
+                            service.state.lock().await["threadId"] = id.clone();
+                            drop(thread);
+                            service.emit_state(&app).await;
+                            id
+                        } else { thread_id };
                         let target = proxy::prepare_assistant_target(
                             &context.paths, &context.cli_targets, &context.settings,
                         ).await?;
@@ -350,10 +404,11 @@ impl AssistantService {
                             return Ok(json!({"cancelled": true}));
                         }
                         let proxy = LlmProxy::start_assistant(context.paths.clone(), target).await?;
-                        service.rpc(&app, &context, "run", json!({
-                            "runId": run_id, "threadId": thread_id, "message": message,
+                        service.rpc(&app, &context, if compress { "compress" } else { "run" }, json!({
+                            "runId": run_id, "threadId": thread_id, "message": message, "images": images,
                             "targetId": context.settings.target_id, "model": context.settings.model,
-                            "baseURL": proxy.base_url, "token": proxy.token, "api": api
+                            "baseURL": proxy.base_url, "token": proxy.token, "api": api,
+                            "settings": context.settings
                         })).await
                     }.await;
                     {
@@ -373,6 +428,8 @@ impl AssistantService {
                             }
                         }
                     }
+                    service.state.lock().await["finishedAt"] = json!(std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_millis() as u64);
                     *service.active.lock().await = None;
                     service.emit_state(&app).await;
                 });
@@ -410,6 +467,9 @@ impl AssistantService {
             return;
         }
         match event["type"].as_str() {
+            Some("context") => {
+                state["contextPhase"] = event["phase"].clone();
+            }
             Some("text-delta") => {
                 let text = state["text"].as_str().unwrap_or("").to_string()
                     + event["text"].as_str().unwrap_or("");
