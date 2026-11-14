@@ -42,7 +42,9 @@ const server = createServer(async (request, response) => {
   if (plan?.type === "hang") return
   if (plan?.type === "http-error") {
     if (plan.repeat) repeatedFailure = plan
-    response.writeHead(plan.status || 429, { "content-type": "application/json" })
+    response.writeHead(plan.status || 429, {
+      "content-type": "application/json"
+    })
     response.end(
       JSON.stringify({
         error: {
@@ -251,7 +253,27 @@ async function startChild() {
             : {
                 result: {
                   action: message.args.action,
-                  message: "原生动作已执行"
+                  message: "原生动作已执行",
+                  ...(message.name === "read_app_ui" ||
+                  message.name === "interact_app_ui"
+                    ? {
+                        windowLabel: "tool-window-image-workbench",
+                        snapshotId:
+                          message.name === "read_app_ui"
+                            ? "before-fill"
+                            : "after-fill",
+                        nodes: [
+                          {
+                            nodeId: "1",
+                            name: "图片提示词",
+                            value: message.args.text || ""
+                          }
+                        ],
+                        ...(message.name === "interact_app_ui"
+                          ? { actionDispatched: true }
+                          : {})
+                      }
+                    : {})
                 }
               })
         }) + "\n"
@@ -340,7 +362,13 @@ try {
   assert.equal(requests[0].path, "/v1/responses")
   assert.equal(requests[0].token, "Bearer loopback-only")
   assert.equal(requests[0].payload.model, "agent-test")
-  assert.equal(requests[0].payload.tools.length, 10)
+  assert.equal(requests[0].payload.tools.length, 12)
+  assert.ok(
+    requests[0].payload.tools.some((tool) => tool.name === "read_app_ui")
+  )
+  assert.ok(
+    requests[0].payload.tools.some((tool) => tool.name === "interact_app_ui")
+  )
   assert.ok(
     JSON.stringify(requests[1].payload.input).includes("原生动作已执行"),
     "原生结果回到下一轮模型上下文"
@@ -384,6 +412,36 @@ try {
     "后台重启后本地记忆仍在"
   )
   assert.equal((await rpc("threads")).total, 2)
+
+  const uiThread = await rpc("create-thread")
+  const uiParams = {
+    ...turn(uiThread.id, "读取图片工作台并输入一张游乐园照片"),
+    surface: "desktop"
+  }
+  const fillArgs = {
+    windowLabel: "tool-window-image-workbench",
+    snapshotId: "before-fill",
+    nodeId: "1",
+    action: "fill",
+    text: "一张游乐园照片"
+  }
+  plans.push(
+    {
+      type: "tool",
+      name: "read_app_ui",
+      args: { windowLabel: fillArgs.windowLabel }
+    },
+    { type: "tool", name: "interact_app_ui", args: fillArgs },
+    { text: "提示词已填写，等待生成。" }
+  )
+  assert.equal((await rpc("run", uiParams)).text, "提示词已填写，等待生成。")
+  assert.deepEqual(tools.at(-1).args, fillArgs)
+  assert.equal(tools.at(-1).runId, uiParams.runId)
+  assert.equal(tools.at(-1).surface, "desktop")
+  assert.ok(
+    JSON.stringify(requests.at(-1).payload.input).includes("after-fill")
+  )
+  await rpc("delete-thread", { threadId: uiThread.id })
 
   const cancelParams = turn(thread.id, "等待取消")
   const requested = new Promise((resolve) => {
@@ -586,7 +644,12 @@ try {
       images: [{ dataUrl: png, mimeType: "image/png" }],
       settings: {
         autoCompress: false,
-        disabledTools: ["set_pet_action", "update_public_memory"],
+        disabledTools: [
+          "set_pet_action",
+          "update_public_memory",
+          "read_app_ui",
+          "interact_app_ui"
+        ],
         skills: [
           {
             id: "own",
@@ -614,6 +677,8 @@ try {
       "停用工具不进入模型工具清单"
     )
     assert.ok(!registered.includes("update_public_memory"))
+    assert.ok(!registered.includes("read_app_ui"))
+    assert.ok(!registered.includes("interact_app_ui"))
     assert.ok(registered.includes("read_software_skills"))
     assert.ok(registered.includes("read_assistant_skills"))
   }

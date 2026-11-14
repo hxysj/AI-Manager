@@ -50,6 +50,7 @@ pub struct AssistantService {
     state: Arc<Mutex<Value>>,
     active: Arc<Mutex<Option<(String, CancellationToken)>>>,
     editors: Arc<Mutex<HashMap<String, EditorRequest>>>,
+    ui_requests: Arc<Mutex<HashMap<String, EditorRequest>>>,
     desktop_thread: Arc<Mutex<(String, String)>>,
 }
 
@@ -64,6 +65,7 @@ impl Default for AssistantService {
             }))),
             active: Default::default(),
             editors: Default::default(),
+            ui_requests: Default::default(),
             desktop_thread: Default::default(),
         }
     }
@@ -258,6 +260,8 @@ impl AssistantService {
     ) -> Result<Value, ManagerError> {
         match action {
             "state" => Ok(self.state.lock().await.clone()),
+            "ui-pending" | "ui-claim" | "ui-result" =>
+                tools::ui::dispatch(self, action, payload).await,
             "editor-pending" => Ok(json!(self.editors.lock().await.values()
                 .map(|request| request.payload.clone()).collect::<Vec<_>>())),
             "editor-result" => {

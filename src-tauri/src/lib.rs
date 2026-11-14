@@ -44,6 +44,14 @@ async fn dispatch_api(
     payload: Option<Value>,
     context: Option<Value>,
 ) -> Result<Value, String> {
+    // 界面回执绑定实际调用窗口，页面不能冒领其他窗口的操作请求。
+    let payload = if matches!(channel.as_str(), "assistant:ui-pending" | "assistant:ui-claim" | "assistant:ui-result") {
+        let mut payload = payload.filter(Value::is_object).unwrap_or_else(|| serde_json::json!({}));
+        payload["windowLabel"] = serde_json::json!(window.label());
+        Some(payload)
+    } else {
+        payload
+    };
     // 日志读写自身不再生成调用日志，前端错误也由同一开关和保留策略管理。
     if channel == "app-log:record" {
         let path = state.user_data_path().await;

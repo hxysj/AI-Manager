@@ -18,6 +18,18 @@
     "module": "窗口"
   },
   {
+    "id": "read_app_ui",
+    "name": "读取应用界面",
+    "description": "读取当前应用窗口的可见内容、控件和选项。",
+    "module": "界面"
+  },
+  {
+    "id": "interact_app_ui",
+    "name": "操作应用界面",
+    "description": "通过已读取的控件聚焦、输入、点击、选择和滚动。",
+    "module": "界面"
+  },
+  {
     "id": "set_pet_action",
     "name": "控制桌宠",
     "description": "切换动作和气泡内容。",

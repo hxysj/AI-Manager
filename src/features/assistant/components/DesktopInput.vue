@@ -126,10 +126,42 @@ const canSend = computed(
 let sequence = 0
 let eventVersion = 0
 let disposed = false
+let unfocusedTimer = null
 const listeners = []
 
 function applyTask(snapshot) {
   task.value = snapshot
+}
+
+// 快捷键唤出的窗口未进入前台时只保留一分钟，获得焦点后取消计时。
+function clearUnfocusedTimer() {
+  if (unfocusedTimer === null) return
+  window.clearTimeout(unfocusedTimer)
+  unfocusedTimer = null
+}
+
+function isWindowFocused() {
+  return document.hasFocus()
+}
+
+function scheduleUnfocusedClose() {
+  clearUnfocusedTimer()
+  unfocusedTimer = window.setTimeout(() => {
+    unfocusedTimer = null
+    if (visible.value && !isWindowFocused()) close()
+  }, 60_000)
+}
+
+function handleWindowFocus() {
+  clearUnfocusedTimer()
+}
+
+function handleWindowBlur() {
+  if (visible.value) scheduleUnfocusedClose()
+}
+
+function handleFocusIn() {
+  if (isWindowFocused()) clearUnfocusedTimer()
 }
 
 // 图片和未发送草稿一起保留，关闭输入框不会取消正在回复的任务。
@@ -146,15 +178,18 @@ async function pasteImages(event) {
 
 async function open() {
   sequence += 1
+  clearUnfocusedTimer()
   submitting.value = false
   visible.value = true
   error.value = ""
   await nextTick()
   input.value?.focus()
+  if (!isWindowFocused()) scheduleUnfocusedClose()
 }
 
 async function close() {
   sequence += 1
+  clearUnfocusedTimer()
   visible.value = false
   await assistantApi.desktopClose()
 }
@@ -263,7 +298,10 @@ onMounted(async () => {
         appApi.onStateChangedReady((state) => {
           settings.value = state.appSettings?.agents?.assistant || {}
           if (state.providers) catalog.value = state
-          if (settings.value.enabled === false) visible.value = false
+          if (settings.value.enabled === false) {
+            clearUnfocusedTimer()
+            visible.value = false
+          }
         })
     ]) {
       const unsubscribe = await subscribe()
@@ -273,6 +311,9 @@ onMounted(async () => {
       }
       listeners.push(unsubscribe)
     }
+    window.addEventListener("focus", handleWindowFocus)
+    window.addEventListener("blur", handleWindowBlur)
+    document.addEventListener("focusin", handleFocusIn)
     catalog.value = await assistantApi.catalog()
     const state = await appApi.bootstrapQuickSwitch()
     if (disposed) return
@@ -305,6 +346,10 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   disposed = true
   sequence += 1
+  clearUnfocusedTimer()
+  window.removeEventListener("focus", handleWindowFocus)
+  window.removeEventListener("blur", handleWindowBlur)
+  document.removeEventListener("focusin", handleFocusIn)
   listeners.forEach((unsubscribe) => unsubscribe())
 })
 </script>

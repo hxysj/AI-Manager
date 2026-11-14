@@ -19,6 +19,7 @@ const markdownModules = {
 }
 let publicMemoryText = ""
 const listeners = new Set()
+const desktopOpenListeners = new Set()
 const editorListeners = new Set()
 const localListeners = new Set()
 const settingsListeners = new Set()
@@ -120,6 +121,30 @@ const assistantApi = {
       : Promise.resolve(
           (listeners.add(callback), () => listeners.delete(callback))
         ),
+  getState: async () => ({
+    ...baseTask,
+    surface: "desktop",
+    replyAtPet: false
+  }),
+  desktopReady: async () => ({ visible: false }),
+  desktopClose: async () => calls.push(["desktop-close"]),
+  desktopSend: async (message, images) => {
+    calls.push(["desktop-send", { message, images }])
+    return {
+      ...baseTask,
+      runId: "desktop-run",
+      surface: "desktop",
+      replyAtPet: false,
+      status: "thinking",
+      message,
+      text: ""
+    }
+  },
+  desktopDrag: async () => calls.push(["desktop-drag"]),
+  onDesktopOpen: async (callback) => {
+    desktopOpenListeners.add(callback)
+    return () => desktopOpenListeners.delete(callback)
+  },
   bootstrap: async () => ({
     threads: { threads: [...threads], hasMore: false },
     state: { ...baseTask },
@@ -175,6 +200,18 @@ const settingsApi = {
   saveSettings: async (patch) => calls.push(["settings", patch])
 }
 const appApi = {
+  bootstrapQuickSwitch: async () => ({
+    appSettings: {
+      agents: {
+        assistant: {
+          enabled: true,
+          targetId: "codex-provider",
+          model: "agent-model",
+          protocol: "auto"
+        }
+      }
+    }
+  }),
   openToolWindow: async (payload) => calls.push(["window", payload]),
   showMainPanel: async (payload) => calls.push(["main", payload]),
   onStateChangedReady: async (callback) => {
@@ -182,17 +219,48 @@ const appApi = {
     return () => settingsListeners.delete(callback)
   }
 }
+// 用可控计时器验证快捷键输入框的失焦自动关闭，不等待真实一分钟。
+const windowListeners = new Map()
+const timers = new Map()
+let timerId = 0
 globalThis.window = {
   innerWidth: 1000,
   innerHeight: 800,
-  setTimeout,
-  clearTimeout,
-  addEventListener() {},
-  removeEventListener() {}
+  setTimeout: (callback, delay) => {
+    const id = ++timerId
+    timers.set(id, { callback, delay })
+    return id
+  },
+  clearTimeout: (id) => timers.delete(id),
+  addEventListener: (name, callback) => {
+    const callbacks = windowListeners.get(name) || new Set()
+    callbacks.add(callback)
+    windowListeners.set(name, callbacks)
+  },
+  removeEventListener: (name, callback) =>
+    windowListeners.get(name)?.delete(callback)
 }
 globalThis.localStorage = { getItem: () => null, setItem() {} }
 globalThis.Document = class {
   activeElement = null
+
+  focused = true
+
+  listeners = new Map()
+
+  hasFocus() {
+    return this.focused
+  }
+
+  addEventListener(name, callback) {
+    const callbacks = this.listeners.get(name) || new Set()
+    callbacks.add(callback)
+    this.listeners.set(name, callbacks)
+  }
+
+  removeEventListener(name, callback) {
+    this.listeners.get(name)?.delete(callback)
+  }
 }
 globalThis.document = new Document()
 function host(type, text = "") {
@@ -423,11 +491,13 @@ realComponents.set(
   "@/features/assistant/components/AssistantImages.vue",
   await compile("src/features/assistant/components/AssistantImages.vue")
 )
-const [Assistant, JsonEditor, AssistantExtension] = await Promise.all([
-  compile("src/features/assistant/index.vue"),
-  compile("src/features/tools/jsonAgent/index.vue"),
-  compile("src/features/settings/components/AssistantExtension.vue")
-])
+const [Assistant, JsonEditor, AssistantExtension, DesktopInput] =
+  await Promise.all([
+    compile("src/features/assistant/index.vue"),
+    compile("src/features/tools/jsonAgent/index.vue"),
+    compile("src/features/settings/components/AssistantExtension.vue"),
+    compile("src/features/assistant/components/DesktopInput.vue")
+  ])
 // 技能保存和工具开关只修改助手自己的对应配置。
 const capabilitySettings = vue.reactive({
   skills: [],
@@ -548,6 +618,99 @@ await view.state.openMainPanel()
 assert.deepEqual(calls.at(-1), ["main", { toolId: "assistant" }])
 await view.state.openJsonEditor()
 assert.deepEqual(calls.at(-1), ["window", { toolId: "json-agent" }])
+
+const previousSettingsListeners = new Set(settingsListeners)
+const desktop = mount(DesktopInput)
+await tick()
+const desktopSettingsListeners = [...settingsListeners].filter(
+  (callback) => !previousSettingsListeners.has(callback)
+)
+assert.equal(desktop.state.visible, false)
+const idleTimer = () =>
+  [...timers.entries()].find(([, timer]) => timer.delay === 60_000)
+const openDesktop = async () => {
+  await Promise.all([...desktopOpenListeners].map((callback) => callback()))
+  await tick()
+}
+const focusDesktop = (focused) => {
+  document.focused = focused
+  for (const callback of windowListeners.get(focused ? "focus" : "blur") || [])
+    callback()
+}
+const expireIdle = async () => {
+  const timer = idleTimer()
+  assert.ok(timer, "输入框失焦时应有一分钟计时器")
+  timers.delete(timer[0])
+  timer[1].callback()
+  await tick()
+}
+document.focused = false
+await openDesktop()
+assert.equal(desktop.state.visible, true)
+desktop.state.draft = "尚未发送的草稿"
+desktop.state.images = [{ id: "draft-image" }]
+const originalTask = desktop.state.task
+await expireIdle()
+assert.equal(desktop.state.visible, false)
+assert.deepEqual(calls.at(-1), ["desktop-close"])
+assert.equal(desktop.state.draft, "尚未发送的草稿")
+assert.deepEqual(desktop.state.images, [{ id: "draft-image" }])
+assert.equal(desktop.state.task, originalTask, "收起窗口不应取消已有任务")
+
+await openDesktop()
+assert.equal(desktop.state.visible, true)
+const beforeReopen = idleTimer()[0]
+await openDesktop()
+assert.ok(!timers.has(beforeReopen), "再次唤出应重置原有计时")
+assert.ok(idleTimer())
+focusDesktop(true)
+assert.equal(idleTimer(), undefined, "聚焦后应取消自动关闭")
+focusDesktop(false)
+assert.ok(idleTimer(), "再次失焦应重新计算一分钟")
+for (const callback of document.listeners.get("focusin") || []) callback()
+assert.ok(idleTimer(), "窗口仍失焦时，内部焦点变化不应取消计时")
+document.focused = true
+for (const callback of document.listeners.get("focusin") || []) callback()
+assert.equal(idleTimer(), undefined, "窗口聚焦后内部焦点事件应清理计时")
+focusDesktop(false)
+// 到点前重新聚焦，即使焦点事件尚未派发，也不能误关。
+document.focused = true
+await expireIdle()
+assert.equal(desktop.state.visible, true)
+desktop.state.images = []
+await desktop.state.send()
+assert.equal(desktop.state.visible, true, "发送不应自动收起窗口")
+assert.equal(desktop.state.draft, "")
+assert.equal(desktop.state.task.status, "thinking")
+desktop.state.draft = "回复期间的新草稿"
+focusDesktop(false)
+const cancels = calls.filter(([name]) => name === "cancel").length
+await expireIdle()
+assert.equal(desktop.state.visible, false)
+assert.equal(desktop.state.draft, "回复期间的新草稿")
+assert.equal(desktop.state.task.status, "thinking")
+assert.equal(calls.filter(([name]) => name === "cancel").length, cancels)
+await openDesktop()
+await desktop.state.close()
+assert.equal(idleTimer(), undefined, "手动关闭应清理计时")
+await openDesktop()
+for (const callback of desktopSettingsListeners)
+  callback({
+    appSettings: { agents: { assistant: { enabled: false } } }
+  })
+assert.equal(desktop.state.visible, false)
+assert.equal(idleTimer(), undefined, "禁用助手应清理计时")
+for (const callback of desktopSettingsListeners)
+  callback(await appApi.bootstrapQuickSwitch())
+await openDesktop()
+assert.ok(idleTimer())
+desktop.unmount()
+document.focused = true
+assert.equal(desktopOpenListeners.size, 0)
+assert.equal(idleTimer(), undefined, "卸载应清理计时")
+assert.equal(windowListeners.get("focus")?.size || 0, 0)
+assert.equal(windowListeners.get("blur")?.size || 0, 0)
+assert.equal(document.listeners.get("focusin")?.size || 0, 0)
 
 const modelErrors = []
 const modelView = mount(ModelSelect, {
@@ -765,7 +928,7 @@ const config = mount(AssistantExtension, {
   }
 })
 await tick()
-assert.equal(config.state.expanded, true)
+assert.equal(config.state.showConfig, true)
 config.state.selectTarget("claude-provider")
 await tick()
 assert.deepEqual(savedPatches.at(-1), {

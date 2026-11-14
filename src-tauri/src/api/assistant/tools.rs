@@ -10,6 +10,7 @@ mod windows;
 mod pet;
 mod json_editor;
 mod skills;
+pub(super) mod ui;
 
 pub(super) fn catalog() -> Value {
     serde_json::from_str(include_str!("../../../node/assistant-tools/catalog.json")).expect("助手工具目录必须是合法 JSON")
@@ -40,6 +41,7 @@ pub(super) fn execute<'a>(
         "read_app_config" => config::execute(service, app, args).await,
         "update_app_settings" => settings::execute(app, args).await,
         "open_app_window" => windows::execute(app, args, request["surface"].as_str()).await,
+        "read_app_ui" | "interact_app_ui" => ui::execute(service, app, args, cancellation, request).await,
         "set_pet_action" => pet::execute(service, app, args).await,
         "read_json_editor" | "write_json_editor" => json_editor::execute(service, app, args, cancellation, request).await,
         "read_software_skills" | "read_assistant_skills" => skills::execute(app, args, request["name"].as_str().unwrap_or("")).await,

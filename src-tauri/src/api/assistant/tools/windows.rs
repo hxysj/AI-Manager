@@ -10,23 +10,25 @@ pub(super) async fn execute(
 ) -> Result<Value, ManagerError> {
     let state = app.state::<AppState>();
     let tool_id = args["toolId"].as_str().unwrap_or("");
-    if tool_id == "assistant" {
-        return Box::pin(state.dispatch(app.clone(), "tool-window:open",
-            Some(json!({"toolId": "assistant"})))).await;
-    }
     if tool_id != "main" && ![
-        "json-agent", "image-workbench", "string-diff", "image-link-extractor",
+        "assistant", "json-agent", "image-workbench", "string-diff", "image-link-extractor",
         "coordinate-overlay", "port-monitor", "network-quality",
         "multi-protocol-gateway", "git", "lan-share", "codex-pets",
     ].contains(&tool_id) {
         return Err(ManagerError::System("未知应用窗口".into()));
     }
-    if tool_id != "main"
-        && (surface == Some("desktop")
-            || app.get_webview_window(&format!("tool-window-{tool_id}")).is_some())
-    {
-        return crate::api::app::open_tool_window(app, tool_id);
-    }
-    Box::pin(state.dispatch(app.clone(), "quick-switch:show-main",
-        Some(if tool_id == "main" { json!({}) } else { json!({"toolId": tool_id}) }))).await
+    let independent = tool_id != "main"
+        && (tool_id == "assistant" || surface == Some("desktop")
+            || app.get_webview_window(&format!("tool-window-{tool_id}")).is_some());
+    let result = if independent {
+        crate::api::app::open_tool_window(app, tool_id)?
+    } else {
+        Box::pin(state.dispatch(app.clone(), "quick-switch:show-main",
+            Some(if tool_id == "main" { json!({}) } else { json!({"toolId": tool_id}) }))).await?
+    };
+    // 首次创建工具窗口时尚未获得原生焦点，后续界面工具使用明确的窗口标识。
+    Ok(json!({
+        "windowLabel": if independent { format!("tool-window-{tool_id}") } else { "main".into() },
+        "result": result
+    }))
 }

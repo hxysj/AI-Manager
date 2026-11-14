@@ -5,13 +5,22 @@ import windows from "./windows.mjs"
 import pet from "./pet.mjs"
 import jsonEditor from "./json-editor.mjs"
 import skills from "./skills.mjs"
+import ui from "./ui.mjs"
 import catalog from "./catalog.json" with { type: "json" }
 export { catalog }
 
 // 注册、管理目录和模型可见工具使用同一组稳定 ID。
 export function createTools(signal, nativeTool, disabled = []) {
   return Object.fromEntries(
-    [...config, ...settings, ...windows, ...pet, ...jsonEditor, ...skills]
+    [
+      ...config,
+      ...settings,
+      ...windows,
+      ...pet,
+      ...jsonEditor,
+      ...skills,
+      ...ui
+    ]
       .filter((definition) => !disabled.includes(definition.id))
       .map((definition) => [
         definition.id,
