@@ -296,7 +296,7 @@ async function compile(filename) {
           systemApi: {
             openExternal: async (payload) => calls.push(["external", payload])
           },
-          skillsApi: {
+          skillApi: {
             getSkillContent: async () => ({ content: "软件技能正文" })
           },
           toolboxApi: {}

@@ -156,6 +156,33 @@ async fn handle(request: Request<Incoming>, context: Arc<ProxyContext>) -> Respo
         if let Some(tracking) = &mut tracking {
             tracking.response(status.as_u16(), content_type.contains("text/event-stream"));
         }
+        if !status.is_success() {
+            let bytes = match response.bytes().await {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    if let Some(tracking) = &mut tracking {
+                        tracking.fail("network");
+                    }
+                    return error_response(
+                        StatusCode::BAD_GATEWAY,
+                        &format!("上游返回 HTTP {}，且错误响应读取失败：{error}", status.as_u16()),
+                    );
+                }
+            };
+            if let Some(tracking) = &mut tracking {
+                tracking.observe(&bytes);
+                tracking.finish();
+            }
+            return Response::builder()
+                .status(status)
+                .header("content-type", "application/json")
+                .body(
+                    Full::new(enrich_assistant_error(status, &bytes))
+                        .map_err(|error| match error {})
+                        .boxed_unsync(),
+                )
+                .unwrap();
+        }
         let stream = futures_util::stream::unfold(
             (response.bytes_stream(), tracking),
             |(mut stream, mut tracking)| async move {
@@ -264,6 +291,53 @@ async fn handle(request: Request<Incoming>, context: Arc<ProxyContext>) -> Respo
     }
 }
 
+fn enrich_assistant_error(status: StatusCode, bytes: &[u8]) -> Bytes {
+    let raw = String::from_utf8_lossy(bytes).trim().to_string();
+    let mut value = serde_json::from_slice::<Value>(bytes).unwrap_or_else(|_| {
+        json!({
+            "error": {
+                "message": raw
+            }
+        })
+    });
+    let message = value
+        .pointer("/error/message")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("message").and_then(Value::as_str))
+        .unwrap_or("模型服务请求失败")
+        .trim()
+        .to_string();
+    let detail = value
+        .pointer("/error/detail")
+        .and_then(Value::as_str)
+        .or_else(|| value.get("detail").and_then(Value::as_str))
+        .or_else(|| value.pointer("/error/reason").and_then(Value::as_str))
+        .or_else(|| value.get("reason").and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|text| !text.is_empty())
+        .unwrap_or("");
+    let status_text = format!("HTTP {}", status.as_u16());
+    let message = if message.contains(&status_text) {
+        if detail.is_empty() || message.contains(detail) {
+            message
+        } else {
+            format!("{message}：{detail}")
+        }
+    } else if detail.is_empty() || message.contains(detail) {
+        format!("{message}（HTTP {}）", status.as_u16())
+    } else {
+        format!("{message}（HTTP {}）：{detail}", status.as_u16())
+    };
+    if !value.is_object() {
+        value = json!({"error": {}});
+    }
+    if !value["error"].is_object() {
+        value["error"] = json!({});
+    }
+    value["error"]["message"] = json!(message);
+    Bytes::from(value.to_string())
+}
+
 // Responses 用量只取终态响应一次；缓存和推理 token 是输入、输出的子集。
 fn inspect_response(bytes: &[u8], record: &mut Value) -> bool {
     let text = String::from_utf8_lossy(bytes);
@@ -310,4 +384,31 @@ fn inspect_response(bytes: &[u8], record: &mut Value) -> bool {
         }
     }
     completed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn assistant_error_preserves_upstream_detail_and_status() {
+        let body = r#"{"error":{"message":"Upstream request failed","detail":"工具定义不受支持"}}"#
+            .as_bytes();
+        let value: Value =
+            serde_json::from_slice(&enrich_assistant_error(StatusCode::BAD_GATEWAY, body))
+                .unwrap();
+        assert_eq!(
+            value["error"]["message"],
+            "Upstream request failed（HTTP 502）：工具定义不受支持"
+        );
+    }
+
+    #[test]
+    fn assistant_error_does_not_duplicate_existing_status() {
+        let body = r#"{"error":{"message":"Upstream request failed（HTTP 502）"}}"#.as_bytes();
+        let value: Value =
+            serde_json::from_slice(&enrich_assistant_error(StatusCode::BAD_GATEWAY, body))
+                .unwrap();
+        assert_eq!(value["error"]["message"], "Upstream request failed（HTTP 502）");
+    }
 }

@@ -39,7 +39,7 @@ pub(super) fn execute<'a>(
     match request["name"].as_str().unwrap_or("") {
         "read_app_config" => config::execute(service, app, args).await,
         "update_app_settings" => settings::execute(app, args).await,
-        "open_app_window" => windows::execute(app, args).await,
+        "open_app_window" => windows::execute(app, args, request["surface"].as_str()).await,
         "set_pet_action" => pet::execute(service, app, args).await,
         "read_json_editor" | "write_json_editor" => json_editor::execute(service, app, args, cancellation, request).await,
         "read_software_skills" | "read_assistant_skills" => skills::execute(app, args, request["name"].as_str().unwrap_or("")).await,

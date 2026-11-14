@@ -3,7 +3,11 @@ use crate::core::{error::ManagerError, state::AppState};
 use tauri::{AppHandle, Manager};
 
 // 此模块只处理对应能力，任务身份和工具开关由统一入口校验。
-pub(super) async fn execute(app: &AppHandle, args: &Value) -> Result<Value, ManagerError> {
+pub(super) async fn execute(
+    app: &AppHandle,
+    args: &Value,
+    surface: Option<&str>,
+) -> Result<Value, ManagerError> {
     let state = app.state::<AppState>();
     let tool_id = args["toolId"].as_str().unwrap_or("");
     if tool_id == "assistant" {
@@ -17,7 +21,10 @@ pub(super) async fn execute(app: &AppHandle, args: &Value) -> Result<Value, Mana
     ].contains(&tool_id) {
         return Err(ManagerError::System("未知应用窗口".into()));
     }
-    if tool_id != "main" && app.get_webview_window(&format!("tool-window-{tool_id}")).is_some() {
+    if tool_id != "main"
+        && (surface == Some("desktop")
+            || app.get_webview_window(&format!("tool-window-{tool_id}")).is_some())
+    {
         return crate::api::app::open_tool_window(app, tool_id);
     }
     Box::pin(state.dispatch(app.clone(), "quick-switch:show-main",

@@ -84,6 +84,12 @@ pub fn dispatch(app: &AppHandle, action: &str) -> Result<Value, ManagerError> {
             }
             Ok(Value::Null)
         }
+        "drag" => {
+            if let Some(window) = app.get_webview_window("assistant-desktop") {
+                window.start_dragging().map_err(failure)?;
+            }
+            Ok(Value::Null)
+        }
         _ => Err(ManagerError::UnknownChannel(format!(
             "assistant:desktop-{action}"
         ))),

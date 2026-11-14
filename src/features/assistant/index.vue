@@ -1263,6 +1263,10 @@ onBeforeUnmount(() => {
                 padding: 10px 14px;
                 border-radius: 12px;
                 background: var(--color-primary-soft);
+                .assistant-message-copy {
+                  right: calc(100% + 8px);
+                  left: auto;
+                }
                 .assistant-message-text {
                   white-space: pre-wrap;
                 }

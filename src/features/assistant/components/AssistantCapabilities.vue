@@ -225,7 +225,7 @@
 <script setup>
 import { computed, onBeforeUnmount, onMounted, ref } from "vue"
 import { Pencil, Plus, Trash2, Upload } from "lucide-vue-next"
-import { assistantApi, settingsApi, skillsApi } from "@/api"
+import { assistantApi, settingsApi, skillApi } from "@/api"
 const props = defineProps({
   settings: { type: Object, required: true },
   busy: Boolean
@@ -324,7 +324,7 @@ async function importSkill(event) {
 async function copySoftwareSkill(skill) {
   error.value = ""
   try {
-    const result = await skillsApi.getSkillContent({ skillName: skill.name })
+    const result = await skillApi.getSkillContent({ skillName: skill.name })
     if (disposed) return
     if ((result.content || "").length > 16000)
       throw new Error("技能超过 16000 个字符，请精简后导入")

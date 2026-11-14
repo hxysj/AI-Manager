@@ -21,6 +21,7 @@ let stopChild
 let toolError = ""
 let waitForRequest
 let failureMode = false
+let repeatedFailure
 const server = createServer(async (request, response) => {
   clients.add(response)
   response.on("close", () => clients.delete(response))
@@ -32,18 +33,23 @@ const server = createServer(async (request, response) => {
     token: request.headers.authorization,
     payload
   })
-  const plan = failureMode ? { type: "http-error" } : plans.shift()
+  const plan =
+    plans.shift() ||
+    repeatedFailure ||
+    (failureMode ? { type: "http-error" } : undefined)
   waitForRequest?.()
   waitForRequest = null
   if (plan?.type === "hang") return
   if (plan?.type === "http-error") {
-    response.writeHead(429, { "content-type": "application/json" })
+    if (plan.repeat) repeatedFailure = plan
+    response.writeHead(plan.status || 429, { "content-type": "application/json" })
     response.end(
       JSON.stringify({
         error: {
-          message: "测试模型限流",
-          type: "rate_limit_error",
-          code: "rate_limit_exceeded"
+          message: plan.message || "测试模型限流",
+          type: plan.errorType || "rate_limit_error",
+          code: plan.code || "rate_limit_exceeded",
+          ...(plan.detail ? { detail: plan.detail } : {})
         }
       })
     )
@@ -411,6 +417,38 @@ try {
     "原生工具错误要报告失败"
   )
   toolError = ""
+  plans.splice(0)
+  const upstreamFailureThread = await rpc("create-thread")
+  plans.push(
+    {
+      type: "tool",
+      name: "set_pet_action",
+      args: { action: "jump" }
+    },
+    {
+      type: "http-error",
+      status: 502,
+      message: "Upstream request failed（HTTP 502）：工具结果无法继续处理",
+      errorType: "upstream_error",
+      code: "upstream_unavailable",
+      repeat: true
+    }
+  )
+  await assert.rejects(
+    rpc("run", turn(upstreamFailureThread.id, "让桌宠跳跃后继续回答")),
+    /工具结果无法继续处理|502/,
+    "工具循环后的模型错误要保留上游原因和状态码"
+  )
+  assert.equal(
+    requests.some((request) =>
+      JSON.stringify(request.payload).includes("HTTP 502）（HTTP 502")
+    ),
+    false,
+    "错误消息不能重复追加 HTTP 状态码"
+  )
+  failureMode = false
+  repeatedFailure = undefined
+  await rpc("delete-thread", { threadId: upstreamFailureThread.id })
   for (const api of ["chat", "messages"]) {
     const thread = await rpc("create-thread")
     plans.push(

@@ -21,6 +21,7 @@ export const assistantApi = {
   desktopOpen: () => request("assistant:desktop-open"),
   desktopReady: () => request("assistant:desktop-ready"),
   desktopClose: () => request("assistant:desktop-close"),
+  desktopDrag: () => request("assistant:desktop-drag"),
   desktopStatus: () => request("assistant:desktop-status"),
   onDesktopOpen: (callback) =>
     subscribeReady("assistant:desktop-open", callback),

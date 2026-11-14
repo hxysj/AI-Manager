@@ -6,6 +6,7 @@
     tabindex="-1"
     @keydown.esc.stop.prevent="close"
     @paste="pasteImages"
+    @pointerdown="dragWindow"
   >
     <div class="desktop-assistant-composer">
       <button
@@ -156,6 +157,22 @@ async function close() {
   sequence += 1
   visible.value = false
   await assistantApi.desktopClose()
+}
+
+// 只让输入框的空白区域拖动原生窗口，避免影响文本选择和按钮操作。
+async function dragWindow(event) {
+  if (
+    event.button !== 0 ||
+    event.target?.closest?.(
+      "button, textarea, input, select, a, [role='button']"
+    )
+  )
+    return
+  try {
+    await assistantApi.desktopDrag()
+  } catch (failure) {
+    error.value = failure.message || String(failure)
+  }
 }
 
 async function send() {
@@ -309,6 +326,7 @@ onBeforeUnmount(() => {
     background: var(--color-panel);
     box-shadow: 0 4px 12px rgba(29, 71, 129, 0.14);
     color: var(--color-text);
+    cursor: move;
     font-size: var(--font-size-sm);
     &:focus-within {
       border-color: var(--color-primary);

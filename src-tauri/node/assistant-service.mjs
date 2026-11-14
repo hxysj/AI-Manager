@@ -28,6 +28,69 @@ const send = (value) => process.stdout.write(`${JSON.stringify(value)}\n`)
 console.log = (...args) => console.error(...args)
 console.info = (...args) => console.error(...args)
 
+function parseErrorValue(value) {
+  if (typeof value !== "string") return value
+  try {
+    return JSON.parse(value)
+  } catch {
+    return value
+  }
+}
+
+function errorDetail(error) {
+  const maxLength = 1200
+  const seen = new Set()
+  const messages = []
+  let statusCode
+  const pushMessage = (value) => {
+    const text = value.trim()
+    if (!text) return
+    messages.push(
+      text.length > maxLength ? `${text.slice(0, maxLength - 1)}…` : text
+    )
+  }
+
+  const visit = (value, depth = 0) => {
+    if (value == null || depth > 4) return
+    if (typeof value === "string") {
+      const parsed = parseErrorValue(value)
+      if (parsed !== value) {
+        visit(parsed, depth + 1)
+      } else {
+        pushMessage(value)
+      }
+      return
+    }
+    if (typeof value !== "object") return
+    if (seen.has(value)) return
+    seen.add(value)
+
+    if (Number.isInteger(value.statusCode)) statusCode = value.statusCode
+    if (Number.isInteger(value.status)) statusCode ||= value.status
+
+    for (const key of ["responseBody", "data", "error", "cause"]) {
+      if (value[key] != null) visit(value[key], depth + 1)
+    }
+    if (typeof value.message === "string") pushMessage(value.message)
+    if (typeof value.detail === "string") pushMessage(value.detail)
+  }
+
+  visit(error)
+  const unique = [...new Set(messages)]
+  const generic = new Set([
+    "Upstream request failed",
+    "模型服务请求失败",
+    "Request failed"
+  ])
+  const message =
+    unique.find((item) => !generic.has(item)) || unique[0] || "模型服务请求失败"
+  const suffix =
+    statusCode && !new RegExp(`HTTP\\s*${statusCode}\\b`, "i").test(message)
+      ? `（HTTP ${statusCode}）`
+      : ""
+  return `${message}${suffix}`
+}
+
 function nativeTool(name, args, signal) {
   if (signal.aborted) throw new Error("任务已停止")
   const id = randomUUID()
@@ -47,7 +110,14 @@ function nativeTool(name, args, signal) {
         reject(error)
       }
     })
-    send({ type: "tool", id, runId: active.runId, name, args })
+    send({
+      type: "tool",
+      id,
+      runId: active.runId,
+      surface: active.surface,
+      name,
+      args
+    })
   })
 }
 
@@ -55,7 +125,13 @@ async function runTurn(params, compress = false) {
   if (active) throw new Error("已有任务正在执行，请先停止或等待完成")
   if (cancelledRuns.delete(params.runId)) return { cancelled: true }
   const controller = new AbortController()
-  active = { runId: params.runId, threadId: params.threadId, controller }
+  // 工具窗口需要知道任务来自主面板还是桌面悬浮窗。
+  active = {
+    runId: params.runId,
+    threadId: params.threadId,
+    surface: params.surface,
+    controller
+  }
   const emit = (event) =>
     send({
       type: "event",
@@ -145,6 +221,7 @@ async function runTurn(params, compress = false) {
         )
       }
     })
+    let streamError
     const output = await agent.stream(
       [
         {
@@ -168,13 +245,13 @@ async function runTurn(params, compress = false) {
         memory: { thread: params.threadId, resource: resourceId },
         abortSignal: controller.signal,
         maxSteps: 12,
-        modelSettings: {
-          maxRetries: 0,
-          maxOutputTokens: contextPolicy(params.settings).outputReserve
+        maxRetries: 0,
+        maxOutputTokens: contextPolicy(params.settings).outputReserve,
+        onError: ({ error }) => {
+          streamError = error
         }
       }
     )
-    let streamError
     for await (const chunk of output.fullStream) {
       const payload = chunk.payload || {}
       if (chunk.type === "text-delta")
@@ -201,12 +278,11 @@ async function runTurn(params, compress = false) {
           name: payload.toolName,
           error: payload.error?.message || String(payload.error)
         })
-      if (chunk.type === "error")
-        streamError = payload.error?.message || String(payload.error)
+      if (chunk.type === "error") streamError ||= payload.error
     }
     if (controller.signal.aborted) return { cancelled: true }
     if (streamError || output.error)
-      throw new Error(streamError || output.error.message)
+      throw new Error(errorDetail(streamError || output.error))
     return { text: await output.text }
   } finally {
     try {

@@ -408,6 +408,7 @@ impl AssistantService {
                             "runId": run_id, "threadId": thread_id, "message": message, "images": images,
                             "targetId": context.settings.target_id, "model": context.settings.model,
                             "baseURL": proxy.base_url, "token": proxy.token, "api": api,
+                            "surface": if desktop { "desktop" } else { "panel" },
                             "settings": context.settings
                         })).await
                     }.await;
