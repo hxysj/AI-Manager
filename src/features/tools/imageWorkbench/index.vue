@@ -1199,6 +1199,7 @@
                   :class="{ 'is-loading': detailLoading }"
                 >
                   <el-image
+                    v-if="task.thumbnail"
                     class="image-hero-img"
                     :src="task.thumbnail"
                     fit="contain"
@@ -1217,6 +1218,10 @@
                       </div>
                     </template>
                   </el-image>
+                  <div v-else class="preview-placeholder">
+                    <LoaderCircle class="spinning" :size="28" />
+                    <span>正在加载图片…</span>
+                  </div>
                   <div
                     class="image-hero-overlay"
                     @click.self="showDetail(task, 'images')"

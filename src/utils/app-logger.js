@@ -49,16 +49,40 @@ export function reportAppError(kind, error, details = {}) {
 export function installRuntimeLogging() {
   if (runtimeInstalled) return
   runtimeInstalled = true
-  window.addEventListener('error', event => {
-    reportAppError('window-error', event.error || event.message || '页面资源加载失败', {
-      context: {
-        ...createLogContext(),
-        filename: event.filename || event.target?.src || event.target?.href || '',
-        line: event.lineno,
-        column: event.colno
-      }
-    })
-  }, true)
+  window.addEventListener(
+    'error',
+    (event) => {
+      const target = event.target
+      const resourceTag = target?.tagName?.toLowerCase() || ''
+      const resourceSource =
+        target?.getAttribute?.('src') ?? target?.getAttribute?.('href') ?? ''
+      const resourceSourceSet = target?.getAttribute?.('srcset') || ''
+      // 空 src 的解析地址可能指向当前页面，不能当成实际失败资源。
+      const resourceUrl =
+        resourceSource.trim() || resourceSourceSet.trim()
+          ? target.currentSrc || target.src || target.href || resourceSource
+          : ''
+      const resourceMessage = resourceTag
+        ? `页面资源加载失败（${resourceTag}${resourceUrl ? '' : '，地址为空'}）`
+        : '页面资源加载失败'
+      reportAppError(
+        'window-error',
+        event.error || event.message || resourceMessage,
+        {
+          context: {
+            ...createLogContext(),
+            filename: event.filename || resourceUrl,
+            ...(resourceTag
+              ? { resourceTag, resourceSource, resourceSourceSet, resourceUrl }
+              : {}),
+            line: event.lineno,
+            column: event.colno
+          }
+        }
+      )
+    },
+    true
+  )
   window.addEventListener('unhandledrejection', event => {
     reportAppError('unhandled-rejection', event.reason)
   })

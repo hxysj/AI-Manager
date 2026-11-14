@@ -223,13 +223,23 @@ try {
               filter:
                 /index\.vue$|ImageBatchDialog\.vue$|BatchResultsPanel\.vue$/
             },
-            async (args) => ({
-              contents: compileScript(
-                parse(await readFile(args.path, "utf8")).descriptor,
-                { id: "workbench-test" }
-              ).content,
-              resolveDir: resolve("src/features/tools/imageWorkbench")
-            })
+            async (args) => {
+              const { descriptor } = parse(await readFile(args.path, "utf8"))
+              const script = compileScript(descriptor, { id: "workbench-test" })
+              const template =
+                args.path === sourcePath
+                  ? compileTemplate({
+                      source: descriptor.template.content,
+                      filename: args.path,
+                      id: "workbench-test",
+                      compilerOptions: { bindingMetadata: script.bindings }
+                    }).code
+                  : ""
+              return {
+                contents: `${script.content}\n${template}`,
+                resolveDir: resolve("src/features/tools/imageWorkbench")
+              }
+            }
           )
         }
       }
@@ -245,7 +255,9 @@ try {
       bundle.outputFiles.find((file) => file.path.endsWith(name)).contents
     )
   }
-  const component = (await import(pathToFileURL(temporary))).default
+  const { default: component, render: renderWorkbench } = await import(
+    pathToFileURL(temporary)
+  )
   component.render = () => null
   const renderer = createRenderer({
     createComment: () => ({}),
@@ -489,6 +501,25 @@ try {
   app.unmount()
   const restoredApp = renderer.createApp(component)
   const restored = restoredApp.mount({}).$.setupState
+  let renderedWorkbench
+  const previewApp = renderer.createApp({
+    render() {
+      renderedWorkbench = renderWorkbench({}, [], {}, restored)
+      return null
+    }
+  })
+  // 渲染真实模板但不挂载第三方控件，检查空缩略图期间的实际组件分支。
+  previewApp.config.warnHandler = () => {}
+  previewApp.mount({})
+  function findVNodes(node, predicate) {
+    if (!node || typeof node !== "object") return []
+    return [
+      ...(predicate(node) ? [node] : []),
+      ...(Array.isArray(node.children)
+        ? node.children.flatMap((child) => findVNodes(child, predicate))
+        : [])
+    ]
+  }
   await settle()
   assert.equal(restored.activeConversationId, lastConversation)
   assert.equal(restored.height, 1536)
@@ -535,7 +566,11 @@ try {
     imageCount: 0,
     request: {
       conversationId: restored.activeConversationId,
-      roundId: "live-round"
+      roundId: "live-round",
+      prompt: "蓝天白云",
+      n: 1,
+      model: "gpt-image-2",
+      size: "1024x1024"
     }
   }
   tasks = [liveTask]
@@ -563,17 +598,57 @@ try {
   }
   tasks = [completion.task]
   history = [{ ...history[0], status: "completed", revision: 2 }]
+  let finishPreview
+  const previewApi = globalThis.__imageTest.toolboxApi.imageTaskPreviews
+  globalThis.__imageTest.toolboxApi.imageTaskPreviews = async () =>
+    new Promise((resolve) => {
+      finishPreview = resolve
+    })
   listeners.get("images:changed")(completion)
   listeners.get("images:changed")({ ...completion, task: liveTask })
   releaseList({ items: staleTasks, total: 1 })
   await loading
   assert.equal(restored.tasks[0].status, "completed")
   assert.equal(restored.tasks[0].revision, 2)
+  await settle()
+  assert.equal(
+    findVNodes(
+      renderedWorkbench,
+      (node) => node.props?.class === "image-hero-preview"
+    ).length,
+    1
+  )
+  assert.equal(
+    findVNodes(
+      renderedWorkbench,
+      (node) => node.props?.class === "image-hero-img"
+    ).length,
+    0
+  )
+  assert.equal(
+    findVNodes(
+      renderedWorkbench,
+      (node) => node.props?.class === "preview-placeholder"
+    ).length,
+    1
+  )
+  globalThis.__imageTest.toolboxApi.imageTaskPreviews = previewApi
+  finishPreview([{ id: liveTask.id, thumbnail: "preview-live-task" }])
   // 完成事件只携带任务元数据，预览通过独立接口加载。
   await settle()
   assert.equal(restored.tasks[0].thumbnail, "preview-live-task")
-  assert.ok(calls.filter(([name]) => name === "list")
-    .every(([, payload]) => payload.includeThumbnails === false))
+  const previewImages = findVNodes(
+    renderedWorkbench,
+    (node) => node.props?.class === "image-hero-img"
+  )
+  assert.equal(previewImages.length, 1)
+  assert.equal(previewImages[0].props.src, "preview-live-task")
+  previewApp.unmount()
+  assert.ok(
+    calls
+      .filter(([name]) => name === "list")
+      .every(([, payload]) => payload.includeThumbnails === false)
+  )
 
   restored.autoRefresh = false
   await settle()

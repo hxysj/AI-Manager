@@ -362,6 +362,7 @@ try {
   assert.equal(requests[0].path, "/v1/responses")
   assert.equal(requests[0].token, "Bearer loopback-only")
   assert.equal(requests[0].payload.model, "agent-test")
+  assert.equal(requests[0].payload.max_output_tokens, 8192, "模型请求携带输出预算")
   assert.equal(requests[0].payload.tools.length, 12)
   assert.ok(
     requests[0].payload.tools.some((tool) => tool.name === "read_app_ui")
@@ -458,7 +459,13 @@ try {
   assert.equal((await rpc("run", earlyCancel)).cancelled, true)
 
   failureMode = true
-  await assert.rejects(rpc("run", turn(thread.id, "测试限流")), /限流|429/)
+  const beforeRateLimit = requests.length
+  await assert.rejects(rpc("run", turn(thread.id, "测试限流")), (error) => {
+    assert.match(error.message, /模型请求失败/)
+    assert.match(error.message, /限流|429/)
+    return true
+  })
+  assert.equal(requests.length - beforeRateLimit, 1, "限流后不自动重试")
   failureMode = false
   toolError = "桌宠尚未启用"
   plans.push(
@@ -477,6 +484,8 @@ try {
   toolError = ""
   plans.splice(0)
   const upstreamFailureThread = await rpc("create-thread")
+  const beforeUpstreamRequests = requests.length
+  const beforeUpstreamTools = tools.length
   plans.push(
     {
       type: "tool",
@@ -494,8 +503,23 @@ try {
   )
   await assert.rejects(
     rpc("run", turn(upstreamFailureThread.id, "让桌宠跳跃后继续回答")),
-    /工具结果无法继续处理|502/,
+    (error) => {
+      assert.match(error.message, /模型续答失败（本轮已有 1 次工具调用完成）/)
+      assert.match(error.message, /工具结果无法继续处理/)
+      assert.equal((error.message.match(/HTTP 502/g) || []).length, 1)
+      return true
+    },
     "工具循环后的模型错误要保留上游原因和状态码"
+  )
+  assert.equal(
+    requests.length - beforeUpstreamRequests,
+    2,
+    "模型失败后不自动重试"
+  )
+  assert.equal(
+    tools.length - beforeUpstreamTools,
+    1,
+    "模型续答失败不能重复执行已完成的工具"
   )
   assert.equal(
     requests.some((request) =>

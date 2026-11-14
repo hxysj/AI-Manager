@@ -65,6 +65,77 @@ logger.installRuntimeLogging()
 assert.equal(handlers.size, 2)
 handlers.get('error')({ error: new Error('页面错误'), filename: 'screen.js', lineno: 12, colno: 5 })
 assert.equal(calls.at(-1).args.payload.context.line, 12)
+assert.equal(calls.at(-1).args.payload.context.column, 5)
+assert.equal(calls.at(-1).args.payload.context.filename, 'screen.js')
+assert.match(calls.at(-1).args.payload.error.stack, /页面错误/)
+// 空图片地址不能被解析成当前页面；有效资源保留原始地址与浏览器实际选择的地址。
+function resourceError(tagName, attributes, properties) {
+  handlers.get('error')({
+    target: {
+      tagName,
+      getAttribute: (name) => attributes[name] ?? null,
+      ...properties
+    }
+  })
+  return calls.at(-1).args.payload
+}
+const emptyImage = resourceError(
+  'IMG',
+  { src: '' },
+  {
+    src: 'http://127.0.0.1:13134/index.html?panel=tool&tool=image-workbench',
+    currentSrc: ''
+  }
+)
+assert.match(emptyImage.message, /img，地址为空/)
+assert.equal(emptyImage.context.filename, '')
+assert.equal(emptyImage.context.resourceSource, '')
+assert.equal(emptyImage.context.resourceUrl, '')
+assert.equal(
+  JSON.stringify(emptyImage).includes('index.html?panel=tool'),
+  false
+)
+const failedImage = resourceError(
+  'IMG',
+  { src: '/preview.png' },
+  {
+    src: 'http://127.0.0.1:13134/preview.png',
+    currentSrc: 'http://127.0.0.1:13134/preview.png'
+  }
+)
+assert.equal(failedImage.context.resourceTag, 'img')
+assert.equal(failedImage.context.resourceSource, '/preview.png')
+assert.equal(failedImage.context.filename, failedImage.context.resourceUrl)
+assert.equal(
+  failedImage.context.resourceUrl,
+  'http://127.0.0.1:13134/preview.png'
+)
+const responsiveImage = resourceError(
+  'IMG',
+  { src: '', srcset: '/preview@2x.png 2x' },
+  {
+    currentSrc: 'http://127.0.0.1:13134/preview@2x.png'
+  }
+)
+assert.equal(responsiveImage.context.resourceSourceSet, '/preview@2x.png 2x')
+assert.equal(
+  responsiveImage.context.resourceUrl,
+  'http://127.0.0.1:13134/preview@2x.png'
+)
+for (const [tag, attribute, property] of [
+  ['SCRIPT', 'src', 'script.js'],
+  ['LINK', 'href', 'style.css']
+]) {
+  const url = `http://127.0.0.1:13134/${property}`
+  const resource = resourceError(
+    tag,
+    { [attribute]: `/${property}` },
+    { [attribute]: url }
+  )
+  assert.equal(resource.context.resourceTag, tag.toLowerCase())
+  assert.equal(resource.context.resourceSource, `/${property}`)
+  assert.equal(resource.context.resourceUrl, url)
+}
 handlers.get('unhandledrejection')({ reason: new Error('异步错误') })
 assert.equal(calls.at(-1).args.payload.kind, 'unhandled-rejection')
 let previousCalled = false
