@@ -36,6 +36,210 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn defaults_resolve_draft_model_names_within_the_provider_save_transaction() {
+    let f = Fixture::new();
+    let result = save(
+        &f.paths,
+        &json!({
+            "name": "新增默认模型",
+            "baseUrl": "https://example.test/v1",
+            "models": [{"upstreamModelId": "new-model", "enabled": true}],
+            "bindings": [{"agentType": "codex", "enabled": true, "defaultModelName": "new-model"}]
+        }),
+    )
+    .unwrap();
+    let provider_id = text(&result, "id");
+    let c = database::open(&f.paths).unwrap();
+    let model_id: String = c
+        .query_row(
+            "SELECT id FROM service_provider_models WHERE provider_id=?1 AND upstream_model_id='new-model'",
+            [provider_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    let default_id: String = c
+        .query_row(
+            "SELECT default_model_id FROM service_provider_agent_bindings WHERE provider_id=?1 AND agent_type='codex'",
+            [provider_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(default_id, model_id);
+
+    let mut value = config(&c, provider_id).unwrap();
+    value["enabled"] = json!(true);
+    value["name"] = json!("不应保存");
+    value["bindings"] = json!([
+        {"agentType": "codex", "enabled": true, "defaultModelName": "other-provider-model"}
+    ]);
+    assert!(save(&f.paths, &value).is_err());
+    assert_eq!(config(&c, provider_id).unwrap()["name"], "新增默认模型");
+    value["models"] = json!([{"upstreamModelId": "new-model", "enabled": false}]);
+    value["bindings"][0]["defaultModelName"] = json!("new-model");
+    assert!(save(&f.paths, &value).is_err());
+    assert_eq!(
+        c.query_row(
+            "SELECT enabled FROM service_provider_models WHERE id=?1",
+            [&model_id],
+            |row| row.get::<_, bool>(0),
+        )
+        .unwrap(),
+        true
+    );
+}
+
+#[test]
+fn service_agent_model_rules_are_independent_and_validate_provider_ownership() {
+    let f = Fixture::new();
+    let provider = f.provider();
+    let c = database::open(&f.paths).unwrap();
+    let mut value = config(&c, &provider).unwrap();
+    value["enabled"] = json!(true);
+    value["models"] = json!(["haiku-upstream", "opus-upstream"]);
+    value["bindings"] = json!([
+        {"agentType":"codex","enabled":true,"defaultModelName":"model","options":{"syncModelList":false}},
+        {"agentType":"claude","enabled":true,"defaultModelName":"model","options":{"haikuModel":"haiku-upstream","opusModel":"opus-upstream","sonnetModel":"","subagentModel":"haiku-upstream"}},
+        {"agentType":"claude-desktop","enabled":true,"defaultModelName":"model","options":{"modelMappings":{"claude-fable-5":{"model":"opus-upstream","supports1m":true,"labelOverride":"自定义 Fable"}}}}
+    ]);
+    save(&f.paths, &value).unwrap();
+    let saved = state(&f.paths).unwrap();
+    let bindings = saved["bindings"].as_array().unwrap();
+    assert_eq!(bindings.iter().find(|b| b["agentType"] == "codex").unwrap()["options"]["syncModelList"], false);
+    assert_eq!(bindings.iter().find(|b| b["agentType"] == "claude").unwrap()["options"]["haikuModel"], "haiku-upstream");
+    let mappings = desktop_model_mappings(&value["bindings"][2]["options"], "model");
+    assert_eq!(mappings.len(), 4);
+    assert_eq!(mappings[2]["clientModelName"], "claude-fable-5");
+    assert!(mappings.iter().all(|m| m["upstreamModelId"] == "opus-upstream" && m["supports1m"] == true));
+    assert_eq!(mappings[2]["labelOverride"], "自定义 Fable");
+    let mut options = value["bindings"][2]["options"].clone();
+    options["modelMappings"]["claude-opus-4-8"] = json!({"supports1m":false});
+    assert_eq!(desktop_model_mappings(&options, "model")[1]["supports1m"], false);
+    assert_eq!(desktop_model_mappings(&json!({"modelMappings":{}}), "model")[0]["upstreamModelId"], "model");
+    assert!(desktop_model_mappings(&json!({}), "model").is_empty());
+
+    let other = f.provider();
+    save_model(&c, &other, &json!("other-only")).unwrap();
+    for (agent, options) in [
+        ("codex", json!({"syncModelList":"true"})),
+        ("claude", json!({"haikuModel":"other-only"})),
+        ("claude-desktop", json!({"modelMappings":{"claude-sonnet-4-6":{"model":"other-only"}}})),
+        ("claude-desktop", json!({"modelMappings":{"unsafe-model":{"model":"model"}}})),
+        ("claude-desktop", json!({"modelMappings":{"claude-fable-5":{"supports1m":"true"}}})),
+        ("claude", json!({"syncModelList":true})),
+    ] {
+        assert!(validate_agent_options(&c, &provider, agent, true, &options).is_err());
+    }
+    // 旧子列表不再生效，即使包含失效或其他服务商的名称也不限制公共目录。
+    assert!(validate_agent_options(&c, &provider, "codex", true, &json!({"modelList":["other-only","missing"]})).is_ok());
+    assert!(validate_agent_options(&c, &provider, "codex", true, &json!({"modelList":"invalid"})).is_err());
+    c.execute("UPDATE service_provider_models SET enabled=0 WHERE provider_id=?1 AND upstream_model_id='opus-upstream'", [&provider]).unwrap();
+    assert!(validate_agent_options(&c, &provider, "claude-desktop", true, &value["bindings"][2]["options"]).is_err());
+    assert!(validate_agent_options(&c, &provider, "claude-desktop", false, &value["bindings"][2]["options"]).is_ok());
+    value["revision"] = config(&c, &provider).unwrap()["revision"].clone();
+    value["name"] = json!("无效修改");
+    value["models"] = json!(["transaction-only"]);
+    value["bindings"][1]["options"]["haikuModel"] = json!("missing");
+    assert!(save(&f.paths, &value).is_err());
+    assert_ne!(config(&c, &provider).unwrap()["name"], "无效修改");
+    assert_eq!(c.query_row("SELECT count(*) FROM service_provider_models WHERE provider_id=?1 AND upstream_model_id='transaction-only'",[&provider],|row|row.get::<_,i64>(0)).unwrap(), 0);
+}
+
+#[test]
+fn service_codex_sync_switch_controls_catalog_and_claude_writes_each_model() {
+    let f = Fixture::new();
+    let provider = f.provider();
+    service_provider::switch_backend(&f.paths, "service").unwrap();
+    let c = database::open(&f.paths).unwrap();
+    let directory = f.root.join("codex-model-rules");
+    std::fs::create_dir_all(&directory).unwrap();
+    let original = "model = \"before\"\nmodel_catalog_json = \"original.json\"\n";
+    std::fs::write(directory.join("config.toml"), original).unwrap();
+    // 同步开关控制服务商全部可用模型，旧子列表与空数组不再限制目录。
+    for (options, expected, main) in [
+        (json!({}), true, "model"),
+        (json!({"syncModelList":true}), true, "model"),
+        (json!({"syncModelList":true,"modelList":["selected"]}), true, "model"),
+        (json!({"syncModelList":false,"modelList":["selected"]}), false, "model"),
+        (json!({"syncModelList":true,"modelList":[]}), true, "model"),
+        (json!({"syncModelList":true,"modelList":["missing"]}), true, "model"),
+        (json!({"syncModelList":false,"modelList":["selected"],"modelReasoningEffort":"ultra"}), false, "model"),
+        (json!({"syncModelList":false,"modelList":["selected"],"modelReasoningEffort":"ultra"}), false, "gpt-5.6-sol"),
+    ] {
+        let mut value = config(&c, &provider).unwrap();
+        value["enabled"] = json!(true);
+        value["models"] = json!(["selected", "other", "gpt-5.6-sol", {"upstreamModelId":"disabled","enabled":false}]);
+        value["bindings"] = json!([{"agentType":"codex","enabled":true,"defaultModelName":main,"options":options}]);
+        save(&f.paths, &value).unwrap();
+        let instance = service_provider::activate(&f.paths, &json!([]),
+            &json!({"agentType":"codex","providerId":provider,"configPath":directory})).unwrap();
+        let content = std::fs::read_to_string(directory.join("config.toml")).unwrap();
+        let catalog_path = directory.join(".ai_manager_service_models.json");
+        assert_eq!(content.contains("model_catalog_json"), expected);
+        assert_eq!(catalog_path.exists(), expected);
+        if options["modelReasoningEffort"] == "ultra" {
+            let effort = if main == "gpt-5.6-sol" { "ultra" } else { "low" };
+            assert!(content.contains(&format!("model_reasoning_effort = \"{effort}\"")));
+        }
+        if expected {
+            let catalog: Value = serde_json::from_str(&std::fs::read_to_string(&catalog_path).unwrap()).unwrap();
+            let names = catalog["models"].as_array().unwrap().iter().map(|model| text(model, "slug")).collect::<Vec<_>>();
+            assert!(names.contains(&"selected") && names.contains(&"model"));
+            assert!(names.contains(&"other") && names.contains(&"gpt-5.6-sol"));
+            assert_eq!(names.len(), 4);
+            assert!(!names.contains(&"disabled") && !names.contains(&"missing"));
+        }
+        service_provider::detach(&f.paths, text(&instance, "instanceId")).unwrap();
+        assert_eq!(std::fs::read_to_string(directory.join("config.toml")).unwrap(), original);
+        assert!(!catalog_path.exists());
+    }
+    let directory = f.root.join("claude-model-rules");
+    std::fs::create_dir_all(&directory).unwrap();
+    let original = "{\"env\":{\"EXISTING\":\"yes\"},\"permissions\":{\"allow\":[]}}";
+    std::fs::write(directory.join("settings.json"), original).unwrap();
+    let mut value = config(&c, &provider).unwrap();
+    value["enabled"] = json!(true);
+    value["bindings"] = json!([{"agentType":"claude","enabled":true,"defaultModelName":"model","options":{
+        "haikuModel":"selected","sonnetModel":"","opusModel":"other","subagentModel":"selected"
+    }}]);
+    save(&f.paths, &value).unwrap();
+    let instance = service_provider::activate(&f.paths, &json!([]),
+        &json!({"agentType":"claude","providerId":provider,"configPath":directory})).unwrap();
+    let content: Value = serde_json::from_str(&std::fs::read_to_string(directory.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(content["env"]["ANTHROPIC_MODEL"], "model");
+    assert_eq!(content["env"]["ANTHROPIC_DEFAULT_HAIKU_MODEL"], "selected");
+    assert_eq!(content["env"]["ANTHROPIC_DEFAULT_SONNET_MODEL"], "model");
+    assert_eq!(content["env"]["ANTHROPIC_DEFAULT_OPUS_MODEL"], "other");
+    assert_eq!(content["env"]["CLAUDE_CODE_SUBAGENT_MODEL"], "selected");
+    assert_eq!(content["env"]["EXISTING"], "yes");
+    service_provider::detach(&f.paths, text(&instance, "instanceId")).unwrap();
+    assert_eq!(std::fs::read_to_string(directory.join("settings.json")).unwrap(), original);
+}
+
+#[test]
+fn service_official_codex_uses_official_catalog_even_when_legacy_sync_is_enabled() {
+    let f = Fixture::new();
+    let provider = save(&f.paths, &json!({
+        "name":"官方目录","kind":"codex_account","models":["official-model"],
+        "bindings":[{"agentType":"codex","enabled":true,"defaultModelName":"official-model","options":{"syncModelList":true}}]
+    })).unwrap();
+    let provider = text(&provider, "id");
+    let c = database::open(&f.paths).unwrap();
+    save_account(&c, provider, &json!({"access_token":"access","account_id":"official-id"})).unwrap();
+    service_provider::switch_backend(&f.paths, "service").unwrap();
+    let directory = f.root.join("official-codex");
+    std::fs::create_dir_all(&directory).unwrap();
+    let original = "model = \"before\"\nmodel_catalog_json = \"before.json\"\n";
+    std::fs::write(directory.join("config.toml"), original).unwrap();
+    let instance = service_provider::activate(&f.paths, &json!([]),
+        &json!({"agentType":"codex","providerId":provider,"configPath":directory})).unwrap();
+    let content = std::fs::read_to_string(directory.join("config.toml")).unwrap();
+    assert!(!content.contains("model_catalog_json"));
+    assert!(!directory.join(".ai_manager_service_models.json").exists());
+    service_provider::detach(&f.paths, text(&instance, "instanceId")).unwrap();
+    assert_eq!(std::fs::read_to_string(directory.join("config.toml")).unwrap(), original);
+}
+
+#[test]
 fn service_enable_automatically_copies_codex_and_official_accounts_without_overwriting_edits() {
     let f = Fixture::new();
     let keys = Map::from_iter([("codex-api".into(), json!({"apiKey":"legacy-secret"}))]);
@@ -192,6 +396,7 @@ fn service_migration_is_idempotent_and_source_tables_are_read_only() {
     let keys = Map::from_iter([("old-codex".into(), json!({"apiKey":"legacy-secret"}))]);
     provider_store::write_provider_bundle(&f.paths,&[
         json!({"id":"old-codex","cli":"codex","name":"旧 Codex","icon":"alibabacloud.svg","baseUrl":"https://example.test/v1","runtimeConfig":{"mainModel":"m",
+            "modelList":["m"],"syncModelList":true,
             "modelCatalog":{"models":[{"slug":"m","context_window":10000,"custom_flag":true}]}}}),
         json!({"id":"old-claude","cli":"claude","name":"旧 Claude","baseUrl":"https://example.test"})
     ],&[],&[],&keys).unwrap();
@@ -208,6 +413,10 @@ fn service_migration_is_idempotent_and_source_tables_are_read_only() {
     assert_eq!(first["providers"][0]["icon"], "alibabacloud.svg");
     let provider = text(&first["providers"][0], "id");
     assert_eq!(first["models"][0]["catalog"]["custom_flag"], true);
+    let codex = first["bindings"].as_array().unwrap().iter().find(|binding| binding["agentType"] == "codex").unwrap();
+    assert_eq!(codex["options"]["syncModelList"], true);
+    assert!(codex["options"].get("modelList").is_none());
+    assert_eq!(first["models"][0]["upstreamModelId"], "m");
     c.execute(
         "UPDATE service_provider_configs SET name='新模式已编辑',revision=revision+1 WHERE id=?1",
         [provider],

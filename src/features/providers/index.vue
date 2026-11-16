@@ -1010,62 +1010,7 @@
       </header>
 
       <section class="providers-view__edit-panel">
-        <div class="providers-view__avatar-picker">
-          <button
-            class="providers-view__edit-avatar"
-            type="button"
-            @click="showIconPicker = !showIconPicker"
-          >
-            <AiIcon
-              v-if="draft.icon"
-              class="providers-view__edit-avatar-icon"
-              :name="draft.icon"
-              :alt="`${draft.name || 'Provider'} 图标`"
-            />
-            <template v-else>{{ draft.name.slice(0, 1) || "AI" }}</template>
-          </button>
-          <div v-if="draft.icon" class="providers-view__avatar-name">
-            {{ iconLabel(draft.icon) }}
-          </div>
-          <section v-if="showIconPicker" class="providers-view__icon-panel">
-            <label class="providers-view-icon-upload">
-              <Upload :size="16" />
-              上传图标
-              <input
-                type="file"
-                accept="image/svg+xml,image/png,image/jpeg,image/webp"
-                @change="uploadCustomIcon"
-              />
-            </label>
-            <label class="providers-view__field providers-view__field--wide">
-              <span>搜索图标</span>
-              <input
-                v-model.trim="iconKeyword"
-                type="text"
-                placeholder="输入图标名称..."
-              />
-            </label>
-            <div class="providers-view__icon-grid">
-              <button
-                v-for="icon in filteredIconOptions"
-                :key="icon"
-                :class="[
-                  'providers-view__icon-option',
-                  { 'providers-view__icon-option--active': draft.icon === icon }
-                ]"
-                type="button"
-                @click="selectIcon(icon)"
-              >
-                <AiIcon
-                  class="providers-view__icon-option-image"
-                  :name="icon"
-                  :alt="`${iconLabel(icon)} 图标`"
-                />
-                <span>{{ iconLabel(icon) }}</span>
-              </button>
-            </div>
-          </section>
-        </div>
+        <ProviderIconPicker v-model="draft.icon" :name="draft.name" />
 
         <div class="providers-view__form-grid">
           <label class="providers-view__field">
@@ -1387,62 +1332,7 @@
       @close="closeProviderCreateModal"
     >
       <section class="providers-view__create-form">
-        <div class="providers-view__avatar-picker">
-          <button
-            class="providers-view__edit-avatar"
-            type="button"
-            @click="showIconPicker = !showIconPicker"
-          >
-            <AiIcon
-              v-if="draft.icon"
-              class="providers-view__edit-avatar-icon"
-              :name="draft.icon"
-              :alt="`${draft.name || 'Provider'} 图标`"
-            />
-            <template v-else>{{ draft.name.slice(0, 1) || "AI" }}</template>
-          </button>
-          <div v-if="draft.icon" class="providers-view__avatar-name">
-            {{ iconLabel(draft.icon) }}
-          </div>
-          <section v-if="showIconPicker" class="providers-view__icon-panel">
-            <label class="providers-view-icon-upload">
-              <Upload :size="16" />
-              上传图标
-              <input
-                type="file"
-                accept="image/svg+xml,image/png,image/jpeg,image/webp"
-                @change="uploadCustomIcon"
-              />
-            </label>
-            <label class="providers-view__field providers-view__field--wide">
-              <span>搜索图标</span>
-              <input
-                v-model.trim="iconKeyword"
-                type="text"
-                placeholder="输入图标名称..."
-              />
-            </label>
-            <div class="providers-view__icon-grid">
-              <button
-                v-for="icon in filteredIconOptions"
-                :key="icon"
-                :class="[
-                  'providers-view__icon-option',
-                  { 'providers-view__icon-option--active': draft.icon === icon }
-                ]"
-                type="button"
-                @click="selectIcon(icon)"
-              >
-                <AiIcon
-                  class="providers-view__icon-option-image"
-                  :name="icon"
-                  :alt="`${iconLabel(icon)} 图标`"
-                />
-                <span>{{ iconLabel(icon) }}</span>
-              </button>
-            </div>
-          </section>
-        </div>
+        <ProviderIconPicker v-model="draft.icon" :name="draft.name" />
 
         <div class="providers-view__form-grid">
           <label class="providers-view__field">
@@ -2936,7 +2826,6 @@ import {
   SquareTerminal,
   SquarePen,
   Trash2,
-  Upload,
   X
 } from "lucide-vue-next"
 import AiIcon from "@/components/AiIcon.vue"
@@ -2945,6 +2834,7 @@ import ClaudeDesktopPanel from "./components/ClaudeDesktopPanel.vue"
 import ApiKeyManagerModal from "./components/ApiKeyManagerModal.vue"
 import ProviderApiKeyInput from "./components/ProviderApiKeyInput.vue"
 import ProviderModelListEditor from "./components/ProviderModelListEditor.vue"
+import ProviderIconPicker from "./components/ProviderIconPicker.vue"
 import ProviderDeleteConfirmModal from "./components/ProviderDeleteConfirmModal.vue"
 import TokenCount from "@/components/TokenCount.vue"
 import CodexProxyPanel from "@/features/providers/components/CodexProxyPanel.vue"
@@ -3266,7 +3156,6 @@ function getCodexDraftCatalog() {
 
 const activeCli = ref("")
 const viewMode = ref("list")
-const showIconPicker = ref(false)
 const showCodexCreateOptions = ref(false)
 // Google 账号使用独立授权弹窗，继续复用服务商列表和启用流程。
 const showGoogleAccountModal = ref(false)
@@ -3333,14 +3222,6 @@ const apiKeyManagerDraft = reactive({
 const manualCallbackUrl = ref("")
 const countdownNow = ref(Date.now())
 let countdownTimer = null
-const iconKeyword = ref("")
-const iconModules = import.meta.glob("/src/assets/ai-icons/*.svg", {
-  query: "?url",
-  import: "default"
-})
-const iconOptions = Object.keys(iconModules)
-  .map((item) => item.split("/").pop())
-  .sort((left, right) => left.localeCompare(right))
 let runtimeDiffEditor = null
 
 const visibleCliTargets = computed(() => {
@@ -3578,14 +3459,6 @@ const runtimeDiffDescription = computed(() => {
 
 const runtimeConfigDescription = computed(() => {
   return runtimeConfigPath.value || "当前没有 CLI 配置文件路径"
-})
-
-const filteredIconOptions = computed(() => {
-  const keyword = iconKeyword.value.toLowerCase()
-
-  return iconOptions.filter((item) =>
-    iconLabel(item).toLowerCase().includes(keyword)
-  )
 })
 
 const codexLoginTitle = computed(() => {
@@ -4000,8 +3873,6 @@ function editProvider(provider) {
     provider.runtimeConfig?.modelReasoningEffort || "low"
   draft.modelAutoCompactTokenLimit =
     provider.runtimeConfig?.modelAutoCompactTokenLimit || 900000
-  showIconPicker.value = false
-  iconKeyword.value = ""
   showProviderCreateModal.value = true
 }
 
@@ -4028,8 +3899,6 @@ function closeProviderCreateModal() {
   claudeModelsPending.value = false
   showClaudeModelList.value = false
   showProviderCreateModal.value = false
-  showIconPicker.value = false
-  iconKeyword.value = ""
 }
 
 function openCodexLoginModal(account = null) {
@@ -4738,8 +4607,6 @@ function clearDraft() {
   modelDrafts.haikuModel = ""
   modelDrafts.sonnetModel = ""
   modelDrafts.opusModel = ""
-  showIconPicker.value = false
-  iconKeyword.value = ""
 }
 
 function firstModelName(providerId) {
@@ -4747,57 +4614,6 @@ function firstModelName(providerId) {
     props.runtimeModels.find((item) => item.providerId === providerId)?.name ||
     ""
   )
-}
-
-function iconLabel(icon) {
-  if (/^(data:|https?:\/\/|file:|blob:)/i.test(String(icon || ""))) {
-    return "自定义图标"
-  }
-
-  return String(icon || "").replace(/\.svg$/, "")
-}
-
-function selectIcon(icon) {
-  draft.icon = icon
-  showIconPicker.value = false
-}
-
-function uploadCustomIcon(event) {
-  const input = event.target
-  const file = input.files?.[0]
-
-  if (!file) {
-    return
-  }
-
-  if (
-    !["image/svg+xml", "image/png", "image/jpeg", "image/webp"].includes(
-      file.type
-    )
-  ) {
-    createMessage.error("请选择 SVG、PNG、JPG 或 WebP 图标。")
-    input.value = ""
-    return
-  }
-
-  if (file.size > 1024 * 1024) {
-    createMessage.error("图标文件不能超过 1MB。")
-    input.value = ""
-    return
-  }
-
-  const reader = new FileReader()
-
-  reader.onload = () => {
-    draft.icon = String(reader.result || "")
-    showIconPicker.value = false
-    input.value = ""
-  }
-  reader.onerror = () => {
-    createMessage.error("图标读取失败。")
-    input.value = ""
-  }
-  reader.readAsDataURL(file)
 }
 
 async function submitProvider() {
@@ -6270,8 +6086,7 @@ watch(
   }
 
   &__shield,
-  &__avatar,
-  &__edit-avatar {
+  &__avatar {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -6498,108 +6313,6 @@ watch(
     border: 1px solid var(--color-line);
     border-radius: 14px;
     background: var(--color-panel);
-  }
-
-  &__edit-avatar {
-    width: 78px;
-    height: 78px;
-    align-self: center;
-    padding: 0;
-    cursor: pointer;
-    font-size: var(--font-size-xl);
-  }
-
-  &__avatar-picker {
-    display: flex;
-    align-items: center;
-    flex-direction: column;
-    gap: 10px;
-  }
-
-  &__edit-avatar-icon {
-    width: 48px;
-    height: 48px;
-  }
-
-  &__avatar-name {
-    color: var(--color-text-muted);
-    font-size: var(--font-size-base);
-  }
-
-  &__icon-panel {
-    display: flex;
-    width: 100%;
-    flex-direction: column;
-    gap: 14px;
-    padding: 16px;
-    border: 1px solid var(--color-line);
-    border-radius: 12px;
-    background: var(--color-panel-soft);
-  }
-
-  &-icon-upload {
-    display: inline-flex;
-    width: fit-content;
-    align-items: center;
-    gap: 7px;
-    padding: 8px 12px;
-    border: 1px solid var(--color-info-line);
-    border-radius: 8px;
-    background: var(--color-primary-soft);
-    color: var(--color-primary);
-    cursor: pointer;
-    font-size: var(--font-size-base);
-  }
-
-  &-icon-upload input {
-    display: none;
-  }
-
-  &__icon-grid {
-    display: flex;
-    overflow: auto;
-    max-height: 360px;
-    flex-wrap: wrap;
-    gap: 10px;
-    padding-right: 4px;
-  }
-
-  &__icon-option {
-    display: flex;
-    flex: 0 0 132px;
-    min-width: 0;
-    height: 86px;
-    align-items: center;
-    justify-content: center;
-    flex-direction: column;
-    gap: 8px;
-    padding: 8px 6px;
-    border: 1px solid transparent;
-    border-radius: 8px;
-    background: transparent;
-    color: var(--color-text-muted);
-    cursor: pointer;
-  }
-
-  &__icon-option--active {
-    border-color: var(--color-primary-solid);
-    background: var(--color-primary-soft);
-    color: var(--color-text);
-  }
-
-  &__icon-option-image {
-    width: 30px;
-    height: 30px;
-    flex: none;
-  }
-
-  &__icon-option span:not([data-emphasis]) {
-    overflow: hidden;
-    width: 100%;
-    font-size: var(--font-size-sm);
-    text-align: center;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
 
   &__form-grid {

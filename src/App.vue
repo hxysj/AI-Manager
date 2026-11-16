@@ -118,6 +118,7 @@
             state.serviceProviders?.backend === 'service'
           "
           :initial-state="state.serviceProviders"
+          :runtime-config-schemas="state.runtimeConfigSchemas"
           :cli-targets="state.cliTargets"
           :login-state="state.codexLoginState"
         />

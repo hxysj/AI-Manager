@@ -117,7 +117,7 @@ fn receive(
     ))
 }
 
-fn resolve(
+pub(super) fn resolve(
     paths: &AppPaths,
     identity: &Value,
     requested: &str,
@@ -126,12 +126,28 @@ fn resolve(
     let provider = store::text(identity, "providerId");
     let agent = store::text(identity, "agentType");
     let config = store::config(&c, provider)?;
+    let desktop_model = if agent == "claude-desktop" {
+        let binding = store::query(&c,
+            "SELECT options_json AS optionsJson FROM service_provider_agent_bindings WHERE provider_id=?1 AND agent_type=?2 AND enabled=1",
+            &[&provider, &agent])?.pop().ok_or_else(|| store::fail("此服务商尚未授权 Desktop"))?;
+        let fallback = store::query(&c,
+            "SELECT upstream_model_id AS name FROM service_provider_models WHERE id=?1 AND provider_id=?2 AND enabled=1",
+            &[&store::text(identity,"modelId"),&provider])?.pop().unwrap_or(json!({}));
+        store::desktop_model_mappings(&binding["options"], store::text(&fallback, "name"))
+            .into_iter()
+            .find(|mapping| mapping["clientModelName"] == requested)
+            .map(|mapping| store::text(&mapping, "upstreamModelId").to_owned())
+    } else {
+        None
+    };
     let models = store::query(&c, "SELECT id,upstream_model_id AS upstreamModelId FROM service_provider_models
         WHERE provider_id=?1 AND enabled=1 AND id=coalesce(
         (SELECT model_id FROM service_agent_model_routes WHERE provider_id=?1 AND agent_type=?3 AND client_model_name=?2 AND enabled=1),
-        (SELECT id FROM service_provider_models WHERE provider_id=?1 AND upstream_model_id=?2 AND enabled=1),
+        CASE WHEN ?5 IS NOT NULL THEN
+            (SELECT id FROM service_provider_models WHERE provider_id=?1 AND upstream_model_id=?5)
+        ELSE (SELECT id FROM service_provider_models WHERE provider_id=?1 AND upstream_model_id=?2 AND enabled=1) END,
         CASE WHEN ?2='' THEN ?4 END)",
-        &[&provider,&requested,&agent,&store::text(identity,"modelId")])?;
+        &[&provider,&requested,&agent,&store::text(identity,"modelId"),&desktop_model])?;
     let model = models
         .into_iter()
         .next()

@@ -176,7 +176,8 @@ fn copy_configuration(paths: &AppPaths, migration: &str) -> Result<Value, Manage
                 }
             }
             let options = json!({"modelReasoningEffort":source["model_reasoning_effort"],"serviceTierFast":source["service_tier_fast"],
-                "modelContextWindowEnabled":source["model_context_window_enabled"],"modelAutoCompactTokenLimit":source["model_auto_compact_token_limit"]});
+                "modelContextWindowEnabled":source["model_context_window_enabled"],"modelAutoCompactTokenLimit":source["model_auto_compact_token_limit"],
+                "syncModelList":source["sync_model_list"] == 1 || source["sync_model_list"] == true});
             tx.execute("INSERT INTO service_provider_agent_bindings(provider_id,agent_type,enabled,default_model_id,options_json,updated_at)
                 VALUES(?1,'codex',1,?2,?3,?4)",params![provider,default,options.to_string(),now()])?;
             for agent in ["claude", "claude-desktop"] {

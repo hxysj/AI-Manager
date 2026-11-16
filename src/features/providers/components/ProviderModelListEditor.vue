@@ -1,11 +1,14 @@
 <template>
   <section class="provider-model-editor">
-    <header v-if="!readonly" class="provider-model-toolbar">
+    <header
+      v-if="!readonly || showReadonlySummary"
+      class="provider-model-toolbar"
+    >
       <div class="provider-model-heading">
-        <span class="provider-model-title">模型列表</span>
+        <span class="provider-model-title">{{ title }}</span>
         <span class="provider-model-count">{{ models.length }} 个</span>
       </div>
-      <div class="provider-model-actions">
+      <div v-if="!readonly" class="provider-model-actions">
         <button
           class="provider-model-button"
           type="button"
@@ -32,6 +35,7 @@
           {{ loading ? "获取中…" : "获取上游模型" }}
         </button>
         <button
+          v-if="showReset"
           class="provider-model-button"
           type="button"
           :disabled="disabled || loading"
@@ -84,9 +88,10 @@
             readonly ? "暂无上游模型" : "暂无自定义模型"
           }}</span>
           <span>{{
-            readonly
+            emptyHint ||
+            (readonly
               ? "请先点击“获取上游模型”。"
-              : "获取上游模型，或在下方手动添加"
+              : "获取上游模型，或在下方手动添加")
           }}</span>
         </div>
       </el-scrollbar>
@@ -118,7 +123,10 @@
       </div>
     </div>
 
-    <footer v-if="!readonly" class="provider-model-footer">
+    <footer
+      v-if="showSyncControl && (!readonly || showReadonlySummary)"
+      class="provider-model-footer"
+    >
       <label class="provider-model-sync">
         <el-switch
           :model-value="syncModelList"
@@ -130,7 +138,7 @@
         <span>同步模型列表</span>
       </label>
       <p class="provider-model-hint">
-        保存并启用此供应商后生效；关闭或列表留空时使用 Codex 官方默认模型。
+        {{ syncHint }}
       </p>
     </footer>
   </section>
@@ -153,8 +161,19 @@ import {
 
 const props = defineProps({
   modelValue: { type: String, default: "" },
+  title: { type: String, default: "模型列表" },
+  syncHint: {
+    type: String,
+    default:
+      "保存并启用此供应商后生效；关闭或列表留空时使用 Codex 官方默认模型。"
+  },
   syncModelList: { type: Boolean, default: false },
+  showSyncControl: { type: Boolean, default: true },
+  showReset: { type: Boolean, default: true },
   readonly: { type: Boolean, default: false },
+  // 引用服务商目录时只展示标题、数量与同步开关，保留原只读弹窗的默认外观。
+  showReadonlySummary: { type: Boolean, default: false },
+  emptyHint: { type: String, default: "" },
   maxHeight: { type: [String, Number], default: "176px" },
   disabled: { type: Boolean, default: false },
   loading: { type: Boolean, default: false }

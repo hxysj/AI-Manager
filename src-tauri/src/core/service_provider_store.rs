@@ -252,7 +252,8 @@ pub fn state(paths: &AppPaths) -> Result<Value, ManagerError> {
         json!({"backend": if active(paths)? {"service"} else {"legacy"}, "generation":generation(&c)?,
         "baseUrl":format!("http://127.0.0.1:{PORT}"), "providers":providers,"models":models,"bindings":bindings,
         "keys":keys,"instances":instances,"migrations":migrations,"migrationItems":migration_items,
-        "compatibility":compatibility,"routes":routes,"accounts":accounts,"managedFiles":files,"usage":usage(&c)?}),
+        "compatibility":compatibility,"routes":routes,"accounts":accounts,"managedFiles":files,"usage":usage(&c)?,
+        "desktopModelRoutes":crate::api::claude_desktop::ROUTES.iter().map(|(id,label,_)|json!({"id":id,"label":label})).collect::<Vec<_>>()}),
     )
 }
 
@@ -445,32 +446,35 @@ pub fn save(paths: &AppPaths, value: &Value) -> Result<Value, ManagerError> {
                 return Err(fail("Agent 标识无效"));
             }
             let options = binding.get("options").cloned().unwrap_or(json!({}));
-            if !options.is_object() {
-                return Err(fail("Agent 选项必须为对象"));
-            }
-            for (key, val) in options.as_object().unwrap() {
-                let valid = agent == "codex"
-                    && match key.as_str() {
-                        "modelReasoningEffort" => {
-                            val.is_null()
-                                || matches!(
-                                    val.as_str(),
-                                    Some("minimal" | "low" | "medium" | "high" | "xhigh" | "none")
-                                )
-                        }
-                        "serviceTierFast" | "modelContextWindowEnabled" => {
-                            val.is_null() || val.is_boolean() || matches!(val.as_i64(), Some(0 | 1))
-                        }
-                        "modelAutoCompactTokenLimit" => {
-                            val.is_null() || val.as_i64().is_some_and(|n| n > 0)
-                        }
-                        _ => false,
-                    };
-                if !valid {
-                    return Err(fail(format!("{agent} 参数 {key} 尚不支持或值无效")));
+            validate_agent_options(
+                &tx,
+                &provider_id,
+                agent,
+                binding["enabled"].as_bool().unwrap_or(false),
+                &options,
+            )?;
+            // 表单用上游模型名选择默认项，新模型在同一事务中保存后再解析本地 ID。
+            // 未提供模型名的调用方继续使用原有 defaultModelId 契约。
+            let default = if let Some(name) = binding["defaultModelName"].as_str() {
+                if name.is_empty() {
+                    None
+                } else {
+                    Some(
+                        tx.query_row(
+                            "SELECT id FROM service_provider_models WHERE provider_id=?1 AND upstream_model_id=?2 AND (?3=0 OR enabled=1)",
+                            params![provider_id, name, binding["enabled"].as_bool().unwrap_or(false)],
+                            |row| row.get::<_, String>(0),
+                        )
+                        .optional()?
+                        .ok_or_else(|| fail("默认模型不存在或已停用，请重新选择"))?,
+                    )
                 }
-            }
-            let default = binding["defaultModelId"].as_str().filter(|v| !v.is_empty());
+            } else {
+                binding["defaultModelId"]
+                    .as_str()
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_owned)
+            };
             tx.execute("INSERT INTO service_provider_agent_bindings(provider_id,agent_type,enabled,default_model_id,options_json,updated_at)
                 VALUES(?1,?2,?3,?4,?5,?6) ON CONFLICT(provider_id,agent_type) DO UPDATE SET enabled=excluded.enabled,
                 default_model_id=excluded.default_model_id,options_json=excluded.options_json,revision=revision+1,updated_at=excluded.updated_at",
@@ -494,6 +498,110 @@ pub fn save(paths: &AppPaths, value: &Value) -> Result<Value, ManagerError> {
     }
     tx.commit()?;
     Ok(json!({"id":provider_id}))
+}
+
+// Agent 模型规则与公共目录在同一事务校验，避免跨服务商引用或应用已停用的模型。
+pub(crate) fn validate_agent_options(
+    c: &Connection,
+    provider: &str,
+    agent: &str,
+    enabled: bool,
+    options: &Value,
+) -> Result<(), ManagerError> {
+    let fields = options
+        .as_object()
+        .ok_or_else(|| fail("Agent 选项必须为对象"))?;
+    let mut model_names = Vec::new();
+    for (key, val) in fields {
+        let valid = match (agent, key.as_str()) {
+            ("codex", "modelReasoningEffort") => {
+                val.is_null()
+                    || matches!(val.as_str(), Some("minimal" | "low" | "medium" | "high" | "xhigh" | "ultra" | "none"))
+            }
+            ("codex", "serviceTierFast" | "modelContextWindowEnabled" | "syncModelList") => {
+                val.is_null() || val.is_boolean() || matches!(val.as_i64(), Some(0 | 1))
+            }
+            ("codex", "modelAutoCompactTokenLimit") => {
+                val.is_null() || val.as_i64().is_some_and(|n| n > 0)
+            }
+            // 兼容已保存的旧子列表，仅校验类型，不再作为生效模型引用。
+            ("codex", "modelList") => val.as_array().is_some_and(|names| {
+                let mut seen = std::collections::HashSet::new();
+                names.iter().all(|name| {
+                    name.as_str().is_some_and(|name| {
+                        if name.is_empty() || name.trim() != name || !seen.insert(name) {
+                            return false;
+                        }
+                        true
+                    })
+                })
+            }),
+            ("claude", "haikuModel" | "sonnetModel" | "opusModel" | "subagentModel") => {
+                val.is_null() || val.as_str().is_some_and(|name| {
+                    if !name.is_empty() {
+                        model_names.push(name);
+                    }
+                    name.trim() == name
+                })
+            }
+            ("claude-desktop", "modelMappings") => val.as_object().is_some_and(|mappings| {
+                mappings.iter().all(|(route, mapping)| {
+                    crate::api::claude_desktop::ROUTES.iter().any(|(id, _, _)| route == id)
+                        && mapping.as_object().is_some_and(|mapping| {
+                            mapping.iter().all(|(key, val)| match key.as_str() {
+                                "model" => val.as_str().is_some_and(|name| {
+                                    if !name.is_empty() {
+                                        model_names.push(name);
+                                    }
+                                    name.trim() == name
+                                }),
+                                "labelOverride" => val.is_string(),
+                                "supports1m" => val.is_boolean(),
+                                _ => false,
+                            })
+                        })
+                })
+            }),
+            _ => false,
+        };
+        if !valid {
+            return Err(fail(format!("{agent} 参数 {key} 尚不支持或值无效")));
+        }
+    }
+    for name in model_names {
+        let exists: bool = c.query_row(
+            "SELECT EXISTS(SELECT 1 FROM service_provider_models WHERE provider_id=?1 AND upstream_model_id=?2 AND (?3=0 OR enabled=1))",
+            params![provider, name, enabled],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(fail(format!("{agent} 模型 {name} 不存在于此服务商或已停用")));
+        }
+    }
+    Ok(())
+}
+
+// Desktop 客户端目录和网关共同使用同一份映射，空档位继承首个已配置档位的模型和能力。
+pub(crate) fn desktop_model_mappings(options: &Value, default_model: &str) -> Vec<Value> {
+    let Some(mappings) = options["modelMappings"].as_object() else {
+        return Vec::new();
+    };
+    let first = crate::api::claude_desktop::ROUTES
+        .iter()
+        .filter_map(|(route, _, _)| mappings.get(*route))
+        .find(|mapping| !text(mapping, "model").is_empty());
+    crate::api::claude_desktop::ROUTES.iter().map(|(route, _, _)| {
+        let own = mappings.get(*route);
+        let mapping = own.filter(|mapping| !text(mapping, "model").is_empty()).or(first);
+        let model = mapping.map(|mapping| text(mapping, "model")).unwrap_or(default_model);
+        json!({
+            "clientModelName":route,
+            "upstreamModelId":model,
+            "supports1m":own.and_then(|mapping|mapping["supports1m"].as_bool())
+                .unwrap_or_else(||mapping.is_some_and(|mapping| mapping["supports1m"] == true)),
+            "labelOverride":own.map(|mapping|text(mapping,"labelOverride")).unwrap_or("")
+        })
+    }).collect()
 }
 
 pub fn save_key(

@@ -270,6 +270,41 @@ async fn service_setup(fixture:&Fixture,url:&str,format:UpstreamFormat)->(String
 }
 
 #[test]
+fn service_desktop_model_rules_resolve_safe_aliases_and_reject_disabled_targets() {
+    use crate::core::{database, service_provider_store as store};
+    let fixture = Fixture::new();
+    store::initialize(&fixture.paths).unwrap();
+    let provider = store::save(&fixture.paths, &json!({
+        "name":"Desktop 模型映射","baseUrl":"http://127.0.0.1:1/v1",
+        "models":["default","mapped","override","claude-sonnet-4-6"],
+        "bindings":[{"agentType":"claude-desktop","enabled":true,"defaultModelName":"default","options":{
+            "modelMappings":{"claude-fable-5":{"model":"mapped","supports1m":true}}
+        }}]
+    })).unwrap()["id"].as_str().unwrap().to_string();
+    let c = database::open(&fixture.paths).unwrap();
+    let model_id = |name: &str| c.query_row(
+        "SELECT id FROM service_provider_models WHERE provider_id=?1 AND upstream_model_id=?2",
+        rusqlite::params![provider, name], |row| row.get::<_,String>(0)).unwrap();
+    let identity = json!({"providerId":provider,"agentType":"claude-desktop","modelId":model_id("default")});
+    for (alias, _, _) in crate::api::claude_desktop::ROUTES {
+        assert_eq!(service::resolve(&fixture.paths, &identity, alias).unwrap().1["upstreamModelId"], "mapped");
+    }
+    assert_eq!(service::resolve(&fixture.paths, &identity, "").unwrap().1["upstreamModelId"], "default");
+    assert!(service::resolve(&fixture.paths, &identity, "unknown").is_err());
+    c.execute("INSERT INTO service_agent_model_routes(id,provider_id,agent_type,client_model_name,model_id)
+        VALUES('explicit',?1,'claude-desktop','claude-sonnet-4-6',?2)",
+        rusqlite::params![provider,model_id("override")]).unwrap();
+    assert_eq!(service::resolve(&fixture.paths, &identity, "claude-sonnet-4-6").unwrap().1["upstreamModelId"], "override");
+    c.execute("UPDATE service_provider_models SET enabled=0 WHERE id=?1", [model_id("override")]).unwrap();
+    assert!(service::resolve(&fixture.paths, &identity, "claude-sonnet-4-6").is_err());
+    c.execute("DELETE FROM service_agent_model_routes WHERE id='explicit'", []).unwrap();
+    c.execute("UPDATE service_provider_models SET enabled=0 WHERE id=?1", [model_id("mapped")]).unwrap();
+    assert!(service::resolve(&fixture.paths, &identity, "claude-sonnet-4-6").is_err());
+    c.execute("UPDATE service_provider_agent_bindings SET options_json='{}' WHERE provider_id=?1", [&provider]).unwrap();
+    assert_eq!(service::resolve(&fixture.paths, &identity, "claude-sonnet-4-6").unwrap().1["upstreamModelId"], "claude-sonnet-4-6");
+}
+
+#[test]
 fn service_model_fetch_preserves_local_prices_and_rejects_stale_configuration() {
     run(async {
         use crate::core::{database, service_provider_store as store};

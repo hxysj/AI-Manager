@@ -29,7 +29,7 @@ const OFFICIAL_ID: &str = "claude-desktop-official";
 const GATEWAY_KEY: &str = "claude-desktop:gateway";
 const DEFAULT_PORT: u16 = 15723;
 static REQUEST_LOG_LOCK: Mutex<()> = Mutex::const_new(());
-const ROUTES: [(&str, &str, &str); 4] = [
+pub(crate) const ROUTES: [(&str, &str, &str); 4] = [
     ("claude-sonnet-4-6", "Sonnet", "sonnetModel"),
     ("claude-opus-4-8", "Opus", "opusModel"),
     ("claude-fable-5", "Fable", "fableModel"),

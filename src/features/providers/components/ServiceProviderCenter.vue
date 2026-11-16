@@ -20,8 +20,8 @@
           class="toolbar-button"
           :class="{ 'toolbar-button-selected': showDisabledItems }"
           type="button"
-          :title="showDisabledItems ? '隐藏禁用项' : '显示禁用项'"
-          :aria-label="`${showDisabledItems ? '隐藏禁用项' : '显示禁用项'}，共 ${disabledProviderCount} 项`"
+          :title="showDisabledItems ? '隐藏停用项' : '显示停用项'"
+          :aria-label="`${showDisabledItems ? '隐藏停用项' : '显示停用项'}，共 ${disabledProviderCount} 项`"
           :aria-pressed="showDisabledItems"
           @click="showDisabledItems = !showDisabledItems"
         >
@@ -44,9 +44,9 @@
         <button
           class="toolbar-button"
           type="button"
-          title="网关与实例管理"
-          aria-label="网关与实例管理"
-          @click="showGatewayManager = true"
+          title="网关与 Agent 管理"
+          aria-label="网关与 Agent 管理"
+          @click="openGatewayManager()"
         >
           <Server :size="18" />
         </button>
@@ -75,7 +75,6 @@
         :key="provider.id"
         class="provider-card"
         :class="{
-          'provider-card-active': providerInstances(provider.id).length,
           'provider-card-disabled': !provider.enabled
         }"
       >
@@ -86,8 +85,13 @@
             class="provider-avatar-icon"
             :alt="`${providerDisplayName(provider)} 图标`"
           />
-          <ShieldCheck v-else-if="provider.kind === 'codex_account'" :size="18" />
-          <template v-else>{{ providerDisplayName(provider).slice(0, 1) || "AI" }}</template>
+          <ShieldCheck
+            v-else-if="provider.kind === 'codex_account'"
+            :size="18"
+          />
+          <template v-else>{{
+            providerDisplayName(provider).slice(0, 1) || "AI"
+          }}</template>
         </span>
         <div class="provider-main">
           <div class="provider-title">
@@ -107,9 +111,6 @@
                     : "Responses"
               }}
             </span>
-            <span v-if="!provider.enabled" class="provider-tag disabled-tag"
-              >已禁用</span
-            >
             <span
               v-if="!provider.hasCredential"
               class="provider-tag missing-tag"
@@ -166,57 +167,23 @@
             "
           >
             {{ enabledAgents(provider.id) || "尚未授权 Agent" }} ·
-            {{ providerModels(provider.id).length }} 个模型
+            {{
+              provider.kind === "codex_account"
+                ? "使用官方模型列表"
+                : `${providerModels(provider.id).length} 个模型`
+            }}
           </span>
         </div>
         <div class="provider-actions">
           <div class="action-main">
             <span
               class="state-pill"
-              :class="{
-                'state-pill-muted':
-                  !provider.enabled || !providerInstances(provider.id).length
-              }"
+              :class="{ 'state-pill-muted': !provider.enabled }"
+              title="服务商配置状态"
             >
-              <span
-                v-if="provider.enabled && providerInstances(provider.id).length"
-                class="state-dot"
-              ></span>
-              {{
-                !provider.enabled
-                  ? "已禁用"
-                  : providerInstances(provider.id).length
-                    ? "已启用"
-                    : "未启用"
-              }}
+              <span v-if="provider.enabled" class="state-dot"></span>
+              {{ provider.enabled ? "可用" : "已停用" }}
             </span>
-            <button
-              v-if="!provider.enabled"
-              class="provider-enable"
-              type="button"
-              :disabled="busy"
-              @click="toggleProviderEnabled(provider)"
-            >
-              <RefreshCw :size="15" />恢复
-            </button>
-            <button
-              v-else-if="providerInstances(provider.id).length"
-              class="provider-using"
-              type="button"
-              :disabled="busy"
-              @click="stopUsingProvider(provider)"
-            >
-              <X :size="15" />取消使用
-            </button>
-            <button
-              v-else
-              class="provider-enable"
-              type="button"
-              :disabled="busy || !provider.hasCredential"
-              @click="openApply(provider)"
-            >
-              <Play :size="15" />启用
-            </button>
           </div>
           <div class="icon-actions">
             <button
@@ -260,15 +227,15 @@
               <SquarePen :size="16" />
             </button>
             <button
-              v-if="provider.enabled"
               class="icon-button icon-warning"
               type="button"
-              title="禁用服务商"
-              aria-label="禁用服务商"
+              :title="provider.enabled ? '停用服务商' : '恢复可用'"
+              :aria-label="provider.enabled ? '停用服务商' : '恢复可用'"
               :disabled="busy"
               @click="toggleProviderEnabled(provider)"
             >
-              <Ban :size="16" />
+              <Ban v-if="provider.enabled" :size="16" />
+              <RefreshCw v-else :size="16" />
             </button>
             <button
               class="icon-button icon-danger"
@@ -346,6 +313,7 @@
           </dl>
           <div class="card-actions">
             <button
+              v-if="detailProvider.kind === 'api'"
               class="btn"
               :disabled="busy"
               @click="
@@ -359,10 +327,10 @@
             </button>
             <button
               class="btn"
-              :disabled="busy || !detailProvider.enabled"
-              @click="openApply(detailProvider)"
+              :disabled="busy"
+              @click="openGatewayManager(detailProvider)"
             >
-              应用 / 测试 Agent
+              管理 Agent
             </button>
             <button
               class="btn"
@@ -372,7 +340,10 @@
               编辑配置与 Agent 授权
             </button>
           </div>
-          <div class="detail-models">
+          <p v-if="detailProvider.kind === 'codex_account'" class="muted">
+            使用官方模型列表
+          </p>
+          <div v-else class="detail-models">
             <h3 class="section-title">模型</h3>
             <span
               v-for="model in providerModels(detailProvider.id)"
@@ -504,9 +475,9 @@
             <button
               class="btn"
               :disabled="busy"
-              @click="perform('detach', { id: instance.id })"
+              @click="openGatewayManager(detailProvider)"
             >
-              取消使用 / 恢复配置
+              管理接管
             </button>
           </article>
           <p v-if="!providerInstances(detailProvider.id).length" class="muted">
@@ -518,11 +489,44 @@
 
     <BaseModal
       v-if="showGatewayManager"
-      title="网关与实例管理"
+      title="网关与 Agent 管理"
       :description="data.baseUrl"
       @close="showGatewayManager = false"
     >
       <div class="gateway-manager">
+        <div class="agent-apply">
+          <label class="form-field"
+            >服务商<select v-model="managerProviderId" class="input">
+              <option value="" disabled>选择服务商</option>
+              <option
+                v-for="provider in data.providers"
+                :key="provider.id"
+                :value="provider.id"
+              >
+                {{ providerDisplayName(provider)
+                }}{{ provider.enabled ? "" : "（已停用）" }}
+              </option>
+            </select></label
+          >
+          <button
+            class="btn btn-primary"
+            :disabled="
+              busy ||
+              !managerProvider?.enabled ||
+              !managerProvider?.hasCredential
+            "
+            @click="openApply(managerProvider)"
+          >
+            应用 / 测试 Agent
+          </button>
+          <button
+            class="btn"
+            :disabled="busy || !managerProvider"
+            @click="editProvider(managerProvider)"
+          >
+            编辑配置与授权
+          </button>
+        </div>
         <h3 class="section-title">Agent 实例与文件接管</h3>
         <div class="instance-list">
           <article
@@ -535,6 +539,7 @@
                 >{{ instance.name }} · {{ agentLabel(instance.agentType) }} ·
                 {{ instance.status }} / {{ instance.syncStatus }}</span
               >
+              <span>{{ providerName(instance.providerId) }}</span>
               <code>{{ instance.configPath }}</code>
               <span v-if="instance.lastError" class="error-text">{{
                 instance.lastError
@@ -722,67 +727,85 @@
 
     <BaseModal
       v-if="form"
-      title="服务商配置"
-      description="上游地址填写 API 基础地址；密钥留空会保留现有值。"
+      :title="form.id ? '编辑服务商' : '新增服务商'"
+      description="配置上游服务与允许使用的 Agent。"
       @close="form = null"
     >
       <form class="provider-form" @submit.prevent="saveProvider">
-        <label class="form-field"
-          >名称<input v-model="form.name" class="input" required
-        /></label>
-        <label class="form-field"
-          >类型<select
-            v-model="form.kind"
-            class="input"
-            :disabled="Boolean(form.id)"
-          >
-            <option value="api">OpenAI 兼容服务商</option>
-            <option value="codex_account">Codex 官方账号</option>
-          </select></label
-        >
-        <template v-if="form.kind === 'api'">
+        <ProviderIconPicker v-model="form.icon" :name="form.name" />
+        <div class="form-grid">
           <label class="form-field"
-            >上游协议<select v-model="form.upstreamProtocol" class="input">
-              <option value="responses">Responses</option>
-              <option value="chat">Chat Completions</option>
+            >名称<input v-model="form.name" class="input" required
+          /></label>
+          <label class="form-field"
+            >类型<select
+              v-model="form.kind"
+              class="input"
+              :disabled="Boolean(form.id)"
+            >
+              <option value="api">OpenAI 兼容服务商</option>
+              <option value="codex_account">Codex 官方账号</option>
             </select></label
           >
+          <template v-if="form.kind === 'api'">
+            <label class="form-field"
+              >上游协议<select v-model="form.upstreamProtocol" class="input">
+                <option value="responses">Responses</option>
+                <option value="chat">Chat Completions</option>
+              </select></label
+            >
+            <label class="form-field"
+              >基础地址<input
+                v-model="form.baseUrl"
+                class="input"
+                placeholder="https://example.com/v1"
+                required
+            /></label>
+            <label class="form-field"
+              >API Key<ProviderApiKeyInput
+                v-model="form.apiKey"
+                :placeholder="
+                  form.hasCredential
+                    ? '留空保留当前 Key，填写则更新当前 Key'
+                    : '请输入 API Key'
+                "
+              /><span v-if="form.hasCredential" class="muted"
+                >当前 Key：{{ form.keyName }}，留空保留。</span
+              ></label
+            >
+          </template>
           <label class="form-field"
-            >基础地址<input
-              v-model="form.baseUrl"
+            >代理地址<input
+              v-model="form.proxy"
               class="input"
-              placeholder="https://example.com/v1"
-              required
+              placeholder="可选，例如 http://127.0.0.1:7890"
           /></label>
           <label class="form-field"
-            >API Key<ProviderApiKeyInput v-model="form.apiKey"
+            >备注<input v-model="form.note" class="input"
           /></label>
-          <label class="form-field"
-            >Key 标识 / 名称<input
-              v-model="form.keyLogicalId"
-              class="input"
-              placeholder="default" /><input
-              v-model="form.keyName"
-              class="input"
-              placeholder="默认 Key"
-          /></label>
-        </template>
-        <label class="form-field"
-          >代理地址<input
-            v-model="form.proxy"
-            class="input"
-            placeholder="可选，例如 http://127.0.0.1:7890"
-        /></label>
-        <label class="form-field"
-          >备注<input v-model="form.note" class="input"
-        /></label>
+        </div>
         <label class="check-field"
-          ><input v-model="form.enabled" type="checkbox" />启用此服务商</label
+          ><input v-model="form.enabled" type="checkbox" />服务商可用</label
         >
+        <template v-if="form.kind === 'api'">
+          <ProviderModelListEditor
+            :model-value="draftModelNames"
+            title="服务商模型目录"
+            :show-sync-control="false"
+            :show-reset="false"
+            :disabled="busy"
+            @update:model-value="updateDraftModelNames"
+            @fetch="fetchEditorModels"
+          />
+          <p class="muted">
+            移除模型会将其停用，原有价格、模型详情与历史用量继续保留。
+          </p>
+        </template>
+        <p v-else class="muted">使用官方模型列表</p>
         <fieldset class="agent-fields">
           <legend>允许使用的 Agent</legend>
           <div
-            v-for="binding in form.bindings"
+            v-for="(binding, index) in form.bindings"
             :key="binding.agentType"
             class="agent-binding"
           >
@@ -791,52 +814,58 @@
                 agentLabel(binding.agentType)
               }}</label
             >
-            <label v-if="binding.enabled" class="form-field"
-              >默认模型<select v-model="binding.defaultModelId" class="input">
-                <option :value="null">应用时选择</option>
-                <option
-                  v-for="model in providerModels(form.id).filter(
-                    (item) => item.enabled
-                  )"
-                  :key="model.id"
-                  :value="model.id"
-                >
-                  {{ model.displayName || model.upstreamModelId }}
-                </option>
-              </select></label
-            >
+            <ServiceAgentModelFields
+              v-if="binding.enabled"
+              v-model="form.bindings[index]"
+              :provider-kind="form.kind"
+              :models="draftModels.filter((item) => item.enabled)"
+              :schema="runtimeConfigSchemas[binding.agentType] || {}"
+              :desktop-routes="data.desktopModelRoutes || []"
+              :disabled="busy"
+            />
           </div>
-          <p v-if="!form.id" class="muted">
-            新服务商保存模型后，可以再次编辑并选择默认模型。
-          </p>
         </fieldset>
-        <label class="form-field"
-          >模型 JSON（可填模型名数组，或编辑模型详情）<textarea
-            v-model="form.modelsJson"
-            class="input code-input"
-            rows="8"
-            placeholder='["model-name"]'
-          ></textarea>
-        </label>
-        <p class="muted">
-          详情字段：upstreamModelId、displayName、enabled、contextWindow、catalog、inputPriceMicros、cachedInputPriceMicros、outputPriceMicros、currency。价格单位为每百万
-          Token 的货币微单位；未知填 null。已有模型设 enabled=false 可禁用。
-        </p>
-        <details>
-          <summary>高级配置：请求头、Agent 参数和模型别名</summary>
+        <details class="advanced-fields">
+          <summary>
+            {{
+              form.kind === "api"
+                ? "高级配置：模型详情、请求头与模型别名"
+                : "高级配置：请求头与模型别名"
+            }}
+          </summary>
+          <div v-if="form.kind === 'api'" class="form-grid">
+            <label class="form-field"
+              >Key 标识<input
+                v-model="form.keyLogicalId"
+                class="input"
+                placeholder="default"
+            /></label>
+            <label class="form-field"
+              >Key 名称<input
+                v-model="form.keyName"
+                class="input"
+                placeholder="默认 Key"
+            /></label>
+          </div>
+          <template v-if="form.kind === 'api'">
+            <label class="form-field"
+              >模型详情 JSON<textarea
+                v-model="form.modelsJson"
+                class="input code-input"
+                rows="8"
+                placeholder='["model-name"]'
+              ></textarea>
+            </label>
+            <p class="muted">
+              可配置
+              displayName、contextWindow、catalog、enabled、currency，以及
+              inputPriceMicros、cachedInputPriceMicros、outputPriceMicros。
+              价格单位为每百万 Token 的货币微单位，未知填 null。
+            </p>
+          </template>
           <label class="form-field"
             >请求头 JSON<textarea
               v-model="form.headersJson"
-              class="input code-input"
-              rows="3"
-            ></textarea>
-          </label>
-          <label
-            v-for="binding in form.bindings"
-            :key="binding.agentType"
-            class="form-field"
-            >{{ agentLabel(binding.agentType) }} 参数 JSON<textarea
-              v-model="binding.optionsJson"
               class="input code-input"
               rows="3"
             ></textarea>
@@ -850,15 +879,27 @@
             ></textarea>
           </label>
         </details>
-        <button class="btn btn-primary" :disabled="busy">保存配置</button>
+        <div class="form-footer">
+          <button
+            class="btn"
+            type="button"
+            :disabled="busy"
+            @click="form = null"
+          >
+            取消
+          </button>
+          <button class="btn btn-primary" type="submit" :disabled="busy">
+            保存配置
+          </button>
+        </div>
       </form>
     </BaseModal>
 
     <BaseModal
       v-if="applyForm"
       title="应用服务商到 Agent"
-      description="接管前保存原始文件。默认配置目录来自应用设置；可填写独立目录来配置其他实例。"
-      @close="applyForm = null"
+      :description="`${providerName(applyForm.providerId)} · 接管前保存原始文件，默认配置目录来自应用设置。`"
+      @close="closeApply"
     >
       <div class="provider-form">
         <label class="form-field"
@@ -902,6 +943,9 @@
           索引。应用后重启客户端。
         </p>
         <div class="card-actions">
+          <button class="btn" :disabled="busy" @click="closeApply">
+            返回管理
+          </button>
           <button
             class="btn"
             :disabled="busy || !applyForm.modelId"
@@ -1027,24 +1071,26 @@ import {
   EyeOff,
   KeyRound,
   Layers,
-  Play,
   Plus,
   RefreshCw,
   Server,
   ShieldCheck,
   SquarePen,
-  Trash2,
-  X
+  Trash2
 } from "lucide-vue-next"
 import AiIcon from "@/components/AiIcon.vue"
 import BaseModal from "@/components/BaseModal.vue"
 import ProviderApiKeyInput from "./ProviderApiKeyInput.vue"
+import ProviderIconPicker from "./ProviderIconPicker.vue"
+import ProviderModelListEditor from "./ProviderModelListEditor.vue"
+import ServiceAgentModelFields from "./ServiceAgentModelFields.vue"
 import { serviceProviderApi } from "@/api/modules/service-providers"
 import { createMessage } from "@/utils/message"
 
 const props = defineProps({
   initialState: { type: Object, default: () => ({}) },
   cliTargets: { type: Array, default: () => [] },
+  runtimeConfigSchemas: { type: Object, default: () => ({}) },
   loginState: { type: Object, default: null }
 })
 const data = ref({
@@ -1060,6 +1106,10 @@ const busy = ref(false)
 const providerTab = ref("all")
 const showDisabledItems = ref(false)
 const showGatewayManager = ref(false)
+const managerProviderId = ref("")
+const managerProvider = computed(() =>
+  data.value.providers.find((item) => item.id === managerProviderId.value)
+)
 const detailProviderId = ref("")
 const detailTab = ref("overview")
 const providerTabs = [
@@ -1089,9 +1139,23 @@ const detailTabs = computed(() => [
   ...(detailProvider.value?.kind === "api"
     ? [{ id: "keys", label: "API Key" }]
     : []),
-  { id: "instances", label: "已启用实例" }
+  { id: "instances", label: "关联 Agent" }
 ])
 const form = ref(null)
+// 简单模型列表与高级详情共用一份草稿，避免编辑名称时丢失价格和目录扩展。
+const draftModels = computed(() => {
+  try {
+    return parseDraftModels()
+  } catch {
+    return []
+  }
+})
+const draftModelNames = computed(() =>
+  draftModels.value
+    .filter((item) => item.enabled)
+    .map((item) => item.upstreamModelId)
+    .join("\n")
+)
 const applyForm = ref(null)
 const accountProvider = ref("")
 const accountContent = ref("")
@@ -1206,6 +1270,16 @@ function openProviderDetail(provider, tab = "overview") {
   detailTab.value = tab
 }
 
+function openGatewayManager(provider) {
+  managerProviderId.value =
+    provider?.id ||
+    managerProviderId.value ||
+    data.value.providers.find((item) => item.enabled)?.id ||
+    ""
+  detailProviderId.value = ""
+  showGatewayManager.value = true
+}
+
 async function toggleProviderEnabled(provider) {
   if (busy.value) return false
   busy.value = true
@@ -1219,13 +1293,11 @@ async function toggleProviderEnabled(provider) {
     busy.value = false
   }
   // 只更新配置启用状态；模型、授权和 Key 由后端保留，使用详情中的最新修订号。
-  return perform("save", { ...provider, ...detail, enabled: !provider.enabled })
-}
-
-async function stopUsingProvider(provider) {
-  const instances = providerInstances(provider.id)
-  if (instances.length === 1) return perform("detach", { id: instances[0].id })
-  openProviderDetail(provider, "instances")
+  return perform("save", {
+    ...provider,
+    ...detail,
+    enabled: !Boolean(detail.enabled ?? provider.enabled)
+  })
 }
 
 async function refresh() {
@@ -1255,12 +1327,21 @@ async function perform(action, payload, notify = true) {
 }
 
 async function editProvider(provider = {}) {
+  if (busy.value) return
+  busy.value = true
   try {
     const detail = provider.id
       ? await serviceProviderApi.invoke("detail", { id: provider.id })
       : {}
+    const activeKey = data.value.keys.find(
+      (item) =>
+        item.providerId === provider.id &&
+        item.isActive &&
+        item.status === "active"
+    )
     form.value = {
       name: "",
+      icon: "",
       kind: "api",
       upstreamProtocol: "responses",
       baseUrl: "",
@@ -1271,8 +1352,8 @@ async function editProvider(provider = {}) {
       ...detail,
       enabled: Boolean(detail.enabled ?? provider.enabled ?? true),
       apiKey: "",
-      keyLogicalId: "default",
-      keyName: "默认 Key",
+      keyLogicalId: activeKey?.logicalId || "default",
+      keyName: activeKey?.name || "默认 Key",
       modelsJson: JSON.stringify(
         providerModels(provider.id).map((item) => ({
           ...item,
@@ -1294,36 +1375,191 @@ async function editProvider(provider = {}) {
           (item) =>
             item.providerId === provider.id && item.agentType === agent.id
         )
+        const options = JSON.parse(JSON.stringify(binding?.options || {}))
+        // 保留各 Agent 独立参数，已有新模式配置沿用此前默认同步目录的行为。
+        if (agent.id === "codex") {
+          options.syncModelList = Boolean(
+            options.syncModelList ?? Boolean(provider.id)
+          )
+          // 旧子列表不再生效，编辑保存统一使用服务商目录。
+          delete options.modelList
+          options.serviceTierFast = Boolean(options.serviceTierFast)
+          options.modelContextWindowEnabled = Boolean(
+            options.modelContextWindowEnabled
+          )
+          options.modelAutoCompactTokenLimit ??= 900000
+        }
+        if (agent.id === "claude-desktop") options.modelMappings ??= {}
         return {
           agentType: agent.id,
           enabled: Boolean(binding?.enabled),
-          defaultModelId: binding?.defaultModelId,
-          optionsJson: JSON.stringify(binding?.options || {}, null, 2)
+          defaultModelName:
+            providerModels(provider.id).find(
+              (item) => item.id === binding?.defaultModelId
+            )?.upstreamModelId || "",
+          options
         }
       })
     }
     detailProviderId.value = ""
+    showGatewayManager.value = false
   } catch (error) {
     createMessage.error(error?.message || String(error))
+  } finally {
+    busy.value = false
+  }
+}
+
+function parseDraftModels() {
+  const models = JSON.parse(form.value?.modelsJson || "[]")
+  if (!Array.isArray(models)) throw new Error("模型详情必须为 JSON 数组")
+  const names = new Set()
+  return models.map((item) => {
+    const model =
+      typeof item === "string"
+        ? {
+            ...providerModels(form.value?.id).find(
+              (model) => model.upstreamModelId === item
+            ),
+            upstreamModelId: item
+          }
+        : item
+    if (
+      !model ||
+      typeof model.upstreamModelId !== "string" ||
+      !model.upstreamModelId.trim()
+    )
+      throw new Error("请为每个模型填写 upstreamModelId")
+    const name = model.upstreamModelId.trim()
+    if (names.has(name)) throw new Error(`模型 ${name} 重复`)
+    names.add(name)
+    return {
+      ...model,
+      upstreamModelId: name,
+      enabled: Boolean(model.enabled ?? true)
+    }
+  })
+}
+
+function updateDraftModelNames(value) {
+  try {
+    const names = [
+      ...new Set(
+        value
+          .split(/[\r\n,;]+/)
+          .map((item) => item.trim())
+          .filter(Boolean)
+      )
+    ]
+    const models = parseDraftModels()
+    const next = models.map((item) => ({
+      ...item,
+      enabled: names.includes(item.upstreamModelId)
+    }))
+    for (const name of names) {
+      if (!models.some((item) => item.upstreamModelId === name))
+        next.push({ upstreamModelId: name, displayName: name, enabled: true })
+    }
+    form.value.modelsJson = JSON.stringify(next, null, 2)
+    for (const binding of form.value.bindings) {
+      if (!names.includes(binding.defaultModelName))
+        binding.defaultModelName = ""
+      if (binding.agentType === "claude") {
+        for (const key of [
+          "haikuModel",
+          "sonnetModel",
+          "opusModel",
+          "subagentModel"
+        ])
+          if (!names.includes(binding.options[key])) binding.options[key] = ""
+      } else if (binding.agentType === "claude-desktop") {
+        for (const mapping of Object.values(
+          binding.options.modelMappings || {}
+        ))
+          if (!names.includes(mapping.model)) mapping.model = ""
+      }
+    }
+  } catch (error) {
+    createMessage.error(`请先修正模型详情：${error?.message || error}`)
+  }
+}
+
+async function fetchEditorModels() {
+  if (busy.value || !form.value) return
+  if (!form.value.id)
+    return createMessage.error("请先保存服务商，再获取上游模型")
+  const editor = form.value
+  busy.value = true
+  try {
+    const models = parseDraftModels()
+    const detail = await serviceProviderApi.invoke("detail", { id: editor.id })
+    if (detail.revision !== editor.revision)
+      throw new Error("配置已被修改，请重新打开编辑后获取模型")
+    if (
+      editor.apiKey ||
+      ["baseUrl", "proxy", "upstreamProtocol"].some(
+        (key) => editor[key] !== detail[key]
+      ) ||
+      JSON.stringify(JSON.parse(editor.headersJson)) !==
+        JSON.stringify(detail.headers || {})
+    )
+      throw new Error("连接信息尚未保存，请先保存配置再获取模型")
+    await serviceProviderApi.invoke("fetch-models", {
+      providerId: editor.id,
+      agentVersion: agentVersion("codex")
+    })
+    data.value = await serviceProviderApi.invoke("state")
+    const updated = data.value.providers.find((item) => item.id === editor.id)
+    if (updated?.revision !== editor.revision + 1)
+      throw new Error(
+        "获取模型期间配置已变化，请重新打开编辑，避免覆盖其他修改"
+      )
+    // 获取目录只追加新模型，保留用户尚未保存的模型、价格、默认模型与授权。
+    const added = providerModels(editor.id).filter(
+      (item) =>
+        !models.some((model) => model.upstreamModelId === item.upstreamModelId)
+    )
+    editor.modelsJson = JSON.stringify([...models, ...added], null, 2)
+    editor.revision = updated.revision
+    createMessage.success("已获取模型，保存后应用当前编辑")
+  } catch (error) {
+    createMessage.error(error?.message || String(error))
+  } finally {
+    busy.value = false
   }
 }
 
 async function saveProvider() {
   try {
+    const models = parseDraftModels()
+    for (const binding of form.value.bindings) {
+      if (
+        binding.enabled &&
+        binding.defaultModelName &&
+        !models.some(
+          (item) =>
+            item.enabled && item.upstreamModelId === binding.defaultModelName
+        )
+      )
+        throw new Error(
+          `${agentLabel(binding.agentType)} 的默认模型已停用，请重新选择`
+        )
+    }
     const value = {
       ...form.value,
+      apiKey: form.value.kind === "api" ? form.value.apiKey : "",
       upstreamProtocol:
         form.value.kind === "codex_account"
           ? "responses"
           : form.value.upstreamProtocol,
-      models: JSON.parse(form.value.modelsJson),
+      models,
       headers: JSON.parse(form.value.headersJson),
       routes: JSON.parse(form.value.routesJson),
       bindings: form.value.bindings.map((item) => ({
         agentType: item.agentType,
         enabled: item.enabled,
-        defaultModelId: item.defaultModelId || null,
-        options: JSON.parse(item.optionsJson)
+        defaultModelName: item.defaultModelName || "",
+        options: JSON.parse(JSON.stringify(item.options))
       }))
     }
     if (!Array.isArray(value.models) || !Array.isArray(value.routes))
@@ -1335,6 +1571,8 @@ async function saveProvider() {
 }
 
 function openApply(provider) {
+  if (!provider?.enabled || !provider.hasCredential)
+    return createMessage.error("请先恢复服务商可用状态并配置凭据")
   const agent = agents.find((item) =>
     data.value.bindings.some(
       (binding) =>
@@ -1345,6 +1583,8 @@ function openApply(provider) {
   )
   if (!agent) return createMessage.error("请先编辑服务商并授权 Agent")
   detailProviderId.value = ""
+  managerProviderId.value = provider.id
+  showGatewayManager.value = false
   applyForm.value = {
     providerId: provider.id,
     agentType: agent.id,
@@ -1353,6 +1593,11 @@ function openApply(provider) {
     name: ""
   }
   updateAgent()
+}
+
+function closeApply() {
+  applyForm.value = null
+  showGatewayManager.value = true
 }
 
 function updateAgent() {
@@ -1373,7 +1618,7 @@ function updateAgent() {
 }
 
 async function applyProvider() {
-  if (await perform("activate", applyForm.value)) applyForm.value = null
+  if (await perform("activate", applyForm.value)) closeApply()
 }
 
 async function importAccount() {
@@ -1580,13 +1825,6 @@ async function showBackup(id) {
         border-color: var(--color-info-line);
         box-shadow: 0 10px 24px rgba(15, 23, 42, 0.1);
       }
-      &.provider-card-active {
-        border-color: var(--color-info-line);
-        background: var(--color-primary-soft);
-        box-shadow:
-          0 8px 22px rgba(22, 130, 255, 0.12),
-          inset 4px 0 0 var(--color-primary-solid);
-      }
       &.provider-card-disabled {
         border-color: var(--color-line-strong);
         background: var(--color-panel-soft);
@@ -1636,11 +1874,6 @@ async function showBackup(id) {
             color: var(--color-success);
             font-size: var(--font-size-xs);
             line-height: 1.4;
-            &.disabled-tag {
-              border-color: var(--color-line);
-              background: var(--color-panel-soft);
-              color: var(--color-text-muted);
-            }
             &.missing-tag {
               border-color: var(--color-warning-line);
               background: var(--color-warning-soft);
@@ -1697,7 +1930,7 @@ async function showBackup(id) {
       .provider-actions {
         display: flex;
         flex: none;
-        width: 272px;
+        width: 200px;
         flex-direction: column;
         align-items: flex-end;
         gap: 12px;
@@ -1727,31 +1960,6 @@ async function showBackup(id) {
               border-radius: 999px;
               background: var(--color-success);
             }
-          }
-          .provider-enable,
-          .provider-using {
-            display: inline-flex;
-            min-width: 134px;
-            height: 36px;
-            align-items: center;
-            justify-content: center;
-            gap: 6px;
-            padding: 0 14px;
-            border: 0;
-            border-radius: 6px;
-            background: var(--color-primary-solid);
-            color: #fff;
-            font: inherit;
-            font-size: var(--font-size-sm);
-            cursor: pointer;
-            &:disabled {
-              opacity: 0.55;
-              cursor: default;
-            }
-          }
-          .provider-using {
-            background: var(--color-panel-soft);
-            color: var(--color-text-muted);
           }
         }
         .icon-actions {
@@ -1815,6 +2023,23 @@ async function showBackup(id) {
     flex-wrap: wrap;
     align-items: center;
     gap: 8px;
+  }
+  .gateway-manager {
+    .agent-apply {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: flex-end;
+      gap: 10px;
+
+      .form-field {
+        display: flex;
+        flex: 1;
+        min-width: 200px;
+        flex-direction: column;
+        gap: 8px;
+        font-size: var(--font-size-sm);
+      }
+    }
   }
   .provider-detail {
     .detail-tabs {
@@ -1993,6 +2218,16 @@ async function showBackup(id) {
       gap: 8px;
       font-size: 13px;
     }
+    .form-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+
+      .form-field {
+        flex: 1 1 280px;
+        min-width: 0;
+      }
+    }
     .check-field {
       display: inline-flex;
       align-items: center;
@@ -2000,9 +2235,45 @@ async function showBackup(id) {
       margin-right: 16px;
     }
     .agent-fields {
+      margin: 0;
       border: 1px solid var(--color-line);
       border-radius: 8px;
       padding: 12px;
+
+      .agent-binding {
+        display: flex;
+        flex-direction: column;
+        align-items: stretch;
+        gap: 12px;
+        padding: 10px 0;
+
+        .check-field {
+          min-width: 150px;
+        }
+      }
+    }
+    .advanced-fields {
+      padding: 14px;
+      border: 1px solid var(--color-line);
+      border-radius: 8px;
+
+      .form-field,
+      .form-grid,
+      .muted {
+        margin-top: 16px;
+      }
+    }
+    .form-footer {
+      position: sticky;
+      bottom: 0;
+      z-index: 1;
+      display: flex;
+      flex: none;
+      justify-content: flex-end;
+      gap: 10px;
+      padding: 12px 0;
+      border-top: 1px solid var(--color-line);
+      background: var(--color-panel);
     }
     .code-input {
       font-family: monospace;

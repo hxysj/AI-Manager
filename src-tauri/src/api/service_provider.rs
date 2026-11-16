@@ -262,6 +262,7 @@ pub(crate) fn activate(
         .unwrap_or("");
     let models=store::query(&c,"SELECT id,upstream_model_id AS upstreamModelId,catalog_json AS catalogJson,context_window AS contextWindow
         FROM service_provider_models WHERE provider_id=?1 AND enabled=1",&[&provider])?;
+    store::validate_agent_options(&c, provider, agent, true, &binding["options"])?;
     let model = models
         .iter()
         .find(|m| store::text(m, "id") == model_id)
@@ -299,29 +300,52 @@ pub(crate) fn activate(
         let mut content = before.clone().unwrap_or_default();
         originals.insert(file.clone(), before);
         let catalog_path = directory.join(".ai_manager_service_models.json");
-        let mut catalog = Vec::new();
-        for item in &models {
-            let mut entry = item["catalog"].clone();
-            entry["slug"] = item["upstreamModelId"].clone();
-            if !item["contextWindow"].is_null() {
-                entry["context_window"] = item["contextWindow"].clone();
-            }
-            catalog.push(entry);
-        }
-        let catalog = codex_models::normalize_catalog(&json!({"models":catalog}))?;
+        let sync = binding["options"]["syncModelList"].as_bool()
+            .or_else(|| binding["options"]["syncModelList"].as_i64().map(|n| n == 1))
+            .unwrap_or(true);
+        // API 服务商同步全部可用模型，官方账号沿用客户端官方目录。
+        let catalog = if sync && config["kind"] == "api" {
+            let entries = models.iter().map(|item| {
+                let mut entry = item["catalog"].clone();
+                entry["slug"] = item["upstreamModelId"].clone();
+                if !item["contextWindow"].is_null() {
+                    entry["context_window"] = item["contextWindow"].clone();
+                }
+                entry
+            }).collect::<Vec<_>>();
+            Some(codex_models::normalize_catalog(&json!({"models":entries}))?)
+        } else {
+            None
+        };
         // 只接管模型和独立 provider 节点，保留用户已有 MCP、权限和项目配置。
         let root = [
             ("model_provider", json!("ai_manager_service")),
             ("model", json!(name)),
-            ("model_catalog_json", json!(catalog_path.to_string_lossy())),
             ("disable_response_storage", json!(true)),
         ];
         for (key, val) in root {
             content =
                 runtime_provider::set_toml_root_line(&content, key, &format!("{key} = {val}"));
         }
+        if catalog.is_some() {
+            content = runtime_provider::set_toml_root_line(
+                &content,
+                "model_catalog_json",
+                &format!("model_catalog_json = {}", json!(catalog_path.to_string_lossy())),
+            );
+        } else {
+            content = runtime_provider::remove_toml_root_line(&content, "model_catalog_json");
+        }
         for (key, option) in [("model_reasoning_effort", "modelReasoningEffort")] {
             if let Some(val) = binding["options"].get(option).filter(|v| !v.is_null()) {
+                // 应用时可能另选模型，遵循原 Provider 对 ultra 的模型限制。
+                let val = if val == "ultra"
+                    && !["gpt-5.6-sol", "gpt-5.6-terra"].contains(&name.to_ascii_lowercase().as_str())
+                {
+                    json!("low")
+                } else {
+                    val.clone()
+                };
                 content =
                     runtime_provider::set_toml_root_line(&content, key, &format!("{key} = {val}"));
             }
@@ -381,10 +405,12 @@ pub(crate) fn activate(
             );
         }
         files.push((file, format!("{}\n", content.trim_end())));
-        files.push((
-            catalog_path,
-            format!("{}\n", serde_json::to_string_pretty(&catalog)?),
-        ));
+        if let Some(catalog) = catalog {
+            files.push((
+                catalog_path,
+                format!("{}\n", serde_json::to_string_pretty(&catalog)?),
+            ));
+        }
     } else if agent == "claude" {
         let file = directory.join("settings.json");
         let before = read_file(&file)?;
@@ -404,12 +430,16 @@ pub(crate) fn activate(
             ("ANTHROPIC_BASE_URL", base_url.as_str()),
             ("ANTHROPIC_AUTH_TOKEN", token.as_str()),
             ("ANTHROPIC_MODEL", name),
-            ("ANTHROPIC_DEFAULT_OPUS_MODEL", name),
-            ("ANTHROPIC_DEFAULT_SONNET_MODEL", name),
-            ("ANTHROPIC_DEFAULT_HAIKU_MODEL", name),
-            ("CLAUDE_CODE_SUBAGENT_MODEL", name),
         ] {
             content["env"][key] = json!(val);
+        }
+        for (key, option) in [
+            ("ANTHROPIC_DEFAULT_OPUS_MODEL", "opusModel"),
+            ("ANTHROPIC_DEFAULT_SONNET_MODEL", "sonnetModel"),
+            ("ANTHROPIC_DEFAULT_HAIKU_MODEL", "haikuModel"),
+            ("CLAUDE_CODE_SUBAGENT_MODEL", "subagentModel"),
+        ] {
+            content["env"][key] = json!(binding["options"][option].as_str().filter(|name| !name.is_empty()).unwrap_or(name));
         }
         content["model"] = json!(name);
         files.push((
@@ -417,7 +447,18 @@ pub(crate) fn activate(
             format!("{}\n", serde_json::to_string_pretty(&content)?),
         ));
     } else {
-        let desktop_models=models.iter().map(|v|json!({"name":v["upstreamModelId"],"supports1m":v["contextWindow"].as_i64().is_some_and(|n|n>=1_000_000)})).collect::<Vec<_>>();
+        let mappings = store::desktop_model_mappings(&binding["options"], name);
+        let desktop_models = if mappings.is_empty() {
+            models.iter().map(|v|json!({"name":v["upstreamModelId"],"supports1m":v["contextWindow"].as_i64().is_some_and(|n|n>=1_000_000)})).collect::<Vec<_>>()
+        } else {
+            mappings.iter().map(|mapping| {
+                let mut entry = json!({"name":mapping["clientModelName"],"supports1m":mapping["supports1m"]});
+                if !store::text(mapping, "labelOverride").is_empty() {
+                    entry["labelOverride"] = mapping["labelOverride"].clone();
+                }
+                entry
+            }).collect()
+        };
         for (path, before, content) in
             claude_desktop::service_configuration(&base_url, &token, &desktop_models)?
         {
