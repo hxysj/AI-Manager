@@ -172,7 +172,11 @@
           />
         </section>
 
-        <UsageView v-else-if="activeView === 'usage'" :usage="state.usage" />
+        <UsageView
+          v-else-if="activeView === 'usage'"
+          :usage="state.usage"
+          :provider-backend="state.serviceProviders?.backend"
+        />
 
         <RulesView
           v-else-if="activeView === 'rules'"

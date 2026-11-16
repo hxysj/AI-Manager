@@ -12,7 +12,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
+mod gateway_skills;
 mod service;
+pub(crate) use gateway_skills::record_request as record_gateway_skills;
 
 const DEFAULT_EXCHANGE_RATE: f64 = 7.2;
 const CODEX_USAGE_PARSER_VERSION: u64 = 2;
@@ -56,6 +58,7 @@ struct SkillInvocation {
     cli: String,
     raw_path: String,
     created_at: u64,
+    request_ids: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -187,7 +190,9 @@ pub async fn get_skill_usage_stats(
       "trendMode": normalize_skill_trend_mode(payload.get("trendMode"))
     });
 
-    for call in usage_store::read_session_skill_calls(paths, "all", 0, 0)? {
+    let mut calls = gateway_skills::read_legacy_calls(paths)?;
+    calls.extend(gateway_skills::read_calls(paths)?);
+    for call in calls {
         let reference_alias = string_value(call.get("alias"));
         let alias = reference_alias.to_lowercase();
         let leaf_alias = alias.rsplit(':').next().unwrap_or(&alias);
@@ -226,6 +231,7 @@ pub async fn get_skill_usage_stats(
             cli,
             raw_path: string_value(call.get("rawPath")),
             created_at: number_value(call.get("createdAt"), 0),
+            request_ids: string_array(call.get("requestIds")),
         });
     }
 
@@ -719,6 +725,11 @@ fn get_initial_state_data(paths: &AppPaths) -> Result<Value, ManagerError> {
 }
 
 async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, ManagerError> {
+    // 新模式的请求及 Skill 事件在共享网关内落库。必须在扫描、解析器升级和
+    // 旧 Key 绑定之前返回，避免刷新页面时改写历史 Usage 或重复采集客户端日志。
+    if crate::core::service_provider_store::active(paths)? {
+        return Ok(Vec::new());
+    }
     crate::api::runtime_provider::capture_key_bindings(paths)?;
     let mut diagnostics = Vec::new();
     let mut updates = Vec::new();
@@ -2923,6 +2934,11 @@ fn match_invocation_logs(
     invocations: &[(usize, SkillInvocation)],
     usage_logs: &[Value],
 ) -> HashMap<usize, Vec<Value>> {
+    let logs_by_id = usage_logs
+        .iter()
+        .map(|log| (string_value(log.get("requestId")), log))
+        .collect::<HashMap<_, _>>();
+    let mut result = HashMap::new();
     let mut logs_by_path: HashMap<String, Vec<Value>> = HashMap::new();
 
     for log in usage_logs {
@@ -2944,6 +2960,15 @@ fn match_invocation_logs(
     let mut invocations_by_path: HashMap<String, Vec<(usize, SkillInvocation)>> = HashMap::new();
 
     for (index, invocation) in invocations {
+        if !invocation.request_ids.is_empty() {
+            result.insert(
+                *index,
+                invocation.request_ids.iter()
+                    .filter_map(|id| logs_by_id.get(id).map(|log| (*log).clone()))
+                    .collect(),
+            );
+            continue;
+        }
         if invocation.raw_path.is_empty() {
             continue;
         }
@@ -2953,8 +2978,6 @@ fn match_invocation_logs(
             .or_default()
             .push((*index, invocation.clone()));
     }
-
-    let mut result = HashMap::new();
 
     for (raw_path, mut items) in invocations_by_path {
         let logs = logs_by_path.remove(&raw_path).unwrap_or_default();

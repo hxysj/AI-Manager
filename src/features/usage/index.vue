@@ -14,7 +14,10 @@
       <div>
         <p class="usage-view__eyebrow">Token Usage</p>
         <h1>模型用量统计</h1>
-        <p v-if="appType === 'claude-desktop'" class="usage-desktop-note">
+        <p
+          v-if="appType === 'claude-desktop' && !serviceMode"
+          class="usage-desktop-note"
+        >
           Cowork 按回合结算计数，Code 按已落盘请求计数；只统计日志中的真实
           Token，缺失数据不估算。
         </p>
@@ -42,7 +45,15 @@
         </button>
         <button type="button" :disabled="pending" @click="syncUsage">
           <RefreshCw :size="16" />
-          {{ syncing ? "同步中..." : "同步会话日志" }}
+          {{
+            syncing
+              ? serviceMode
+                ? "刷新中..."
+                : "同步中..."
+              : serviceMode
+                ? "刷新用量"
+                : "同步会话日志"
+          }}
         </button>
       </div>
     </header>
@@ -760,9 +771,14 @@ const props = defineProps({
   usage: {
     type: Object,
     default: () => ({})
+  },
+  providerBackend: {
+    type: String,
+    default: "legacy"
   }
 })
 
+const serviceMode = computed(() => props.providerBackend === "service")
 const usageSearchParams = new URLSearchParams(window.location.search)
 const isReportExportWindow = usageSearchParams.get("export") === "usage-report"
 const pending = ref(false)

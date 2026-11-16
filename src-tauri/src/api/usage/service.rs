@@ -230,6 +230,104 @@ mod tests {
     }
 
     #[test]
+    fn service_usage_refresh_skips_local_logs_and_preserves_history_until_rollback() {
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+            let f = Fixture::new();
+            let source = f.root.join("indexed.jsonl");
+            let raw_path = source.to_string_lossy().to_string();
+            let session = concat!(
+                "{\"timestamp\":\"2026-11-16T01:00:00Z\",\"payload\":{\"type\":\"session_meta\",\"model\":\"fresh-model\"}}\n",
+                "{\"timestamp\":\"2026-11-16T01:00:01Z\",\"payload\":{\"type\":\"token_count\",\"info\":{\"total_token_usage\":{\"input_tokens\":30,\"output_tokens\":10}}}}\n"
+            );
+            std::fs::write(&source, session).unwrap();
+            std::fs::write(f.root.join("new.jsonl"), session.replace("fresh-model","new-model")).unwrap();
+            usage_store::replace_sessions(&f.paths, &[UsageSessionUpdate {
+                raw_path:raw_path.clone(), app_type:"codex".into(), updated_at:1,
+                logs:vec![json!({"requestId":"historical","appType":"codex","providerId":"legacy",
+                    "providerName":"历史服务商","model":"historical-model","createdAt":1,
+                    "inputTokens":10,"outputTokens":2,"cacheReadTokens":0,"cacheCreationTokens":0,
+                    "rawPath":raw_path,"totalCostUsd":1.0,"costLockedAt":1})], records:vec![]
+            }]).unwrap();
+            let original = usage_store::read_all_logs(&f.paths).unwrap();
+            let revision = usage_store::revision(&f.paths).unwrap();
+            let versions = usage_store::read_session_versions(&f.paths).unwrap();
+            let state = json!({"providers":[],"skills":[],"sessions":[{"id":"indexed","cli":"codex","rawPath":raw_path}],
+                "cliTargets":[{"id":"codex","sessionsPath":f.root}]});
+            service_provider::switch_backend(&f.paths,"service").unwrap();
+            f.request("direct", "codex", 100, Some(100), Some(20));
+            for _ in 0..2 {
+                assert!(super::super::sync_pending_usage(&f.paths,&state).await.unwrap().is_empty());
+                let stats = super::super::sync_usage(&f.paths,json!({}),&state).await.unwrap();
+                assert_eq!(stats["data"]["summary"]["requestCount"],2);
+                assert_eq!(stats["data"]["summary"]["actualTokens"],132);
+                assert_eq!(stats["data"]["logTotalCount"],2);
+                let skill_stats = super::super::get_skill_usage_stats(&f.paths,json!({}),&state).await.unwrap();
+                assert_eq!(skill_stats["data"]["summary"]["usageCount"],0);
+            }
+            assert_eq!(usage_store::read_all_logs(&f.paths).unwrap(),original);
+            assert_eq!(usage_store::revision(&f.paths).unwrap(),revision);
+            assert_eq!(usage_store::read_session_versions(&f.paths).unwrap(),versions);
+            assert_eq!(usage_store::read_session_skill_versions(&f.paths).unwrap()[&raw_path].1,0);
+            let exported = f.stats(json!({"includeAllLogs":true}));
+            assert_eq!(exported["logs"].as_array().unwrap().len(),2);
+            assert_eq!(f.stats(json!({"providerId":"legacy"}))["summary"]["requestCount"],1);
+            // 损坏/不可读取的日志同样不会影响新模式刷新。
+            std::fs::write(f.root.join("invalid.jsonl"), "not-json").unwrap();
+            assert!(super::super::sync_pending_usage(&f.paths,&state).await.unwrap().is_empty());
+            std::fs::remove_file(f.root.join("invalid.jsonl")).unwrap();
+            service_provider::switch_backend(&f.paths,"legacy").unwrap();
+            super::super::sync_pending_usage(&f.paths,&state).await.unwrap();
+            let scanned = usage_store::read_all_logs(&f.paths).unwrap();
+            assert!(scanned.iter().any(|log|log["model"]=="fresh-model"));
+            assert!(scanned.iter().any(|log|log["model"]=="new-model"));
+            assert_eq!(f.stats(json!({"requestSource":"service-gateway"}))["summary"]["requestCount"],1);
+        });
+    }
+
+    #[test]
+    fn service_skill_events_deduplicate_replays_and_keep_pre_gateway_history() {
+        use super::super::gateway_skills;
+        let f = Fixture::new();
+        service_provider::switch_backend(&f.paths,"service").unwrap();
+        let c = database::open(&f.paths).unwrap();
+        c.execute("UPDATE app_metadata SET value='100' WHERE key='service_gateway:skills_started_at'",[]).unwrap();
+        c.execute("UPDATE service_switch_operations SET completed_at=110 WHERE to_backend='service'",[]).unwrap();
+        usage_store::write_session_skills(&f.paths,&[usage_store::SessionSkillUpdate {
+            raw_path:"old-session".into(),app_type:"codex".into(),session_id:"old".into(),
+            created_at:50,updated_at:250,calls:vec![
+                json!({"alias":"before","discoverable":true,"createdAt":50}),
+                json!({"alias":"duplicate","discoverable":true,"createdAt":150}),
+                json!({"alias":"after","discoverable":true,"createdAt":250})
+            ]
+        }]).unwrap();
+        let payload = json!({"input":[{"type":"function_call","call_id":"read-skill","name":"read",
+            "arguments":"{\"path\":\"C:/skills/design/SKILL.md\"}"}]});
+        for (id,session,time) in [("one","session-one",150),("retry","session-one",160),("two","session-two",170)] {
+            f.request(id,"codex",time,Some(100),Some(20));
+            c.execute("UPDATE service_gateway_requests SET instance_id='same-instance' WHERE id=?1",[id]).unwrap();
+            let record = json!({"serviceRequestId":id,"instanceId":"same-instance"});
+            let mut request_payload = payload.clone();
+            let header = if id == "retry" {
+                request_payload["metadata"] = json!({"user_id":"user_test_account_test_session_session-one"});
+                ""
+            } else { session };
+            gateway_skills::record_request(&f.paths,&record,&request_payload,header).unwrap();
+            gateway_skills::record_request(&f.paths,&record,&request_payload,header).unwrap();
+        }
+        let calls = gateway_skills::read_calls(&f.paths).unwrap();
+        assert_eq!(calls.len(),2);
+        assert_eq!(calls.iter().map(|call|call["requestIds"].as_array().unwrap().len()).sum::<usize>(),3);
+        assert!(calls.iter().all(|call|call["alias"]=="design"));
+        assert!(!json!(store::query(&c,"SELECT * FROM service_gateway_skill_events",&[]).unwrap())
+            .to_string().contains("C:/skills"));
+        service_provider::switch_backend(&f.paths,"legacy").unwrap();
+        c.execute("UPDATE service_switch_operations SET completed_at=200 WHERE to_backend='legacy'",[]).unwrap();
+        let retained = gateway_skills::read_legacy_calls(&f.paths).unwrap();
+        assert_eq!(retained.iter().map(|call|store::text(call,"alias")).collect::<Vec<_>>(),["before","after"]);
+        assert_eq!(usage_store::read_session_skill_calls(&f.paths,"all",0,0).unwrap().len(),3);
+    }
+
+    #[test]
     fn service_usage_preserves_history_filters_and_rolls_back_without_double_counting() {
         let f = Fixture::new();
         service_provider::switch_backend(&f.paths, "service").unwrap();

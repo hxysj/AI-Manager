@@ -1195,10 +1195,11 @@ const appSource = readFileSync("src/App.vue", "utf8")
 assert.ok(
   !appSource.includes("usage-only") && !appSource.includes("serviceCenterOpen")
 )
+const usageViewSource = appSource.match(/<UsageView\b[\s\S]*?\/>/)?.[0] || ""
+assert.ok(usageViewSource.includes('v-else-if="activeView === \'usage\'"'))
+assert.ok(usageViewSource.includes(':usage="state.usage"'))
 assert.ok(
-  appSource.includes(
-    '<UsageView v-else-if="activeView === \'usage\'" :usage="state.usage" />'
-  )
+  usageViewSource.includes(':provider-backend="state.serviceProviders?.backend"')
 )
 const formatterSource = transformSync(
   readFileSync("src/utils/formatters.js", "utf8"),

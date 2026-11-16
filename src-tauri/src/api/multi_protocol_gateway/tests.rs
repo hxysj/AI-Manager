@@ -465,6 +465,12 @@ fn service_gateway_matrix_routes_only_new_sources_and_records_usage(){
             assert_eq!(usage["attempts"]["outputTokens"],48);
             assert_eq!(usage["byProvider"][0]["groupKey"],provider);
             assert!(usage["logs"].as_array().unwrap().iter().all(|r|!r.to_string().contains("private-upstream-key")));
+            // 请求结束即可从原 Usage 接口读取；无需任何会话日志或同步导入。
+            let stats = crate::api::usage::get_stats(&fixture.paths,json!({"includeAllLogs":true})).await.unwrap();
+            assert_eq!(stats["data"]["summary"]["requestCount"],10);
+            assert_eq!(stats["data"]["logTotalCount"],10);
+            assert_eq!(stats["data"]["logs"].as_array().unwrap().iter()
+                .filter(|log|log["usageKnown"]==true).count(),8);
             // 显式别名优先于同名物理模型；目标禁用后不能绕过别名转发。
             c.execute("UPDATE service_provider_models SET enabled=0 WHERE provider_id=?1 AND upstream_model_id='real-model'",[&provider]).unwrap();
             assert_eq!(client.post(format!("{base}/v1/responses")).bearer_auth(&token)
@@ -473,6 +479,53 @@ fn service_gateway_matrix_routes_only_new_sources_and_records_usage(){
             assert_eq!(client.get(format!("{base}/v1/models")).bearer_auth(token).send().await.unwrap().status(),401);
             server.abort();upstream.abort();
         }
+    });
+}
+
+#[test]
+fn service_gateway_skill_usage_is_available_without_session_logs() {
+    run(async {
+        use crate::api::usage;
+        use crate::core::{database, service_provider_store as store};
+        let fixture=Fixture::new();
+        let (url,mut captures,upstream)=mock(UpstreamFormat::OpenAiResponses,StatusCode::OK,false,false,None).await;
+        let (base,token,_,server)=service_setup(&fixture,&url,UpstreamFormat::OpenAiResponses).await;
+        let client=Client::builder().no_proxy().build().unwrap();
+        let state=json!({"skills":[],"cliTargets":[],"sessions":[]});
+        for (session,streaming) in [("session-one",false),("session-one",true),("session-two",false)] {
+            let response=client.post(format!("{base}/v1/responses")).bearer_auth(&token)
+                .header("session_id",session)
+                .json(&json!({"model":"alias","input":[{"role":"user","content":"请使用 $imagegen"}],"stream":streaming}))
+                .send().await.unwrap();
+            assert_eq!(response.status(),StatusCode::OK);
+            response.text().await.unwrap();
+            captures.recv().await.unwrap();
+        }
+        let c=database::open(&fixture.paths).unwrap();
+        assert_eq!(store::query(&c,"SELECT * FROM service_gateway_skill_events",&[]).unwrap().len(),2);
+        for _ in 0..2 {
+            let stats=usage::get_skill_usage_stats(&fixture.paths,json!({}),&state).await.unwrap();
+            let row=stats["data"]["skills"].as_array().unwrap().iter().find(|row|row["name"]=="imagegen").unwrap();
+            assert_eq!(row["usageCount"],2);
+            assert_eq!(row["requestCount"],3);
+            assert_eq!(row["actualTokens"],54);
+            assert!(stats["data"]["diagnostics"].as_array().unwrap().is_empty());
+            let synced=usage::sync_usage(&fixture.paths,json!({}),&state).await.unwrap();
+            assert_eq!(synced["data"]["summary"]["requestCount"],3);
+        }
+        assert!(crate::core::usage_store::read_all_logs(&fixture.paths).unwrap().is_empty());
+        // 增量 Responses 只提交新内容时，沿明确的上游 response ID 关联已观测技能。
+        let response=client.post(format!("{base}/v1/responses")).bearer_auth(&token)
+            .json(&json!({"model":"alias","input":"继续","previous_response_id":"resp_original"}))
+            .send().await.unwrap();
+        assert_eq!(response.status(),StatusCode::OK);
+        response.text().await.unwrap();
+        captures.recv().await.unwrap();
+        let stats=usage::get_skill_usage_stats(&fixture.paths,json!({}),&state).await.unwrap();
+        assert_eq!(stats["data"]["summary"]["usageCount"],2);
+        assert_eq!(stats["data"]["summary"]["requestCount"],4);
+        assert_eq!(stats["data"]["summary"]["actualTokens"],72);
+        server.abort();upstream.abort();
     });
 }
 

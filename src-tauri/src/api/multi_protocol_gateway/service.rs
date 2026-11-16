@@ -243,6 +243,11 @@ pub(super) async fn handle_request(
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
+    let session_id = ["session_id", "x-session-id", "x-codex-session-id",
+        "conversation_id", "x-conversation-id", "x-claude-code-session-id"]
+        .iter().find_map(|name| request.headers().get(*name)
+            .and_then(|value| value.to_str().ok()).filter(|value| !value.is_empty()))
+        .unwrap_or("").to_string();
     let (identity, mut record) = match receive(&context.paths, &secret, &path, protocol, &client_id)
     {
         Ok(v) => v,
@@ -263,6 +268,7 @@ pub(super) async fn handle_request(
             .map_err(|_|GatewayFailure{status:StatusCode::PAYLOAD_TOO_LARGE,message:"请求体过大或读取失败".into()})?.to_bytes();
         let mut payload:Value=serde_json::from_slice(&bytes).ok().filter(Value::is_object)
             .ok_or_else(||GatewayFailure{status:StatusCode::BAD_REQUEST,message:"请求体必须是 JSON 对象".into()})?;
+        crate::api::usage::record_gateway_skills(&context.paths, &record, &payload, &session_id)?;
         if compact && payload["stream"]==true {
             return Err(GatewayFailure{status:StatusCode::BAD_REQUEST,message:"Responses 压缩接口不支持流式请求".into()});
         }

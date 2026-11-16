@@ -8,7 +8,7 @@
 
 旧 `providers`、`provider_keys` 表结构、记录和旧功能实现继续保留。新模式隐藏并拦截旧配置入口，停止旧网关服务；回滚后恢复旧入口。此次没有物理删除旧实现，因为它们是回滚所需的执行路径。旧数据不会因为新配置变更而被回写。
 
-新增 16 张 `service_` 表，运行模式、代际和 schema 版本存入既有 `app_metadata`。服务商模式下，配置、账号凭据、路由和请求账本均从新表读取；助手、翻译和图片选择器使用新表投影，兼容原有来源 ID。
+新增 18 张 `service_` 表，运行模式、代际和 schema 版本存入既有 `app_metadata`。服务商模式下，配置、账号凭据、路由和请求账本均从新表读取；助手、翻译和图片选择器使用新表投影，兼容原有来源 ID。
 
 ## 2. 架构和授权
 
@@ -192,9 +192,17 @@ Codex 不写 auth.json；独立 provider 节点使用本地 Bearer、requires_op
 - 汇总表的费用是“已计价部分之和”，应结合 pricedCount / attemptCount 判断覆盖率；不能当作完整账单。缺字段的单次费用保留 NULL。
 - 悬浮窗和 Usage 页面使用同一查询接口，按原有应用、日期范围汇总新旧记录，切换模式不清零当日统计。
 
-Usage 兼容查询只读取并投影新账本，不删除、搬移或重新归属原 Usage 记录。查询不依赖当前 backend，因此回滚后仍可查看新模式期间的调用。客户端会话日志同步在新模式继续工作，旧 Key 绑定写入在新模式跳过。
+Usage 兼容查询只读取并投影新账本，不删除、搬移或重新归属原 Usage 记录。查询不依赖当前 backend，因此回滚后仍可查看新模式期间的调用。新模式在网关收到请求时登记，响应和流结束时直接结算；Usage 刷新、待处理用量同步和 Skill 分析均不再扫描客户端请求日志，也不执行旧用量解析器升级或旧 Key 绑定。原 Usage 页面、筛选、分页、费用配置及导出继续共用，新模式按钮显示“刷新用量”。旧模式继续扫描日志；从旧模式首次切换前仍做最后一次旧用量同步。
 
-为避免重复计数，Claude Messages 转换响应使用由网关请求 ID 派生的 `msg_aim_...` 标识，与 Claude 会话按响应 ID 对应；Desktop 回合全部由这些响应组成时保留会话行并标记来源，由网关账本参与统计。Codex token_count 没有响应 ID，按已接管配置目录与对应接管/恢复时段选用网关账本；未接管目录与接管前、恢复后的会话继续参与原统计。接管期间应通过网关使用该目录，手动改回直连前应先解除接管。Windows 普通路径与 `\\?\` 路径统一比较。
+回滚后重新扫描客户端日志时仍须避免重复计数：Claude Messages 转换响应使用由网关请求 ID 派生的 `msg_aim_...` 标识，与 Claude 会话按响应 ID 对应；Desktop 回合全部由这些响应组成时保留会话行并标记来源，由网关账本参与统计。Codex token_count 没有响应 ID，按已接管配置目录与对应接管/恢复时段选用网关账本；旧模式扫描的未接管目录与接管前、恢复后的会话继续参与原统计。新模式只新增经过网关的调用，不补扫直连请求。接管期间应通过网关使用该目录，手动改回直连前应先解除接管。Windows 普通路径与 `\\?\` 路径统一比较。
+
+Skill 使用也由网关入站请求采集：识别用户显式 `$skill` / `/skill` 引用、`Skill` 工具调用，以及工具参数中的 `skills/.../SKILL.md` 和 `skill://...` 加载资源。只遍历会话消息和工具调用；系统提示、工具定义、技能目录说明、工具返回正文及普通助手说明不作为调用证据。只存技能别名、事件摘要及请求关联，不存请求正文、工具参数或文件路径。
+
+Skill 事件优先使用客户端会话标识与稳定消息 / 工具调用 ID 去重；没有调用 ID 时使用该消息之前的历史前缀摘要，同一历史追加、重发不会重复登记已有事件。支持常见会话请求头、`metadata.session_id` / `metadata.conversation_id`，以及 `metadata.user_id` 中 JSON 格式的 session_id 或 `_session_...` 后缀。Claude 斜杠命令的 `<command-name>` 标签也按显式引用处理。缺少会话标识时的 `history` 范围是推断：完全相同且没有任何稳定 ID 的独立会话可能合并，不能保证客户端内部真实调用次数；网关未收到的调用也无法统计。事件时间是网关首次观测时间，不回填为客户端实际执行时间。
+
+Skill 页面合并旧调用缓存与新事件。请求数、Token 和费用通过新事件与请求 ID 的关联查询同一网关账本，沿用最近一次已观测技能之后的请求口径；同次引用多个技能时，共同关联请求的费用不能当作各技能的独立收费再相加。Responses 增量请求只在提供 `previous_response_id` 且同一实例有对应响应记录时继承关联；没有证据时不猜测归属。`usageCount` 表示可观测的引用 / 调用事件数，不表示 Skill 运行成功次数或 Skill 自身精确计费。
+
+新增采集器首次初始化时在 `app_metadata` 记录 `service_gateway:skills_started_at`。回滚后本地日志扫描恢复；兼容读取根据成功的模式切换时段排除新采集器上线后、新模式期间的 Skill 日志副本，避免与网关事件重复统计。已有旧调用缓存原地保留，上线前及旧模式期间的历史继续查询。会话管理为展示会话读取文件、Skill 清单为展示已安装技能读取目录，均与模型请求日志采集分开。
 
 新日志的未知 Token、费用保持 NULL，原表格显示“未知”。汇总保留已知小计，全部未知时显示未知，并通过现有卡片提示说明缺失请求数。CNY 估算按 Usage 的汇率转换为 USD 后参与原费用切换。未配置服务商单价时继续使用 Usage 原有模型费用；修改模型费用前冻结历史网关估算，只更新新账本中的估算和费用来源快照。
 
@@ -211,7 +219,7 @@ Usage 兼容查询只读取并投影新账本，不删除、搬移或重新归�
 
 ## 7. 业务备份与凭据
 
-业务备份新增服务商配置、模型、Agent 授权和别名四张表；不包含新 Key、官方 token、本地调用 Token、实例、接管文件备份、迁移记录及请求账本。导出的新服务商和授权均关闭，恢复后补录凭据并明确启用。
+业务备份新增服务商配置、模型、Agent 授权和别名四张表；不包含新 Key、官方 token、本地调用 Token、实例、接管文件备份、迁移记录、请求账本及 Skill 事件 / 请求关联。导出的新服务商和授权均关闭，恢复后补录凭据并明确启用。
 
 恢复按父子表顺序进行，以 provider+upstream_model、provider+agent、provider+agent+alias 的自然键合并，保留本地主键并重映射模型外键。已有配置保留本机启用及软删除状态，revision 递增，不允许改变来源类型。模式、generation 等本机 app_metadata 不随业务备份恢复。
 
@@ -224,7 +232,7 @@ Usage 兼容查询只读取并投影新账本，不删除、搬移或重新归�
 | 位置 | 职责 |
 | --- | --- |
 | src-tauri/src/core/service_provider_store.rs | 新存储、校验、Key/账号加密、目录投影和统计 |
-| src-tauri/src/core/service_provider_store/schema.sql | 16 张新表的唯一建表定义 |
+| src-tauri/src/core/service_provider_store/schema.sql | 18 张新表的唯一建表定义 |
 | src-tauri/src/core/service_provider_store/migration.rs | 旧表只读、单向幂等复制 |
 | src-tauri/src/api/service_provider.rs | 配置操作、接管、恢复和模式切换 |
 | src-tauri/src/api/multi_protocol_gateway/service.rs | 鉴权、路由、attempt、结算、模型获取和兼容测试 |
@@ -233,6 +241,7 @@ Usage 兼容查询只读取并投影新账本，不删除、搬移或重新归�
 | src/features/providers/components/ServiceProviderCenter.vue | 新配置中心、迁移报告与网关诊断 |
 | src/features/settings/components/SystemSettings.vue | 共享服务商模式开关 |
 | src-tauri/src/api/usage/service.rs | 新账本到原 Usage 的只读投影、去重与费用兼容 |
+| src-tauri/src/api/usage/gateway_skills.rs | 网关 Skill 事件识别、历史重发去重及请求关联 |
 | src/features/usage/index.vue | 继续使用原 Usage 页面、筛选和导出 |
 | src/api/modules/service-providers.js | 复用原请求层的 API 包装 |
 
@@ -668,3 +677,32 @@ CREATE UNIQUE INDEX IF NOT EXISTS service_migration_source ON service_provider_m
 | `updated_at` | INTEGER | 否 | 无 | 最后更新时间，Unix 毫秒 |
 
 Google 登录回调校验启动时的模式和代际；账号删除、模式改变或身份不一致时拒绝写入。Google 请求仍经过共享网关的授权、模型路由和 service_gateway_requests / service_gateway_attempts 记账，再由现有 Google 适配器转发。官方目录刷新对不再返回的模型执行停用，保留其历史和价格。
+
+### 10.17 service_gateway_skill_events
+
+用途：独立保存网关实际观测到的 Skill 引用 / 工具调用事件。新增表通过 `CREATE TABLE IF NOT EXISTS` 幂等创建；不改动已有 v3 表结构和版本，旧程序可以忽略这两张表，当前程序也支持回滚旧模式。
+
+| 字段 | 类型 | 可空 | 默认值 | 含义及约束 |
+| --- | --- | --- | --- | --- |
+| `id` | TEXT | 否 | 无 | 主键；scope_hash、event_hash、规范化别名组成内容的 SHA-256 |
+| `scope_hash` | TEXT | 否 | 无 | Agent、实例配置目录 / 实例标识及可用会话标识组成内容的 SHA-256；不存原始会话标识 |
+| `scope_kind` | TEXT | 否 | 无 | session / history / request；session 有显式会话标识，history 使用历史证据推断范围，request 表示仅本次请求范围 |
+| `event_hash` | TEXT | 否 | 无 | 证据类型和稳定消息 / 工具调用 ID，或缺少 ID 时的历史前缀摘要组成内容的 SHA-256 |
+| `alias` | TEXT | 否 | 无 | 小写技能别名，长度必须大于 0；采集器限制最多 256 字节 |
+| `discoverable` | INTEGER | 否 | 无 | 0 / 1；显式 `$skill`、命名空间、工具调用或加载路径可用于补充当前列表中的未知技能 |
+| `evidence_kind` | TEXT | 否 | 无 | explicit / tool，区分用户引用和工具调用证据 |
+| `first_request_id` | TEXT | 否 | 无 | 首次观测请求，引用 service_gateway_requests(id)，删除 RESTRICT |
+| `created_at` | INTEGER | 否 | 无 | 首次观测请求的创建时间，Unix 毫秒 |
+
+表级约束：`UNIQUE(scope_hash,event_hash,alias)`；历史重发和请求重试复用已有事件。事件只说明该证据曾出现在请求中，不证明客户端执行成功。
+
+### 10.18 service_gateway_request_skills
+
+用途：连接网关请求与当前关联的 Skill 事件；模型和费用仍只在现有 requests / attempts 账本保存一份。
+
+| 字段 | 类型 | 可空 | 默认值 | 含义及约束 |
+| --- | --- | --- | --- | --- |
+| `request_id` | TEXT | 否 | 无 | 引用 service_gateway_requests(id)，删除 RESTRICT |
+| `event_id` | TEXT | 否 | 无 | 引用 service_gateway_skill_events(id)，删除 RESTRICT |
+
+复合主键 `PRIMARY KEY(request_id,event_id)`，同一请求关联同一事件只保存一次。索引 `service_skill_links_event(event_id)` 支持从事件查询关联请求。两张表和采集起始标记均属于本机统计数据，不进入跨设备业务备份。

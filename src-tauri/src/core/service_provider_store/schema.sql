@@ -208,6 +208,26 @@ CREATE TABLE IF NOT EXISTS service_gateway_requests (
   finished_at INTEGER
 ) STRICT;
 CREATE INDEX IF NOT EXISTS service_requests_created ON service_gateway_requests(created_at);
+-- 仅保存可观测的 Skill 事件及请求关联，不保存提示词、工具参数或会话正文。
+-- 纯新增表，保持 schema v3 的已有表结构和旧版本回退兼容。
+CREATE TABLE IF NOT EXISTS service_gateway_skill_events (
+  id TEXT PRIMARY KEY NOT NULL,
+  scope_hash TEXT NOT NULL,
+  scope_kind TEXT NOT NULL CHECK(scope_kind IN ('session','history','request')),
+  event_hash TEXT NOT NULL,
+  alias TEXT NOT NULL CHECK(length(alias)>0),
+  discoverable INTEGER NOT NULL CHECK(discoverable IN (0,1)),
+  evidence_kind TEXT NOT NULL CHECK(evidence_kind IN ('explicit','tool')),
+  first_request_id TEXT NOT NULL REFERENCES service_gateway_requests(id) ON DELETE RESTRICT,
+  created_at INTEGER NOT NULL,
+  UNIQUE(scope_hash,event_hash,alias)
+) STRICT;
+CREATE TABLE IF NOT EXISTS service_gateway_request_skills (
+  request_id TEXT NOT NULL REFERENCES service_gateway_requests(id) ON DELETE RESTRICT,
+  event_id TEXT NOT NULL REFERENCES service_gateway_skill_events(id) ON DELETE RESTRICT,
+  PRIMARY KEY(request_id,event_id)
+) STRICT;
+CREATE INDEX IF NOT EXISTS service_skill_links_event ON service_gateway_request_skills(event_id);
 CREATE TABLE IF NOT EXISTS service_gateway_attempts (
   id TEXT PRIMARY KEY NOT NULL,
   request_id TEXT NOT NULL REFERENCES service_gateway_requests(id) ON DELETE RESTRICT,
@@ -260,3 +280,7 @@ CREATE TABLE IF NOT EXISTS service_provider_migration_items (
   UNIQUE(migration_id,source_table,source_id)
 ) STRICT;
 CREATE UNIQUE INDEX IF NOT EXISTS service_migration_source ON service_provider_migration_items(source_table,source_id) WHERE status IN ('copied','unreadable');
+-- 新采集器上线前的 Skill 历史继续保留；回滚扫描时据此排除新模式时段的重复事件。
+INSERT OR IGNORE INTO app_metadata(key,value) VALUES(
+  'service_gateway:skills_started_at',CAST(round((julianday('now')-2440587.5)*86400000) AS TEXT)
+);
