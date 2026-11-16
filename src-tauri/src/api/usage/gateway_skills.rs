@@ -312,10 +312,10 @@ pub(super) fn read_legacy_calls(paths: &AppPaths) -> Result<Vec<Value>, ManagerE
     }
     let periods = store::query(&c, "SELECT
         max(s.completed_at,CAST(m.value AS INTEGER)) AS startAt,
-        (SELECT min(e.completed_at) FROM service_switch_operations e
-            WHERE e.to_backend='legacy' AND e.stage='completed' AND e.generation>s.generation) AS endAt
-        FROM service_switch_operations s JOIN app_metadata m ON m.key='service_gateway:skills_started_at'
-        WHERE s.to_backend='service' AND s.stage='completed'",
+        (SELECT min(e.completed_at) FROM service_operations e
+            WHERE e.operation_type='switch' AND e.to_backend='legacy' AND e.status='completed' AND e.generation>s.generation) AS endAt
+        FROM service_operations s JOIN app_metadata m ON m.key='service_gateway:skills_started_at'
+        WHERE s.operation_type='switch' AND s.to_backend='service' AND s.status='completed'",
         &[])?;
     calls.retain(|call| {
         !periods.iter().any(|period| {

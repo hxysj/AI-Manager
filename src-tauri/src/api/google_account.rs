@@ -279,9 +279,10 @@ fn read_tokens(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> {
     Ok(serde_json::from_str(&value)?)
 }
 
-fn save_tokens(paths: &AppPaths, id: &str, tokens: &Value) -> Result<(), ManagerError> {
+fn save_tokens(paths: &AppPaths, id: &str, tokens: &Value, expected_generation: Option<i64>) -> Result<(), ManagerError> {
     if store::active(paths)? {
-        return store::save_google_tokens(paths, id, tokens);
+        return store::save_google_tokens(paths, id, tokens,
+            expected_generation.ok_or_else(|| error("缺少 Google 账号凭据版本，请重试"))?);
     }
     let connection = database::open(paths)?;
     let count = connection.execute(
@@ -309,7 +310,12 @@ pub(crate) async fn access_token(
     if provider["enabled"] == false {
         return Err(error("Google 账号已禁用"));
     }
-    let mut tokens = read_tokens(paths, id)?;
+    let (mut tokens, credential_generation) = if service_mode {
+        let (tokens, credential_generation) = store::google_auth(&database::open(paths)?, id)?;
+        (tokens, Some(credential_generation))
+    } else {
+        (read_tokens(paths, id)?, None)
+    };
     if force || tokens["expires_at"].as_i64().unwrap_or(0) <= chrono::Utc::now().timestamp() + 900 {
         let client = proxy::http_client(provider["google"]["proxy"].as_str().unwrap_or(""))?;
         let response = client
@@ -354,7 +360,7 @@ pub(crate) async fn access_token(
         if refreshed["refresh_token"].is_string() {
             tokens["refresh_token"] = refreshed["refresh_token"].clone();
         }
-        save_tokens(paths, id, &tokens)?;
+        save_tokens(paths, id, &tokens, credential_generation)?;
     }
     tokens["access_token"]
         .as_str()
@@ -670,7 +676,7 @@ mod tests {
         save_login(&paths,&provider,&tokens,generation,true).unwrap();
         assert_eq!(read_tokens(&paths,id).unwrap(),tokens);
         assert!(save_login(&paths,&provider,&tokens,generation-1,true).is_err());
-        assert_eq!(store::query(&c,"SELECT token_generation FROM service_google_accounts",&[]).unwrap()[0]["token_generation"],1);
+        assert_eq!(store::query(&c,"SELECT credential_generation FROM service_provider_configs",&[]).unwrap()[0]["credential_generation"],1);
         assert!(!store::table_exists(&c,"providers").unwrap());
         assert!(!store::table_exists(&c,"provider_keys").unwrap());
         crate::api::service_provider::switch_backend(&paths,"legacy").unwrap();

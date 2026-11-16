@@ -379,7 +379,7 @@ pub(super) fn start_attempt(
         }
         let row = store::query(
             &tx,
-            "SELECT id,email,token_generation FROM service_provider_accounts WHERE provider_id=?1",
+            "SELECT id,account_email AS email,credential_generation AS token_generation FROM service_provider_configs WHERE id=?1",
             &[&target.id],
         )?
         .pop()
@@ -393,7 +393,7 @@ pub(super) fn start_attempt(
         if store::google_local_key(&tx, &target.id)? != auth.token {
             return Err(store::fail("Google 转发凭据已变化，请重试"));
         }
-        let row = store::query(&tx, "SELECT email,token_generation FROM service_google_accounts WHERE provider_id=?1", &[&target.id])?
+        let row = store::query(&tx, "SELECT account_email AS email,credential_generation AS token_generation FROM service_provider_configs WHERE id=?1", &[&target.id])?
             .pop().ok_or_else(|| store::fail("Google 账号不存在"))?;
         (format!("google:{}:{}", target.id, row["token_generation"]), store::text(&row, "email").into(), String::new())
     } else {
@@ -700,9 +700,9 @@ pub async fn test(paths: &AppPaths, value: &Value) -> Result<Value, ManagerError
             params![instance, store::now()],
         )?;
         c.execute("UPDATE service_agent_instances SET status='detached',sync_status='restored' WHERE id=?1",[&instance])?;
-        c.execute("INSERT INTO service_compatibility_tests(id,provider_id,agent_type,model_id,provider_revision,agent_version,
-            client_protocol,upstream_protocol,capability,status,evidence_json,tested_at)
-            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'tool_roundtrip_stream',?9,?10,?11)",
+        c.execute("INSERT INTO service_operations(id,operation_type,provider_id,agent_type,model_id,provider_revision,agent_version,
+            client_protocol,upstream_protocol,capability,status,evidence_json,created_at,completed_at)
+            VALUES(?1,'compatibility',?2,?3,?4,?5,?6,?7,?8,'tool_roundtrip_stream',?9,?10,?11,?11)",
             params![store::id(),provider,agent,store::text(&model,"id"),model["revision"].as_i64(),store::text(value,"agentVersion"),
                 protocol,if upstream_format(&target)==UpstreamFormat::OpenAiChat{"chat"}else{"responses"},
                 if result.is_ok(){"passed"}else{"failed"},

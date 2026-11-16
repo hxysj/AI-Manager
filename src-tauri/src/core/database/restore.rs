@@ -178,6 +178,11 @@ fn comparable_row(
         for field in ["created_at","updated_at","revision"]{value.remove(field);}
         if ["service_provider_configs","service_provider_agent_bindings"].contains(&table){value.remove("enabled");}
     }
+    if table == "service_provider_configs" {
+        for column in crate::core::service_provider_store::ACCOUNT_LOCAL_COLUMNS {
+            value.remove(*column);
+        }
+    }
     if table == "providers" {
         if value.get("type") == Some(&json!("codex-account")) {
             // 同一官方账号在不同设备上的本地主键不属于业务差异。
@@ -290,6 +295,11 @@ pub(super) fn merge_table(
                 }
                 if let Some(deleted)=existing.and_then(|old|old.get("deleted_at")).filter(|v|!v.is_null()){
                     row.insert("deleted_at".into(),deleted.clone());
+                }
+                // 账号字段已并入配置表；恢复业务配置时仍只沿用本机账号数据。
+                for column in crate::core::service_provider_store::ACCOUNT_LOCAL_COLUMNS {
+                    row.insert((*column).into(), existing.and_then(|old| old.get(*column)).cloned()
+                        .unwrap_or_else(|| crate::core::service_provider_store::account_local_default(column)));
                 }
             }
         }

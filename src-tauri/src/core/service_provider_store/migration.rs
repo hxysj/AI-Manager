@@ -1,15 +1,132 @@
 use super::*;
 use std::collections::BTreeMap;
 
+pub(super) fn add_account_columns(c: &Connection) -> Result<(), ManagerError> {
+    if !table_exists(c, "service_provider_configs")? {
+        return Ok(());
+    }
+    let columns = query(c, "SELECT name FROM pragma_table_info('service_provider_configs')", &[])?;
+    // 沿用唯一建表定义，已有配置只增加字段，不改变主键及模型、Usage 关联。
+    for definition in SCHEMA.lines().map(str::trim) {
+        let name = definition.split_whitespace().next().unwrap_or("");
+        if ACCOUNT_LOCAL_COLUMNS.contains(&name)
+            && !columns.iter().any(|column| text(column, "name") == name)
+        {
+            c.execute_batch(&format!(
+                "ALTER TABLE service_provider_configs ADD COLUMN {}",
+                definition.trim_end_matches(',')
+            ))?;
+        }
+    }
+    Ok(())
+}
+
+pub(super) fn merge_account_storage(c: &Connection) -> Result<(), ManagerError> {
+    if table_exists(c, "service_provider_accounts")? {
+        for row in query(c, "SELECT * FROM service_provider_accounts", &[])? {
+            let mut credentials = json!({});
+            for (column, key) in [
+                ("access_ciphertext", "access_token"),
+                ("refresh_ciphertext", "refresh_token"),
+                ("id_ciphertext", "id_token"),
+            ] {
+                let ciphertext = text(&row, column);
+                credentials[key] = json!(if ciphertext.is_empty() {
+                    String::new()
+                } else {
+                    decrypt_provider_key(ciphertext)
+                        .map_err(|_| fail("官方账号凭据无法解密，已保留原账号表并回滚升级"))?
+                });
+            }
+            let changed = c.execute(
+                "UPDATE service_provider_configs SET account_id=?2,account_email=?3,
+                credentials_ciphertext=?4,token_expires_at=?5,credential_generation=?6,
+                refresh_status=?7,quota_json=?8,account_updated_at=?9
+                WHERE id=?1 AND kind='codex_account'",
+                params![row["provider_id"].as_str(), row["external_account_id"].as_str(),
+                    row["email"].as_str(), encrypt_provider_key(&credentials.to_string())?,
+                    row["expires_at"].as_i64(), row["token_generation"].as_i64(),
+                    row["refresh_status"].as_str(), row["quota_json"].as_str(), row["updated_at"].as_i64()],
+            )?;
+            if changed != 1 {
+                return Err(fail("官方账号与服务商类型不一致，已回滚升级"));
+            }
+        }
+    }
+    if table_exists(c, "service_google_accounts")? {
+        for row in query(c, "SELECT * FROM service_google_accounts", &[])? {
+            let changed = c.execute(
+                "UPDATE service_provider_configs SET account_id=?2,account_email=?3,
+                credentials_ciphertext=?4,token_expires_at=?5,credential_generation=?6,
+                account_metadata_json=?7,google_local_key_ciphertext=?8,google_gateway_port=?9,
+                account_updated_at=?10 WHERE id=?1 AND kind='google_account'",
+                params![row["provider_id"].as_str(), row["external_subject"].as_str(),
+                    row["email"].as_str(), row["oauth_ciphertext"].as_str(), row["expires_at"].as_i64().and_then(|seconds| seconds.checked_mul(1000)),
+                    row["token_generation"].as_i64(), row["metadata_json"].as_str(),
+                    row["local_key_ciphertext"].as_str(), row["gateway_port"].as_i64(), row["updated_at"].as_i64()],
+            )?;
+            if changed != 1 {
+                return Err(fail("Google 账号与服务商类型不一致，已回滚升级"));
+            }
+        }
+    }
+    // 由调用方同一事务提交；任意迁入失败时，原字段和两张账号表均保持原样。
+    c.execute_batch("DROP TABLE IF EXISTS service_provider_accounts;
+        DROP TABLE IF EXISTS service_google_accounts;
+        CREATE UNIQUE INDEX IF NOT EXISTS service_config_google_subject ON service_provider_configs(account_id)
+            WHERE kind='google_account' AND account_id<>'';")?;
+    Ok(())
+}
+
+pub(super) fn merge_operation_storage(c: &Connection) -> Result<(), ManagerError> {
+    // 原 ID、时间和证据全部保留；写入、改外键及移除旧表由初始化事务统一提交。
+    for (table, sql) in [
+        ("service_provider_migrations", "INSERT INTO service_operations
+            (id,operation_type,source_schema,status,created_at,completed_at,error_message)
+            SELECT id,'migration',source_schema,status,created_at,completed_at,error_message FROM service_provider_migrations"),
+        ("service_switch_operations", "INSERT INTO service_operations
+            (id,operation_type,from_backend,to_backend,generation,status,created_at,completed_at,error_message)
+            SELECT id,'switch',from_backend,to_backend,generation,stage,created_at,completed_at,error_message FROM service_switch_operations"),
+        ("service_compatibility_tests", "INSERT INTO service_operations
+            (id,operation_type,provider_id,agent_type,model_id,provider_revision,agent_version,adapter_version,
+                client_protocol,upstream_protocol,capability,status,evidence_json,created_at,completed_at)
+            SELECT id,'compatibility',provider_id,agent_type,model_id,provider_revision,agent_version,adapter_version,
+                client_protocol,upstream_protocol,capability,status,evidence_json,tested_at,tested_at FROM service_compatibility_tests"),
+    ] {
+        if table_exists(c, table)? {
+            c.execute_batch(sql)?;
+        }
+    }
+    if query(c, "PRAGMA foreign_key_list(service_provider_migration_items)", &[])?
+        .iter().any(|row| text(row, "table") == "service_provider_migrations")
+    {
+        let definition = SCHEMA.split("CREATE TABLE IF NOT EXISTS service_provider_migration_items ")
+            .nth(1).unwrap().split("CREATE UNIQUE INDEX").next().unwrap();
+        c.execute_batch(&format!("CREATE TABLE service_provider_migration_items_v5 {definition}"))?;
+        c.execute_batch("INSERT INTO service_provider_migration_items_v5
+            (id,migration_id,source_table,source_id,source_fingerprint,target_id,status,reason)
+            SELECT id,migration_id,source_table,source_id,source_fingerprint,target_id,status,reason
+            FROM service_provider_migration_items;
+            DROP TABLE service_provider_migration_items;
+            ALTER TABLE service_provider_migration_items_v5 RENAME TO service_provider_migration_items;")?;
+        c.execute_batch(SCHEMA.lines()
+            .find(|line| line.starts_with("CREATE UNIQUE INDEX IF NOT EXISTS service_migration_source ")).unwrap())?;
+    }
+    c.execute_batch("DROP TABLE IF EXISTS service_provider_migrations;
+        DROP TABLE IF EXISTS service_switch_operations;
+        DROP TABLE IF EXISTS service_compatibility_tests;")?;
+    Ok(())
+}
+
 // 在同一事务中读取旧表、写入新表；不调用旧初始化、迁移或保存接口。
 pub fn migrate(paths: &AppPaths) -> Result<Value, ManagerError> {
     initialize(paths)?;
     let c = database::open(paths)?;
     let migration = id();
-    c.execute("INSERT INTO service_provider_migrations(id,source_schema,status,created_at) VALUES(?1,'providers-v1','running',?2)",params![migration,now()])?;
+    c.execute("INSERT INTO service_operations(id,operation_type,source_schema,status,created_at) VALUES(?1,'migration','providers-v1','running',?2)",params![migration,now()])?;
     let result = copy_configuration(paths, &migration);
     if let Err(error) = &result {
-        c.execute("UPDATE service_provider_migrations SET status='failed',error_message=?2,completed_at=?3 WHERE id=?1",params![migration,error.to_string(),now()])?;
+        c.execute("UPDATE service_operations SET status='failed',error_message=?2,completed_at=?3 WHERE id=?1 AND operation_type='migration'",params![migration,error.to_string(),now()])?;
     }
     result
 }
@@ -111,7 +228,7 @@ fn copy_configuration(paths: &AppPaths, migration: &str) -> Result<Value, Manage
                     unreadable = true;
                 }
                 tx.execute(
-                    "UPDATE service_provider_accounts SET quota_json=?2 WHERE provider_id=?1",
+                    "UPDATE service_provider_configs SET quota_json=?2 WHERE id=?1",
                     params![provider, decode(&source, "quota", json!({}))?.to_string()],
                 )?;
             } else if table_exists(&tx, "provider_keys")? {
@@ -219,7 +336,7 @@ fn copy_configuration(paths: &AppPaths, migration: &str) -> Result<Value, Manage
         }
     }
     tx.execute(
-        "UPDATE service_provider_migrations SET status='completed',completed_at=?2 WHERE id=?1",
+        "UPDATE service_operations SET status='completed',completed_at=?2 WHERE id=?1 AND operation_type='migration'",
         params![migration, now()],
     )?;
     tx.commit()?;

@@ -15,6 +15,21 @@ mod tests;
 pub const SCHEMA: &str = include_str!("service_provider_store/schema.sql");
 pub const MODE_KEY: &str = "service_provider:active_backend";
 pub const GENERATION_KEY: &str = "service_provider:mode_generation";
+// 官方账号随配置存储，但凭据、身份及额度属于本机数据，不参与业务备份和覆盖恢复。
+pub const ACCOUNT_LOCAL_COLUMNS: &[&str] = &[
+    "account_id", "account_email", "credentials_ciphertext", "token_expires_at",
+    "credential_generation", "refresh_status", "quota_json", "account_updated_at",
+    "account_metadata_json", "google_local_key_ciphertext", "google_gateway_port",
+];
+
+pub fn account_local_default(column: &str) -> Value {
+    match column {
+        "token_expires_at" | "account_updated_at" | "google_gateway_port" => Value::Null,
+        "credential_generation" => json!(0),
+        "quota_json" | "account_metadata_json" => json!("{}"),
+        _ => json!(""),
+    }
+}
 // 避开旧 Codex、Claude 和 Desktop 代理的 15721～15723 默认端口。
 pub const PORT: u16 = 15724;
 static LEGACY_REQUESTS: OnceLock<Mutex<HashMap<String, (usize, bool)>>> = OnceLock::new();
@@ -103,15 +118,18 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
             |r| r.get(0),
         )
         .optional()?;
-    if version.as_deref().is_some_and(|v| !matches!(v, "1" | "2" | "3")) {
+    if version.as_deref().is_some_and(|v| !matches!(v, "1" | "2" | "3" | "4" | "5")) {
         return Err(fail("服务商配置数据库版本高于当前程序支持的版本"));
     }
-    if version.as_deref() != Some("3") {
+    if version.as_deref() != Some("5") {
         connection.pragma_update(None, "foreign_keys", "OFF")?;
     }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if !matches!(version.as_deref(), Some("4" | "5")) {
+        migration::add_account_columns(&transaction)?;
+    }
     transaction.execute_batch(SCHEMA)?;
-    if !matches!(version.as_deref(), Some("2" | "3")) {
+    if !matches!(version.as_deref(), Some("2" | "3" | "4" | "5")) {
         let columns = query(
             &transaction,
             "SELECT name FROM pragma_table_info('service_provider_configs')",
@@ -144,7 +162,7 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
             )?;
         }
     }
-    if version.as_deref() != Some("3") {
+    if !matches!(version.as_deref(), Some("3" | "4" | "5")) {
         let definition: String = transaction.query_row(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='service_provider_configs'",
             [], |row| row.get(0))?;
@@ -163,7 +181,16 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
         if !query(&transaction, "SELECT * FROM pragma_foreign_key_check WHERE \"table\" LIKE 'service_%'", &[])?.is_empty() {
             return Err(fail("服务商配置升级发现关联数据不完整，已回滚升级"));
         }
-        transaction.execute("INSERT INTO app_metadata(key,value) VALUES('service_provider:schema_version','3')
+    }
+    if !matches!(version.as_deref(), Some("4" | "5")) {
+        migration::merge_account_storage(&transaction)?;
+    }
+    if version.as_deref() != Some("5") {
+        migration::merge_operation_storage(&transaction)?;
+        if !query(&transaction, "SELECT * FROM pragma_foreign_key_check WHERE \"table\" LIKE 'service_%'", &[])?.is_empty() {
+            return Err(fail("服务商操作记录升级发现关联数据不完整，已回滚升级"));
+        }
+        transaction.execute("INSERT INTO app_metadata(key,value) VALUES('service_provider:schema_version','5')
             ON CONFLICT(key) DO UPDATE SET value=excluded.value", [])?;
     }
     transaction.commit()?;
@@ -257,8 +284,7 @@ pub fn state(paths: &AppPaths) -> Result<Value, ManagerError> {
     let providers = query(&c, "SELECT id,name,icon,kind,upstream_protocol AS upstreamProtocol,base_url AS baseUrl,proxy,
         note,enabled,revision,created_at AS createdAt,updated_at AS updatedAt,
         CASE WHEN kind='api' THEN EXISTS(SELECT 1 FROM service_provider_keys k WHERE k.provider_id=p.id AND k.is_active=1 AND k.status='active' AND k.secret_ciphertext<>'')
-        WHEN kind='google_account' THEN EXISTS(SELECT 1 FROM service_google_accounts g WHERE g.provider_id=p.id AND g.oauth_ciphertext<>'')
-        ELSE EXISTS(SELECT 1 FROM service_provider_accounts a WHERE a.provider_id=p.id AND a.access_ciphertext<>'') END AS hasCredential
+        ELSE credentials_ciphertext<>'' END AS hasCredential
         FROM service_provider_configs p WHERE deleted_at IS NULL ORDER BY created_at,id", &[])?;
     let models = query(&c, "SELECT id,provider_id AS providerId,upstream_model_id AS upstreamModelId,display_name AS displayName,
         context_window AS contextWindow,catalog_json AS catalogJson,enabled,input_price_micros AS inputPriceMicros,
@@ -272,16 +298,19 @@ pub fn state(paths: &AppPaths) -> Result<Value, ManagerError> {
         (SELECT count(*) FROM service_provider_migration_items i WHERE i.migration_id=m.id AND i.status='copied') AS copied,
         (SELECT count(*) FROM service_provider_migration_items i WHERE i.migration_id=m.id AND i.status='skipped') AS skipped,
         (SELECT count(*) FROM service_provider_migration_items i WHERE i.migration_id=m.id AND i.status='unreadable') AS unreadable
-        FROM service_provider_migrations m ORDER BY m.created_at DESC LIMIT 10", &[])?;
+        FROM service_operations m WHERE m.operation_type='migration' ORDER BY m.created_at DESC,m.id LIMIT 10", &[])?;
     let migration_items = query(&c, "SELECT source_table AS sourceTable,source_id AS sourceId,target_id AS targetId,status,reason
-        FROM service_provider_migration_items WHERE migration_id=(SELECT id FROM service_provider_migrations ORDER BY created_at DESC LIMIT 1)", &[])?;
+        FROM service_provider_migration_items WHERE migration_id=(SELECT id FROM service_operations WHERE operation_type='migration' ORDER BY created_at DESC,id LIMIT 1)", &[])?;
     let compatibility = query(&c, "SELECT id,provider_id AS providerId,agent_type AS agentType,model_id AS modelId,
-        provider_revision AS providerRevision,agent_version AS agentVersion,client_protocol AS clientProtocol,capability,status,evidence_json AS evidenceJson,tested_at AS testedAt
-        FROM service_compatibility_tests ORDER BY tested_at DESC LIMIT 100", &[])?;
+        provider_revision AS providerRevision,agent_version AS agentVersion,client_protocol AS clientProtocol,capability,status,evidence_json AS evidenceJson,completed_at AS testedAt
+        FROM service_operations WHERE operation_type='compatibility' ORDER BY completed_at DESC,id LIMIT 100", &[])?;
     let routes=query(&c,"SELECT id,provider_id AS providerId,agent_type AS agentType,client_model_name AS clientModelName,model_id AS modelId,enabled FROM service_agent_model_routes",&[])?;
-    let accounts=query(&c,"SELECT provider_id AS providerId,email,external_account_id AS accountId,expires_at AS expiresAt,quota_json AS quotaJson,refresh_status AS refreshStatus FROM service_provider_accounts",&[])?;
-    let google_accounts=query(&c,"SELECT provider_id AS providerId,email,external_subject AS subject,expires_at AS expiresAt,
-        metadata_json AS metadataJson FROM service_google_accounts",&[])?;
+    let accounts=query(&c,"SELECT id AS providerId,account_email AS email,account_id AS accountId,
+        token_expires_at AS expiresAt,quota_json AS quotaJson,refresh_status AS refreshStatus
+        FROM service_provider_configs WHERE kind='codex_account' AND account_id<>'' AND deleted_at IS NULL",&[])?;
+    let google_accounts=query(&c,"SELECT id AS providerId,account_email AS email,account_id AS subject,
+        token_expires_at AS expiresAt,account_metadata_json AS metadataJson
+        FROM service_provider_configs WHERE kind='google_account' AND account_id<>'' AND deleted_at IS NULL",&[])?;
     let files=query(&c,"SELECT id,instance_id AS instanceId,file_path AS filePath,write_status AS writeStatus,restore_status AS restoreStatus,
         error_message AS errorMessage FROM service_managed_files WHERE restore_status<>'restored'",&[])?;
     Ok(
@@ -334,13 +363,12 @@ pub(crate) fn source_provider_id(c: &Connection, target: &str) -> Result<String,
 pub fn public_catalog(paths: &AppPaths) -> Result<Value, ManagerError> {
     let c = database::open(paths)?;
     let rows = query(&c, "SELECT p.id,p.name,p.icon,p.kind,p.enabled,p.proxy,b.enabled AS authorized,
-        a.external_account_id AS accountId,a.email,a.expires_at AS expiresAt,a.quota_json AS usageJson,
+        p.account_id AS accountId,p.account_email AS email,p.token_expires_at AS expiresAt,p.quota_json AS usageJson,
         CASE WHEN p.kind='api' THEN EXISTS(SELECT 1 FROM service_provider_keys k WHERE k.provider_id=p.id
             AND k.is_active=1 AND k.status='active' AND k.secret_ciphertext<>'')
-        WHEN p.kind='google_account' THEN EXISTS(SELECT 1 FROM service_google_accounts g WHERE g.provider_id=p.id AND g.oauth_ciphertext<>'')
-        ELSE coalesce(a.access_ciphertext,'')<>'' END AS hasCredential
+        ELSE p.credentials_ciphertext<>'' END AS hasCredential
         FROM service_provider_configs p LEFT JOIN service_provider_agent_bindings b ON b.provider_id=p.id AND b.agent_type='codex'
-        LEFT JOIN service_provider_accounts a ON a.provider_id=p.id WHERE p.deleted_at IS NULL ORDER BY p.created_at,p.id", &[])?;
+        WHERE p.deleted_at IS NULL ORDER BY p.created_at,p.id", &[])?;
     let models = query(&c, "SELECT id,provider_id AS providerId,upstream_model_id AS name FROM service_provider_models WHERE enabled=1", &[])?;
     let mut providers = Vec::new();
     let mut accounts = Vec::new();
@@ -786,23 +814,22 @@ pub fn credential(c: &Connection, provider: &str) -> Result<Value, ManagerError>
 pub fn account(c: &Connection, provider: &str) -> Result<Value, ManagerError> {
     let mut item = query(
         c,
-        "SELECT * FROM service_provider_accounts WHERE provider_id=?1",
+        "SELECT id,id AS provider_id,account_id AS external_account_id,account_email AS email,
+        token_expires_at AS expires_at,credential_generation AS token_generation,
+        credential_generation AS revision,credentials_ciphertext FROM service_provider_configs
+        WHERE id=?1 AND kind='codex_account' AND deleted_at IS NULL AND credentials_ciphertext<>''",
         &[&provider],
     )?
     .pop()
     .ok_or_else(|| fail("官方账号凭据不存在"))?;
+    let credentials: Value = serde_json::from_str(&decrypt_provider_key(text(&item, "credentials_ciphertext"))?)?;
+    item.as_object_mut().unwrap().remove("credentials_ciphertext");
     for (source, target) in [
-        ("access_ciphertext", "accessToken"),
-        ("refresh_ciphertext", "refreshToken"),
-        ("id_ciphertext", "idToken"),
+        ("access_token", "accessToken"),
+        ("refresh_token", "refreshToken"),
+        ("id_token", "idToken"),
     ] {
-        let encrypted = text(&item, source);
-        item[target] = json!(if encrypted.is_empty() {
-            String::new()
-        } else {
-            decrypt_provider_key(encrypted)?
-        });
-        item.as_object_mut().unwrap().remove(source);
+        item[target] = json!(text(&credentials, source));
     }
     Ok(item)
 }
@@ -834,14 +861,15 @@ pub fn save_account(c: &Connection, provider: &str, value: &Value) -> Result<(),
     let expires = value["expires_at"]
         .as_i64()
         .or(value["auth"]["expiresAt"].as_i64());
-    c.execute("INSERT INTO service_provider_accounts(id,provider_id,external_account_id,email,access_ciphertext,refresh_ciphertext,
-        id_ciphertext,expires_at,created_at,updated_at) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?9)
-        ON CONFLICT(provider_id) DO UPDATE SET external_account_id=excluded.external_account_id,email=excluded.email,
-        access_ciphertext=excluded.access_ciphertext,refresh_ciphertext=excluded.refresh_ciphertext,id_ciphertext=excluded.id_ciphertext,
-        quota_json=CASE WHEN external_account_id=excluded.external_account_id THEN quota_json ELSE '{}' END,
-        expires_at=excluded.expires_at,token_generation=token_generation+1,revision=revision+1,refresh_status='',updated_at=excluded.updated_at",
-        params![id(),provider,identity,text(value,"email"),encrypt_provider_key(access)?,encrypt_provider_key(refresh)?,
-            encrypt_provider_key(id_token)?,expires,now()])?;
+    let credentials = json!({"access_token":access,"refresh_token":refresh,"id_token":id_token});
+    let changed = c.execute("UPDATE service_provider_configs SET account_id=?2,account_email=?3,
+        credentials_ciphertext=?4,token_expires_at=?5,credential_generation=credential_generation+1,
+        quota_json=CASE WHEN account_id=?2 THEN quota_json ELSE '{}' END,
+        refresh_status='',account_updated_at=?6 WHERE id=?1 AND kind='codex_account' AND deleted_at IS NULL",
+        params![provider,identity,text(value,"email"),encrypt_provider_key(&credentials.to_string())?,expires,now()])?;
+    if changed != 1 {
+        return Err(fail("官方账号不存在、类型不匹配或已删除"));
+    }
     Ok(())
 }
 

@@ -6,8 +6,8 @@ pub(crate) fn google_provider(c: &Connection, provider: &str) -> Result<Value, M
     if config["kind"] != "google_account" || !config["deletedAt"].is_null() {
         return Err(fail("Google 账号不存在或已删除"));
     }
-    let row = query(c, "SELECT external_subject AS subject,email,gateway_port AS port,
-        metadata_json AS metadataJson FROM service_google_accounts WHERE provider_id=?1", &[&provider])?
+    let row = query(c, "SELECT account_id AS subject,account_email AS email,google_gateway_port AS port,
+        account_metadata_json AS metadataJson FROM service_provider_configs WHERE id=?1", &[&provider])?
         .pop().unwrap_or(json!({}));
     let mut metadata = row["metadata"].as_object().cloned().unwrap_or_default();
     for key in ["subject", "email", "port"] {
@@ -20,16 +20,22 @@ pub(crate) fn google_provider(c: &Connection, provider: &str) -> Result<Value, M
 }
 
 pub(crate) fn google_tokens(c: &Connection, provider: &str) -> Result<Value, ManagerError> {
-    let ciphertext: String = c.query_row(
-        "SELECT oauth_ciphertext FROM service_google_accounts WHERE provider_id=?1",
-        [provider], |row| row.get(0)).optional()?
+    Ok(google_auth(c, provider)?.0)
+}
+
+pub(crate) fn google_auth(c: &Connection, provider: &str) -> Result<(Value, i64), ManagerError> {
+    let (ciphertext, generation): (String, i64) = c.query_row(
+        "SELECT credentials_ciphertext,credential_generation FROM service_provider_configs
+        WHERE id=?1 AND kind='google_account' AND deleted_at IS NULL AND credentials_ciphertext<>''",
+        [provider], |row| Ok((row.get(0)?, row.get(1)?))).optional()?
         .ok_or_else(|| fail("Google 授权信息不存在，请重新登录"))?;
-    Ok(serde_json::from_str(&decrypt_provider_key(&ciphertext)?)?)
+    Ok((serde_json::from_str(&decrypt_provider_key(&ciphertext)?)?, generation))
 }
 
 pub(crate) fn google_local_key(c: &Connection, provider: &str) -> Result<String, ManagerError> {
     let ciphertext: String = c.query_row(
-        "SELECT local_key_ciphertext FROM service_google_accounts WHERE provider_id=?1",
+        "SELECT google_local_key_ciphertext FROM service_provider_configs
+        WHERE id=?1 AND kind='google_account' AND deleted_at IS NULL AND google_local_key_ciphertext<>''",
         [provider], |row| row.get(0))?;
     decrypt_provider_key(&ciphertext)
 }
@@ -40,7 +46,8 @@ pub(crate) fn save_google_credentials(
     metadata: &Value,
     tokens: &Value,
 ) -> Result<(), ManagerError> {
-    if config(c, provider)?["kind"] != "google_account"
+    let config = config(c, provider)?;
+    if config["kind"] != "google_account" || !config["deletedAt"].is_null()
         || text(metadata, "subject").is_empty()
         || text(tokens, "access_token").is_empty()
         || text(tokens, "refresh_token").is_empty() {
@@ -48,41 +55,45 @@ pub(crate) fn save_google_credentials(
     }
     let port = metadata["port"].as_u64().filter(|port| (1..=65535).contains(port))
         .ok_or_else(|| fail("Google 本地转发端口无效"))?;
-    if c.query_row("SELECT EXISTS(SELECT 1 FROM service_google_accounts WHERE external_subject=?1 AND provider_id<>?2)",
+    if c.query_row("SELECT EXISTS(SELECT 1 FROM service_provider_configs WHERE kind='google_account' AND account_id=?1 AND id<>?2)",
         params![text(metadata, "subject"),provider], |row| row.get::<_, bool>(0))? {
         return Err(fail("此 Google 账号已存在，请选择已有账号"));
     }
-    c.execute("INSERT INTO service_google_accounts(provider_id,external_subject,email,oauth_ciphertext,
-        local_key_ciphertext,expires_at,gateway_port,metadata_json,created_at,updated_at)
-        VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?9) ON CONFLICT(provider_id) DO UPDATE SET
-        external_subject=excluded.external_subject,email=excluded.email,oauth_ciphertext=excluded.oauth_ciphertext,
-        expires_at=excluded.expires_at,gateway_port=excluded.gateway_port,metadata_json=excluded.metadata_json,
-        token_generation=token_generation+1,revision=revision+1,updated_at=excluded.updated_at",
+    let changed = c.execute("UPDATE service_provider_configs SET account_id=?2,account_email=?3,credentials_ciphertext=?4,
+        google_local_key_ciphertext=CASE WHEN account_id=?2 AND google_local_key_ciphertext<>'' THEN google_local_key_ciphertext ELSE ?5 END,
+        token_expires_at=?6,google_gateway_port=?7,account_metadata_json=?8,
+        credential_generation=credential_generation+1,refresh_status='',account_updated_at=?9
+        WHERE id=?1 AND kind='google_account' AND deleted_at IS NULL",
         params![provider,text(metadata,"subject"),text(metadata,"email"),encrypt_provider_key(&tokens.to_string())?,
-            encrypt_provider_key(&id())?,tokens["expires_at"].as_i64(),port,metadata.to_string(),now()])?;
+            encrypt_provider_key(&id())?,tokens["expires_at"].as_i64().and_then(|seconds| seconds.checked_mul(1000)),port,metadata.to_string(),now()])?;
+    if changed != 1 {
+        return Err(fail("Google 账号不存在或已删除"));
+    }
     Ok(())
 }
 
-pub(crate) fn save_google_tokens(paths: &AppPaths, provider: &str, tokens: &Value) -> Result<(), ManagerError> {
+pub(crate) fn save_google_tokens(paths: &AppPaths, provider: &str, tokens: &Value, expected_generation: i64) -> Result<(), ManagerError> {
     let c = database::open(paths)?;
-    let config = config(&c, provider)?;
-    if config["kind"] != "google_account" || !config["deletedAt"].is_null() {
-        return Err(fail("Google 账号已删除"));
+    let changed = c.execute("UPDATE service_provider_configs SET credentials_ciphertext=?2,token_expires_at=?3,
+        credential_generation=credential_generation+1,refresh_status='',account_updated_at=?4
+        WHERE id=?1 AND kind='google_account' AND deleted_at IS NULL AND enabled=1 AND credential_generation=?5",
+        params![provider,encrypt_provider_key(&tokens.to_string())?,tokens["expires_at"].as_i64().and_then(|seconds| seconds.checked_mul(1000)),now(),expected_generation])?;
+    if changed != 1 {
+        return Err(fail("刷新期间 Google 账号已更新、禁用或删除，请重试"));
     }
-    c.execute("UPDATE service_google_accounts SET oauth_ciphertext=?2,expires_at=?3,
-        token_generation=token_generation+1,revision=revision+1,updated_at=?4 WHERE provider_id=?1",
-        params![provider,encrypt_provider_key(&tokens.to_string())?,tokens["expires_at"].as_i64(),now()])?;
     Ok(())
 }
 
 pub(crate) fn update_google_metadata(paths: &AppPaths, provider: &str, patch: &Value) -> Result<(), ManagerError> {
-    let c = database::open(paths)?;
-    let mut metadata = google_provider(&c, provider)?["google"].clone();
+    let mut c = database::open(paths)?;
+    let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let mut metadata = google_provider(&tx, provider)?["google"].clone();
     for (key, value) in patch.as_object().ok_or_else(|| fail("Google 元数据无效"))? {
         metadata[key] = value.clone();
     }
-    c.execute("UPDATE service_google_accounts SET metadata_json=?2,revision=revision+1,
-        updated_at=?3 WHERE provider_id=?1", params![provider,metadata.to_string(),now()])?;
+    tx.execute("UPDATE service_provider_configs SET account_metadata_json=?2,
+        account_updated_at=?3 WHERE id=?1", params![provider,metadata.to_string(),now()])?;
+    tx.commit()?;
     Ok(())
 }
 

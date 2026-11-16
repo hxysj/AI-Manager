@@ -520,9 +520,9 @@ pub(crate) async fn refresh_service_quota(paths:&AppPaths,provider:&str)->Result
     let config=store::config(&database::open(paths)?,provider)?;
     let usage=fetch_usage_info(store::text(&auth,"accessToken"),&json!({"account_id":auth["accountId"]}),store::text(&config,"proxy")).await?;
     // 查询期间可能重新导入账号，只更新发起查询时使用的同一凭据代际。
-    let changed=database::open(paths)?.execute("UPDATE service_provider_accounts SET quota_json=?2,updated_at=?3
-        WHERE provider_id=?1 AND id=?4 AND token_generation=?5",
-        rusqlite::params![provider,usage.to_string(),store::now(),store::text(&auth,"id"),auth["tokenGeneration"].as_i64()])?;
+    let changed=database::open(paths)?.execute("UPDATE service_provider_configs SET quota_json=?2,account_updated_at=?3
+        WHERE id=?1 AND kind='codex_account' AND deleted_at IS NULL AND credential_generation=?4",
+        rusqlite::params![provider,usage.to_string(),store::now(),auth["tokenGeneration"].as_i64()])?;
     if changed!=1{return Err(store::fail("查询额度期间账号已更新，请重新刷新"));}
     Ok(usage)
 }

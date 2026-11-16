@@ -8,7 +8,7 @@
 
 旧 `providers`、`provider_keys` 表结构、记录和旧功能实现继续保留。新模式隐藏并拦截旧配置入口，停止旧网关服务；回滚后恢复旧入口。此次没有物理删除旧实现，因为它们是回滚所需的执行路径。旧数据不会因为新配置变更而被回写。
 
-新增 18 张 `service_` 表，运行模式、代际和 schema 版本存入既有 `app_metadata`。服务商模式下，配置、账号凭据、路由和请求账本均从新表读取；助手、翻译和图片选择器使用新表投影，兼容原有来源 ID。
+当前保留 14 张 `service_` 表，运行模式、代际和 schema 版本存入既有 `app_metadata`。官方账号直接存入 `service_provider_configs`，以 `kind` 区分 API、Codex 和 Google 来源，不再单独创建账号表。迁移批次、模式切换和兼容性测试统一存入 `service_operations`，以 `operation_type` 区分，当前 schema 版本为 5。服务商模式下，配置、账号凭据、路由和请求账本均从新表读取；助手、翻译和图片选择器使用新表投影，兼容原有来源 ID。
 
 ## 2. 架构和授权
 
@@ -46,7 +46,7 @@ Token 只保存 SHA-256 哈希和可识别前缀；工具 Token 明文只在生�
 
 新增普通服务商时填写名称、API 基础地址、上游协议、API Key 和模型。支持代理、自定义请求头、备注与多个逻辑 Key；保存 API Key 留空表示保留原值。认证头、Host、Content-Length 和连接控制头不能放进自定义请求头。
 
-服务商图标沿用旧 Provider 的 `icon` 配置、现有 `AiIcon` 渲染组件及共享 `ProviderIconPicker`，支持内置图标搜索、图片上传与清空。首次迁移同步图标；已有 schema 1 数据库先增加 `icon` 并依据迁移映射补齐缺失图标；schema 1/2 自动升级至 3，重建新模式配置表的类型约束以支持 `google_account`，保留所有 ID、修订号及关联记录，并检查外键完整性。升级不改写旧表，不覆盖新模式已保存的非空图标；之后保存时省略 `icon` 会保留现有值，空字符串表示主动清空。
+服务商图标沿用旧 Provider 的 `icon` 配置、现有 `AiIcon` 渲染组件及共享 `ProviderIconPicker`，支持内置图标搜索、图片上传与清空。首次迁移同步图标；已有 schema 1 数据库先增加 `icon` 并依据迁移映射补齐缺失图标；schema 1/2 先升级新模式配置表的类型约束以支持 `google_account`，保留所有 ID、配置修订号及关联记录，并检查外键完整性。schema 1/2/3 随后合并官方账号，schema 1/2/3/4 再合并操作审计，全部在同一事务内完成后升级至 5。升级不改写旧 `providers`、`provider_keys`，不覆盖新模式已保存的非空图标；之后保存时省略 `icon` 会保留现有值，空字符串表示主动清空。
 
 普通上游必须是完整 HTTP/HTTPS 地址，禁止 URL 用户名密码、查询参数、片段及共享网关自身地址。GPT 与 Google 官方账号分别复用项目现有官方适配逻辑，其地址字段不用于任意转发。
 
@@ -128,7 +128,7 @@ Desktop 空档位按现有档位顺序继承首个已配置档位的模型与 1M
 
 1. 初始化新表，先记录一次迁移运行。
 2. 在 IMMEDIATE 事务中直接读取受支持结构的旧表；不调用旧 Provider 初始化或保存接口。
-3. 复制旧 Codex API 服务商、Codex 官方账号和 Google 账号；其他 Agent 来源记为 skipped。Google OAuth 重新加密写入独立新表，旧 OAuth 字段、Key 和 Usage 只读。已经处于新模式的用户也会自动补齐此前未迁入的 Google 账号。
+3. 复制旧 Codex API 服务商、Codex 官方账号和 Google 账号；其他 Agent 来源记为 skipped。官方身份与凭据写入 `service_provider_configs` 的账号字段，Google OAuth 加密保存；旧 OAuth 字段、Key 和 Usage 只读。已经处于新模式的用户也会自动补齐此前未迁入的 Google 账号。
 4. 复制名称、地址、代理、请求头、备注、启用状态、Key 版本、官方账号凭据及额度、模型目录、默认模型和 Codex 参数，包括 `syncModelList`。旧模型名称统一合入服务商模型目录，不再保存独立 Codex 子列表。已完成迁移的配置不回填覆盖，缺失字段按上述兼容规则处理。
 5. 迁移后默认仅 Codex 授权开启，Claude Code、Claude Desktop 关闭；工具授权需自行开启。
 6. 保留旧存储 ID。旧官方账号存储 ID 通常为 account:原ID，新表保留它；前端公开账号 ID 去掉一层前缀，并提供 serviceProviderId。后台同时接受历史公开 ID 和带前缀的存储 ID。
@@ -137,6 +137,10 @@ Desktop 空档位按现有档位顺序继承首个已配置档位的模型与 1M
 9. 单项业务数据导致整次复制失败时回滚复制事务，运行记录保留 failed；旧表始终不变。
 
 旧地址以 /chat/completions 结尾时识别为 Chat，其余迁为 Responses，需在迁移报告后人工核对。旧 Usage 数据原地保留并继续查询，不复制进新网关账本。旧本地 Token、客户端启用态和代理实例不迁入新表。
+
+schema 4 账号合并步骤：先为配置表增加账号字段，将 `service_provider_accounts`、`service_google_accounts` 中的全部账号迁入，再移除这两张账号子表。Codex 凭据无法解密、配置归属不正确、字段约束不满足等任一步失败都会回滚，原账号表与原数据保留。Google OAuth 原密文、适配器本地 Key、模型和额度元数据原样迁移，配置表到期时间统一为 Unix 毫秒。这一步将表数从 18 减为 16。
+
+schema 5 操作合并步骤：将 `service_provider_migrations`、`service_switch_operations`、`service_compatibility_tests` 分别以 migration、switch、compatibility 类型迁入 `service_operations`；原 ID、状态、时间、模式代际、测试配置修订和证据全部保留。迁移明细继续独立，重建其外键指向统一操作表并限定 migration 类型，原明细 ID、幂等索引保持。全部迁入且外键检查通过后移除三张旧审计表，写入版本 5，表数从 16 减为 14。schema 1～4 可直接升级到 5，中间步骤在一个事务内完成；出现缺失父记录等错误时，表结构、原数据和版本一起回滚。模型 ID、账号数据、请求账本、旧 Provider、旧 Key 和历史 Usage 保持。
 
 ## 5. 启用、接管与回滚
 
@@ -171,6 +175,8 @@ Codex 不写 auth.json；独立 provider 节点使用本地 Bearer、requires_op
 当前文件等于程序写入后的哈希时，可恢复原内容；原文件不存在时删除接管文件。当前内容已经等于原始内容时直接确认恢复。其他变化均保留 conflict，不覆盖外部修改。用户可“查看加密备份”，对照 before/after 手动处理后重试。
 
 回滚仅恢复接管文件和运行模式，不导入迁移前整库快照；新配置、新账本和迁移记录保留。新模式中的修改不会反向同步到旧服务商，回滚看到的是原有旧配置。
+
+schema 5 支持当前程序内切回旧模式。仅支持 schema 4 及更早版本的旧二进制无法读取版本 5；如需换回旧程序，应使用升级前的完整数据备份恢复其数据库，不能将应用内模式回滚视为数据库降级。
 
 回滚中部分实例可能已恢复，其他实例仍有冲突，此时 backend 保持 service，界面展示实际状态。已恢复实例不会自动重新接管。托盘快捷切换先恢复默认目录，再应用目标服务商；新应用失败时保留恢复后的文件状态并报告错误，不自动补偿切回上一服务商。
 
@@ -219,9 +225,9 @@ Skill 页面合并旧调用缓存与新事件。请求数、Token 和费用通�
 
 ## 7. 业务备份与凭据
 
-业务备份新增服务商配置、模型、Agent 授权和别名四张表；不包含新 Key、官方 token、本地调用 Token、实例、接管文件备份、迁移记录、请求账本及 Skill 事件 / 请求关联。导出的新服务商和授权均关闭，恢复后补录凭据并明确启用。
+业务备份新增服务商配置、模型、Agent 授权和别名四张表；不包含新 Key、官方 token、本地调用 Token、实例、接管文件备份、迁移记录、请求账本及 Skill 事件 / 请求关联。配置表中的 11 个账号本机字段（见 10.1）在读取备份源数据时直接替换为默认值，身份、邮箱、凭据、代际、额度、Google 元数据及适配器字段均不进入业务备份。导出的新服务商和授权均关闭，恢复后补录凭据并明确启用。
 
-恢复按父子表顺序进行，以 provider+upstream_model、provider+agent、provider+agent+alias 的自然键合并，保留本地主键并重映射模型外键。已有配置保留本机启用及软删除状态，revision 递增，不允许改变来源类型。模式、generation 等本机 app_metadata 不随业务备份恢复。
+恢复按父子表顺序进行，以 provider+upstream_model、provider+agent、provider+agent+alias 的自然键合并，保留本地主键并重映射模型外键。已有配置保留本机启用、软删除状态及全部账号本机字段，配置 revision 递增，不允许改变来源类型；新配置的账号字段使用默认值。即使备份包含账号密文也不导入，恢复预览也不比较和展示这些字段。模式、generation 等本机 app_metadata 不随业务备份恢复。
 
 业务备份仍保留兼容旧业务表的范围；新模式恢复过滤旧 Provider 和旧凭据旁路，不会把旧来源写回新运行链路。需要灾难恢复凭据和完整审计数据时，应在应用关闭、SQLite WAL 一致的条件下备份整个配置数据根目录；这与页面业务备份和“回滚旧模式”是不同操作。
 
@@ -232,8 +238,8 @@ Skill 页面合并旧调用缓存与新事件。请求数、Token 和费用通�
 | 位置 | 职责 |
 | --- | --- |
 | src-tauri/src/core/service_provider_store.rs | 新存储、校验、Key/账号加密、目录投影和统计 |
-| src-tauri/src/core/service_provider_store/schema.sql | 18 张新表的唯一建表定义 |
-| src-tauri/src/core/service_provider_store/migration.rs | 旧表只读、单向幂等复制 |
+| src-tauri/src/core/service_provider_store/schema.sql | 14 张新表的唯一建表定义 |
+| src-tauri/src/core/service_provider_store/migration.rs | 旧 Provider 只读、单向幂等复制，以及 schema 4 账号合并、schema 5 操作审计合并升级 |
 | src-tauri/src/api/service_provider.rs | 配置操作、接管、恢复和模式切换 |
 | src-tauri/src/api/multi_protocol_gateway/service.rs | 鉴权、路由、attempt、结算、模型获取和兼容测试 |
 | src-tauri/src/core/state.rs | 生命周期、旧入口隔离与状态事件 |
@@ -279,7 +285,7 @@ node scripts/test-service-providers.mjs
 
 ### 10.1 service_provider_configs
 
-用途：服务商主配置。
+用途：服务商主配置及官方账号存储。`kind=api` 使用 `service_provider_keys` 管理多个逻辑 Key；`kind=codex_account/google_account` 使用本表账号字段。以下从 `account_id` 到 `google_gateway_port` 的 11 个字段属于本机数据，不参与业务备份和覆盖恢复。
 
 | 字段 | 类型 | 可空 | 默认值 | 含义 | SQL 字段约束 |
 | --- | --- | --- | --- | --- | --- |
@@ -293,7 +299,18 @@ node scripts/test-service-providers.mjs
 | `headers_json` | TEXT | 否 | `'{}'` | 额外出站请求头 JSON 对象；认证和连接控制头由程序管理 | `CHECK(json_valid(headers_json) AND json_type(headers_json)='object')` |
 | `note` | TEXT | 否 | `''` | 用户备注 | — |
 | `enabled` | INTEGER | 否 | `1` | 启用状态；还需通过服务商、Agent、实例和凭据的其他校验 | `CHECK(enabled IN (0,1))` |
-| `revision` | INTEGER | 否 | `1` | 乐观并发修订号，更新递增 | `CHECK(revision>0)` |
+| `revision` | INTEGER | 否 | `1` | 服务商配置乐观并发修订号；账号刷新和额度更新不递增，避免使已应用配置变为过期 | `CHECK(revision>0)` |
+| `account_id` | TEXT | 否 | `''` | 官方身份；Codex account_id 或 Google subject；未登录和 API 来源为空 | — |
+| `account_email` | TEXT | 否 | `''` | 官方账号展示邮箱 | — |
+| `credentials_ciphertext` | TEXT | 否 | `''` | 按 kind 区分格式的加密凭据 JSON；空串表示未登录 | — |
+| `token_expires_at` | INTEGER | 是 | NULL | 凭据到期时间，统一为 Unix 毫秒；未知为 NULL | — |
+| `credential_generation` | INTEGER | 否 | `0` | 官方凭据代际，初始未登录为 0，保存和刷新递增，用于并发校验与账本归属 | `CHECK(credential_generation>=0)` |
+| `refresh_status` | TEXT | 否 | `''` | 最近凭据刷新状态；当前成功保存清空，未实现完整失败状态机 | — |
+| `quota_json` | TEXT | 否 | `'{}'` | Codex 最近官方额度响应；与网关实际用量分开 | `CHECK(json_valid(quota_json))` |
+| `account_updated_at` | INTEGER | 是 | NULL | 最近账号凭据、身份或额度元数据更新时间，Unix 毫秒 | — |
+| `account_metadata_json` | TEXT | 否 | `'{}'` | Google 官方 models、project、plan、quotaGroups、状态及提示等账号元数据 | `CHECK(json_valid(account_metadata_json) AND json_type(account_metadata_json)='object')` |
+| `google_local_key_ciphertext` | TEXT | 否 | `''` | Google 本地适配器认证令牌密文；同一身份重新登录保留，身份变化重新生成 | — |
+| `google_gateway_port` | INTEGER | 是 | NULL | Google 本地适配器端口；共享入口仍为 15724，其他来源为空 | `CHECK(google_gateway_port BETWEEN 1 AND 65535)` |
 | `deleted_at` | INTEGER | 是 | 无 | 软删除时间；NULL 表示未删除 | — |
 | `created_at` | INTEGER | 否 | 无 | 创建时间，Unix 毫秒 | — |
 | `updated_at` | INTEGER | 否 | 无 | 最后更新时间，Unix 毫秒 | — |
@@ -302,7 +319,19 @@ node scripts/test-service-providers.mjs
 
 ```sql
 CHECK(kind='api' OR upstream_protocol='responses')
+CREATE UNIQUE INDEX IF NOT EXISTS service_config_google_subject
+ON service_provider_configs(account_id)
+WHERE kind='google_account' AND account_id<>'';
 ```
+
+Google 非空 subject 在全部配置中唯一，包含软删除记录，沿用升级前的重复账号限制；多条待登录配置允许使用空身份。普通配置保存不接收或覆盖账号字段。刷新凭据按 `credential_generation` 比较更新，额度查询按发起时的代际写入；账号更新只改变账号时间及必要的凭据代际，不改变服务商配置的 `revision`、`updated_at`。
+
+`credentials_ciphertext` 解密后的格式：
+
+| 来源 | JSON 内容 | 时间规则 |
+| --- | --- | --- |
+| Codex | `access_token`、`refresh_token`、`id_token` 字符串；后两项按已有导入规则可为空 | 到期时间单独存入 `token_expires_at`，Unix 毫秒 |
+| Google | 完整 OAuth 对象，保留 `access_token`、`refresh_token`、`client_id`、`client_secret`、`expires_at` 及现有扩展字段 | OAuth JSON 内 `expires_at` 保留现有 Unix 秒格式；写入配置表时转换为毫秒 |
 
 ### 10.2 service_provider_keys
 
@@ -334,30 +363,24 @@ CREATE UNIQUE INDEX IF NOT EXISTS service_keys_current ON service_provider_keys(
 CREATE UNIQUE INDEX IF NOT EXISTS service_keys_active ON service_provider_keys(provider_id) WHERE is_active=1;
 ```
 
-### 10.3 service_provider_accounts
+### 10.3 Codex 账号合并映射（schema 4）
 
-用途：独立的 Codex 官方账号凭据。
+`service_provider_accounts` 已移除，当前不再建表。升级按原 `provider_id` 定位同类型配置；旧账号表 `id` 不再作为独立实体，配置 ID 继续保持，已有请求账本的凭据快照不改写。
 
-| 字段 | 类型 | 可空 | 默认值 | 含义 | SQL 字段约束 |
-| --- | --- | --- | --- | --- | --- |
-| `id` | TEXT | 否 | 无 | 本表稳定主键；新建由应用生成，迁移服务商保留旧存储 ID | `PRIMARY KEY` |
-| `provider_id` | TEXT | 否 | 无 | 所属服务商主配置 ID | `UNIQUE REFERENCES service_provider_configs(id) ON DELETE RESTRICT` |
-| `external_account_id` | TEXT | 否 | 无 | 上游官方账号标识，独立于本地服务商 ID | — |
-| `email` | TEXT | 否 | `''` | 账号展示邮箱 | — |
-| `access_ciphertext` | TEXT | 否 | `''` | 加密 access token | — |
-| `refresh_ciphertext` | TEXT | 否 | `''` | 加密 refresh token | — |
-| `id_ciphertext` | TEXT | 否 | `''` | 加密 id token | — |
-| `expires_at` | INTEGER | 是 | 无 | 到期时间，Unix 毫秒；未知或不设有效期时为 NULL | — |
-| `token_generation` | INTEGER | 否 | `0` | 官方凭据代际；每次替换凭据递增，冻结到 attempt 归属 | — |
-| `refresh_status` | TEXT | 否 | `''` | 账号刷新状态预留字段；当前成功保存清空，未实现完整失败状态机 | — |
-| `quota_json` | TEXT | 否 | `'{}'` | 最近官方额度响应 JSON，与本地 Token 消费统计分开 | `CHECK(json_valid(quota_json))` |
-| `revision` | INTEGER | 否 | `1` | 乐观并发修订号，更新递增 | — |
-| `created_at` | INTEGER | 否 | 无 | 创建时间，Unix 毫秒 | — |
-| `updated_at` | INTEGER | 否 | 无 | 最后更新时间，Unix 毫秒 | — |
+| 升级前账号字段 | 当前配置表字段 | 迁移规则 |
+| --- | --- | --- |
+| `external_account_id`、`email` | `account_id`、`account_email` | 原值复制 |
+| `access_ciphertext`、`refresh_ciphertext`、`id_ciphertext` | `credentials_ciphertext` | 解密三段后合成 10.1 定义的 JSON 并重新加密；不可读则回滚整个升级 |
+| `expires_at` | `token_expires_at` | 保留 Unix 毫秒 |
+| `token_generation` | `credential_generation` | 保留原代际，后续保存递增 |
+| `refresh_status`、`quota_json` | 同名字段 | 原值复制 |
+| `updated_at` | `account_updated_at` | 原值复制；配置创建和更新时间保持 |
+
+账号读取接口继续投影原有公开结构，界面、登录和额度入口保持。官方身份变化时清空原 Codex 额度缓存，同一身份换 token 保留缓存。
 
 ### 10.4 service_provider_models
 
-用途：服务商模型目录与价格。
+用途：服务商模型目录与价格，继续保留独立表。模型与服务商是一对多关系；已有 `usage_pricing_items` 继续作为模型默认价格来源，本表价格字段保存服务商差异覆盖，按现有规则选择价格并冻结到请求账本。
 
 | 字段 | 类型 | 可空 | 默认值 | 含义 | SQL 字段约束 |
 | --- | --- | --- | --- | --- | --- |
@@ -426,32 +449,43 @@ FOREIGN KEY(provider_id,model_id) REFERENCES service_provider_models(provider_id
 UNIQUE(provider_id,agent_type,client_model_name)
 ```
 
-### 10.7 service_compatibility_tests
+### 10.7 service_operations
 
-用途：修订版本对应的兼容性测试证据。
+用途：统一保存旧配置迁移批次、模式切换审计和配置修订对应的兼容性测试证据。三类操作使用独立字段；每次读取、更新和启动恢复均按 `operation_type` 限定。旧 `service_compatibility_tests` 的全部字段迁入本表，其中 `tested_at` 同时写入 `created_at`、`completed_at`；公开接口仍返回 `testedAt`，原列表不变。
 
 | 字段 | 类型 | 可空 | 默认值 | 含义 | SQL 字段约束 |
 | --- | --- | --- | --- | --- | --- |
-| `id` | TEXT | 否 | 无 | 本表稳定主键；新建由应用生成，迁移服务商保留旧存储 ID | `PRIMARY KEY` |
-| `provider_id` | TEXT | 否 | 无 | 所属服务商主配置 ID | — |
-| `agent_type` | TEXT | 否 | 无 | Agent 类型，API 当前接受 codex/claude/claude-desktop/gateway | — |
-| `model_id` | TEXT | 否 | 无 | 所属服务商下的模型 ID；使用复合外键防止跨服务商引用 | — |
-| `provider_revision` | INTEGER | 否 | 无 | 测试执行时记录的服务商修订 | — |
-| `agent_version` | TEXT | 否 | 无 | 客户端版本字符串；未检测或未提供时为空 | — |
+| `id` | TEXT | 否 | 无 | 操作稳定主键，升级保留原记录 ID | `PRIMARY KEY` |
+| `operation_type` | TEXT | 否 | 无 | 操作类型：migration、switch、compatibility | `CHECK(operation_type IN ('migration','switch','compatibility'))` |
+| `status` | TEXT | 否 | 无 | 迁移：running/completed/failed；切换：preparing/completed/failed/interrupted；测试：passed/failed/unsupported | 类型与状态通过表级 CHECK 联合校验 |
+| `error_message` | TEXT | 否 | `''` | 迁移、切换错误说明；测试具体结果保存在 evidence_json | — |
+| `created_at` | INTEGER | 否 | 无 | 操作创建时间；旧测试使用原 tested_at，Unix 毫秒 | — |
+| `completed_at` | INTEGER | 是 | NULL | 迁移、切换完成时间；测试必须提供，Unix 毫秒 | 测试类型不可为空 |
+| `source_schema` | TEXT | 否 | `''` | 迁移识别的旧结构，当前为 providers-v1，其他类型为空 | — |
+| `from_backend` | TEXT | 是 | NULL | 切换前模式；切换类型必须填写 | `CHECK(from_backend IN ('legacy','service'))` |
+| `to_backend` | TEXT | 是 | NULL | 切换目标模式；切换类型必须填写 | `CHECK(to_backend IN ('legacy','service'))` |
+| `generation` | INTEGER | 是 | NULL | 切换对应运行模式代际；切换类型必须填写 | 表级 CHECK |
+| `provider_id` | TEXT | 是 | NULL | 测试所属服务商；测试类型必须填写 | 表级 CHECK |
+| `agent_type` | TEXT | 是 | NULL | 测试 Agent；测试类型必须填写 | 表级 CHECK |
+| `model_id` | TEXT | 是 | NULL | 测试模型；测试类型必须填写，复合外键限制服务商归属 | 表级 CHECK |
+| `provider_revision` | INTEGER | 是 | NULL | 测试执行时的配置修订；测试类型必须填写 | 表级 CHECK |
+| `agent_version` | TEXT | 否 | `''` | 测试客户端版本字符串 | — |
 | `adapter_version` | INTEGER | 否 | `1` | 协议适配器版本，当前默认 1 | — |
-| `client_protocol` | TEXT | 否 | 无 | 实例或测试的入站协议；all 仅用于多协议工具实例 | — |
-| `upstream_protocol` | TEXT | 否 | 无 | 上游协议；普通 API 可为 responses/chat，官方账号固定 responses | — |
-| `capability` | TEXT | 否 | 无 | 被测试的能力名，当前工具往返及流式文本为 tool_roundtrip_stream | — |
-| `status` | TEXT | 否 | 无 | 本表生命周期状态，合法值由 CHECK 列出 | `CHECK(status IN ('passed','failed','unsupported'))` |
-| `evidence_json` | TEXT | 否 | 无 | 测试结果与实例 ID 等证据 JSON；不存完整对话正文 | `CHECK(json_valid(evidence_json))` |
-| `tested_at` | INTEGER | 否 | 无 | 测试时间，Unix 毫秒 | — |
+| `client_protocol` | TEXT | 否 | `''` | 测试入站协议 | — |
+| `upstream_protocol` | TEXT | 否 | `''` | 测试上游协议 | — |
+| `capability` | TEXT | 否 | `''` | 测试能力名，当前为 tool_roundtrip_stream | — |
+| `evidence_json` | TEXT | 否 | `'{}'` | 测试结果与实例 ID 等证据 JSON；不存完整对话正文 | `CHECK(json_valid(evidence_json))` |
 
 表级约束与索引：
 
 ```sql
+UNIQUE(id,operation_type)
 FOREIGN KEY(provider_id,agent_type) REFERENCES service_provider_agent_bindings(provider_id,agent_type) ON DELETE RESTRICT
 FOREIGN KEY(provider_id,model_id) REFERENCES service_provider_models(provider_id,id) ON DELETE RESTRICT
+CREATE INDEX IF NOT EXISTS service_operations_recent ON service_operations(operation_type,created_at DESC,id);
 ```
+
+启动恢复只把 `operation_type='switch'` 且尚未完成的记录标记为 interrupted。Skill 历史去重只读取已完成的 switch 记录来确定新模式时段，迁移和测试不会参与时段判断。操作审计属于本机数据，不进入业务备份和恢复。
 
 ### 10.8 service_agent_instances
 
@@ -509,20 +543,9 @@ UNIQUE(agent_type,config_path)
 CREATE UNIQUE INDEX IF NOT EXISTS service_token_current ON service_gateway_tokens(instance_id) WHERE status='active';
 ```
 
-### 10.10 service_switch_operations
+### 10.10 模式切换合并映射（schema 5）
 
-用途：新旧后端切换审计。
-
-| 字段 | 类型 | 可空 | 默认值 | 含义 | SQL 字段约束 |
-| --- | --- | --- | --- | --- | --- |
-| `id` | TEXT | 否 | 无 | 本表稳定主键；新建由应用生成，迁移服务商保留旧存储 ID | `PRIMARY KEY` |
-| `from_backend` | TEXT | 否 | 无 | 切换前模式：legacy/service | `CHECK(from_backend IN ('legacy','service'))` |
-| `to_backend` | TEXT | 否 | 无 | 目标模式：legacy/service | `CHECK(to_backend IN ('legacy','service'))` |
-| `generation` | INTEGER | 否 | 无 | 运行模式代际，防止旧请求跨切换继续派发 | — |
-| `stage` | TEXT | 否 | 无 | 切换阶段：preparing/completed/failed/interrupted；由应用维护 | — |
-| `error_message` | TEXT | 否 | `''` | 业务错误说明；不保存认证值或请求正文 | — |
-| `created_at` | INTEGER | 否 | 无 | 创建时间，Unix 毫秒 | — |
-| `completed_at` | INTEGER | 是 | 无 | 迁移或切换完成时间；尚未结束为 NULL | — |
+`service_switch_operations` 已移除，不再建表。记录迁入 `service_operations`，`operation_type='switch'`，原 `stage` 改存 `status`；`id`、`from_backend`、`to_backend`、`generation`、`error_message`、`created_at`、`completed_at` 原样复制。旧模式时段及切换成功、失败和中断历史全部保留。
 
 ### 10.11 service_managed_files
 
@@ -622,18 +645,9 @@ UNIQUE(request_id,attempt_no)
 FOREIGN KEY(provider_id,model_id) REFERENCES service_provider_models(provider_id,id) ON DELETE RESTRICT
 ```
 
-### 10.14 service_provider_migrations
+### 10.14 迁移批次合并映射（schema 5）
 
-用途：每次旧配置复制的运行记录。
-
-| 字段 | 类型 | 可空 | 默认值 | 含义 | SQL 字段约束 |
-| --- | --- | --- | --- | --- | --- |
-| `id` | TEXT | 否 | 无 | 本表稳定主键；新建由应用生成，迁移服务商保留旧存储 ID | `PRIMARY KEY` |
-| `source_schema` | TEXT | 否 | 无 | 迁移识别的旧 schema 类型，当前为 providers-v1 | — |
-| `status` | TEXT | 否 | 无 | 本表生命周期状态，合法值由 CHECK 列出 | `CHECK(status IN ('running','completed','failed'))` |
-| `created_at` | INTEGER | 否 | 无 | 创建时间，Unix 毫秒 | — |
-| `completed_at` | INTEGER | 是 | 无 | 迁移或切换完成时间；尚未结束为 NULL | — |
-| `error_message` | TEXT | 否 | `''` | 业务错误说明；不保存认证值或请求正文 | — |
+`service_provider_migrations` 已移除，不再建表。记录迁入 `service_operations`，`operation_type='migration'`，原 `id`、`source_schema`、`status`、`created_at`、`completed_at`、`error_message` 原样复制。迁移报告仍按批次统计明细，运行中和失败记录也保留；重新启用新模式时的单向复制、幂等判定逻辑保持。
 
 ### 10.15 service_provider_migration_items
 
@@ -642,7 +656,8 @@ FOREIGN KEY(provider_id,model_id) REFERENCES service_provider_models(provider_id
 | 字段 | 类型 | 可空 | 默认值 | 含义 | SQL 字段约束 |
 | --- | --- | --- | --- | --- | --- |
 | `id` | TEXT | 否 | 无 | 本表稳定主键；新建由应用生成，迁移服务商保留旧存储 ID | `PRIMARY KEY` |
-| `migration_id` | TEXT | 否 | 无 | 本次迁移运行 ID | `REFERENCES service_provider_migrations(id) ON DELETE RESTRICT` |
+| `migration_id` | TEXT | 否 | 无 | 对应 service_operations 中的迁移运行 ID | 见复合外键 |
+| `migration_type` | TEXT | 否 | `'migration'` | 固定迁移类型，避免明细引用模式切换或测试记录 | `CHECK(migration_type='migration')` |
 | `source_table` | TEXT | 否 | 无 | 旧来源表名，当前为 providers | — |
 | `source_id` | TEXT | 否 | 无 | 旧来源存储主键 | — |
 | `source_fingerprint` | TEXT | 否 | 无 | 旧来源行 JSON 的 SHA-256，用于审计来源，不用于覆盖新配置 | — |
@@ -654,33 +669,31 @@ FOREIGN KEY(provider_id,model_id) REFERENCES service_provider_models(provider_id
 
 ```sql
 UNIQUE(migration_id,source_table,source_id)
+FOREIGN KEY(migration_id,migration_type) REFERENCES service_operations(id,operation_type) ON DELETE RESTRICT
 CREATE UNIQUE INDEX IF NOT EXISTS service_migration_source ON service_provider_migration_items(source_table,source_id) WHERE status IN ('copied','unreadable');
 ```
 
-### 10.16 service_google_accounts
+### 10.16 Google 账号合并映射（schema 4）
 
-用途：Google 官方账号身份、加密 OAuth、本地转发认证及官方额度元数据。schema 版本为 3。该表凭据不进入业务备份、公开状态或 Usage；公开状态只返回邮箱、subject、到期时间与元数据。
+`service_google_accounts` 已移除，当前不再建表。凭据与适配器数据均放入 10.1 的明确字段；公开状态继续只投影邮箱、subject、到期时间和元数据。
 
-| 字段 | 类型 | 可空 | 默认值 | 含义及约束 |
-| --- | --- | --- | --- | --- |
-| `provider_id` | TEXT | 否 | 无 | 主键，引用 service_provider_configs(id)，删除 RESTRICT |
-| `external_subject` | TEXT | 否 | 无 | Google 官方稳定账号标识；唯一索引防止重复添加同一账号 |
-| `email` | TEXT | 否 | 空串 | 官方账号邮箱 |
-| `oauth_ciphertext` | TEXT | 否 | 无 | 加密 OAuth JSON：access_token、refresh_token、client_id、client_secret、expires_at |
-| `local_key_ciphertext` | TEXT | 否 | 无 | 独立加密的本地 Google 转发令牌，不向 Agent 下发 OAuth |
-| `expires_at` | INTEGER | 是 | NULL | OAuth 到期时间，Unix 秒 |
-| `gateway_port` | INTEGER | 否 | 无 | 本地 Google 适配器端口，1～65535；共享入口仍为 15724 |
-| `metadata_json` | TEXT | 否 | {} | 官方返回的 models、project、plan、quotaGroups、状态及提示等 JSON 对象 |
-| `token_generation` | INTEGER | 否 | 1 | OAuth 凭据代际，刷新 / 重登录递增；请求账本记录对应版本 |
-| `revision` | INTEGER | 否 | 1 | 账号数据修订号，更新递增 |
-| `created_at` | INTEGER | 否 | 无 | 创建时间，Unix 毫秒 |
-| `updated_at` | INTEGER | 否 | 无 | 最后更新时间，Unix 毫秒 |
+| 升级前账号字段 | 当前配置表字段 | 迁移规则 |
+| --- | --- | --- |
+| `provider_id` | 配置 `id` | 定位 Google 类型配置，配置 ID 保持 |
+| `external_subject`、`email` | `account_id`、`account_email` | 原值复制，保留非空 subject 唯一约束 |
+| `oauth_ciphertext` | `credentials_ciphertext` | 完整密文原样复制，保留 OAuth JSON 结构 |
+| `local_key_ciphertext` | `google_local_key_ciphertext` | 密文原样复制，保持本地适配器认证 |
+| `expires_at` | `token_expires_at` | Unix 秒转换为毫秒；OAuth JSON 中秒单位保持 |
+| `gateway_port` | `google_gateway_port` | 保留原适配器端口 |
+| `metadata_json` | `account_metadata_json` | 原 JSON 复制，保留模型、项目、套餐、额度及状态 |
+| `token_generation` | `credential_generation` | 保留原代际，刷新和重新登录继续递增 |
+| `updated_at` | `account_updated_at` | 原值复制；配置创建和更新时间保持 |
 
 Google 登录回调校验启动时的模式和代际；账号删除、模式改变或身份不一致时拒绝写入。Google 请求仍经过共享网关的授权、模型路由和 service_gateway_requests / service_gateway_attempts 记账，再由现有 Google 适配器转发。官方目录刷新对不再返回的模型执行停用，保留其历史和价格。
 
 ### 10.17 service_gateway_skill_events
 
-用途：独立保存网关实际观测到的 Skill 引用 / 工具调用事件。新增表通过 `CREATE TABLE IF NOT EXISTS` 幂等创建；不改动已有 v3 表结构和版本，旧程序可以忽略这两张表，当前程序也支持回滚旧模式。
+用途：独立保存网关实际观测到的 Skill 引用 / 工具调用事件。两张 Skill 表仍通过 `CREATE TABLE IF NOT EXISTS` 幂等创建，本次合并不改变其结构或数据；数据库整体版本为 5，当前程序支持应用内回滚旧模式，旧二进制的恢复限制见 5.3。
 
 | 字段 | 类型 | 可空 | 默认值 | 含义及约束 |
 | --- | --- | --- | --- | --- |
@@ -706,3 +719,18 @@ Google 登录回调校验启动时的模式和代际；账号删除、模式改�
 | `event_id` | TEXT | 否 | 无 | 引用 service_gateway_skill_events(id)，删除 RESTRICT |
 
 复合主键 `PRIMARY KEY(request_id,event_id)`，同一请求关联同一事件只保存一次。索引 `service_skill_links_event(event_id)` 支持从事件查询关联请求。两张表和采集起始标记均属于本机统计数据，不进入跨设备业务备份。
+
+## 11. 当前表合并评估
+
+官方账号两张子表已并入配置表；三张操作审计主表已合并为一张。其余表保留结构化关系，评估范围为本次共享服务商模式新增表，不修改旧模式和其他业务模块的表。
+
+| 当前表 | 保留原因 |
+| --- | --- |
+| `service_provider_configs`、`service_provider_keys` | 一项 API 配置可以有多个逻辑 Key 和轮换版本；Key 的撤销、选择及历史归属独立 |
+| `service_provider_models` | 一个服务商有多个模型，模型有独立启用状态、目录、差异价格和稳定历史 ID；旧默认价格表继续复用 |
+| `service_provider_agent_bindings`、`service_agent_model_routes` | 每个服务商有多个 Agent，每个 Agent 又有多个模型别名；复合外键校验授权和模型归属 |
+| `service_agent_instances`、`service_gateway_tokens` | 一个 Agent 可有多个目录和内部、外部实例；实例会产生多代 Token，撤销记录需要保留 |
+| `service_managed_files` | 一次接管涉及多个文件，文件各自保存加密前后快照、写入和恢复冲突状态，不能覆盖为实例上的单个字段 |
+| `service_gateway_requests`、`service_gateway_attempts` | 入站请求可被拒绝而没有上游消费；历史模型支持多次上游尝试，费用和凭据快照按尝试记录 |
+| `service_gateway_skill_events`、`service_gateway_request_skills` | 一个请求可关联多个 Skill，同一事件也可随历史重发出现在多个请求；多对多关联保障去重及费用归属 |
+| `service_operations`、`service_provider_migration_items` | 主表统一操作审计；一个迁移批次有多条来源明细，明细的唯一索引继续阻止重复复制 |

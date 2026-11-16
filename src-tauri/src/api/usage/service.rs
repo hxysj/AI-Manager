@@ -291,7 +291,7 @@ mod tests {
         service_provider::switch_backend(&f.paths,"service").unwrap();
         let c = database::open(&f.paths).unwrap();
         c.execute("UPDATE app_metadata SET value='100' WHERE key='service_gateway:skills_started_at'",[]).unwrap();
-        c.execute("UPDATE service_switch_operations SET completed_at=110 WHERE to_backend='service'",[]).unwrap();
+        c.execute("UPDATE service_operations SET completed_at=110 WHERE operation_type='switch' AND to_backend='service'",[]).unwrap();
         usage_store::write_session_skills(&f.paths,&[usage_store::SessionSkillUpdate {
             raw_path:"old-session".into(),app_type:"codex".into(),session_id:"old".into(),
             created_at:50,updated_at:250,calls:vec![
@@ -321,7 +321,7 @@ mod tests {
         assert!(!json!(store::query(&c,"SELECT * FROM service_gateway_skill_events",&[]).unwrap())
             .to_string().contains("C:/skills"));
         service_provider::switch_backend(&f.paths,"legacy").unwrap();
-        c.execute("UPDATE service_switch_operations SET completed_at=200 WHERE to_backend='legacy'",[]).unwrap();
+        c.execute("UPDATE service_operations SET completed_at=200 WHERE operation_type='switch' AND to_backend='legacy'",[]).unwrap();
         let retained = gateway_skills::read_legacy_calls(&f.paths).unwrap();
         assert_eq!(retained.iter().map(|call|store::text(call,"alias")).collect::<Vec<_>>(),["before","after"]);
         assert_eq!(usage_store::read_session_skill_calls(&f.paths,"all",0,0).unwrap().len(),3);

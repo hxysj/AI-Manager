@@ -175,10 +175,17 @@ fn create_filtered_backup(paths: &AppPaths, snapshot_path: &Path) -> Result<(), 
         let selected_columns = columns
             .iter()
             .map(|column| {
-                if table == "skill_repositories"
-                    && REPOSITORY_LOCAL_COLUMNS.contains(&column.as_str())
-                {
-                    match repository_local_default(column) {
+                let local_default = if table == "skill_repositories"
+                    && REPOSITORY_LOCAL_COLUMNS.contains(&column.as_str()) {
+                    Some(repository_local_default(column))
+                } else if table == "service_provider_configs"
+                    && crate::core::service_provider_store::ACCOUNT_LOCAL_COLUMNS.contains(&column.as_str()) {
+                    Some(crate::core::service_provider_store::account_local_default(column))
+                } else {
+                    None
+                };
+                if let Some(value) = local_default {
+                    match value {
                         serde_json::Value::String(value) => {
                             format!("'{}'", value.replace('\'', "''"))
                         }

@@ -35,6 +35,230 @@ impl Drop for Fixture {
     }
 }
 
+// 使用真实 v3 账号表形状，验证升级时既有配置和历史关联保持不变。
+fn account_schema_three(c: &Connection) {
+    operation_schema_four(c);
+    c.execute_batch("DROP INDEX service_config_google_subject;
+        CREATE TABLE service_provider_accounts (
+          id TEXT PRIMARY KEY NOT NULL,provider_id TEXT NOT NULL UNIQUE REFERENCES service_provider_configs(id),
+          external_account_id TEXT NOT NULL,email TEXT NOT NULL DEFAULT '',
+          access_ciphertext TEXT NOT NULL DEFAULT '',refresh_ciphertext TEXT NOT NULL DEFAULT '',id_ciphertext TEXT NOT NULL DEFAULT '',
+          expires_at INTEGER,token_generation INTEGER NOT NULL DEFAULT 0,refresh_status TEXT NOT NULL DEFAULT '',
+          quota_json TEXT NOT NULL DEFAULT '{}',revision INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL
+        ) STRICT;
+        CREATE TABLE service_google_accounts (
+          provider_id TEXT PRIMARY KEY NOT NULL REFERENCES service_provider_configs(id),
+          external_subject TEXT NOT NULL,email TEXT NOT NULL DEFAULT '',oauth_ciphertext TEXT NOT NULL,
+          local_key_ciphertext TEXT NOT NULL,expires_at INTEGER,gateway_port INTEGER NOT NULL,
+          metadata_json TEXT NOT NULL DEFAULT '{}',token_generation INTEGER NOT NULL DEFAULT 1,
+          revision INTEGER NOT NULL DEFAULT 1,created_at INTEGER NOT NULL,updated_at INTEGER NOT NULL
+        ) STRICT;
+        CREATE UNIQUE INDEX service_google_subject ON service_google_accounts(external_subject);
+        UPDATE app_metadata SET value='3' WHERE key='service_provider:schema_version';").unwrap();
+    for column in ACCOUNT_LOCAL_COLUMNS {
+        c.execute_batch(&format!("ALTER TABLE service_provider_configs DROP COLUMN {column};")).unwrap();
+    }
+}
+
+#[test]
+fn service_schema_four_merges_official_accounts_without_changing_legacy_or_usage() {
+    let f = Fixture::new();
+    f.provider();
+    let codex = save(&f.paths, &json!({"name":"Codex 官方","kind":"codex_account"})).unwrap();
+    let google = save(&f.paths, &json!({"name":"Google 官方","kind":"google_account"})).unwrap();
+    provider_store::write_provider_bundle(&f.paths, &[json!({"id":"legacy","cli":"codex","name":"旧服务商",
+        "baseUrl":"https://example.test/v1","runtimeConfig":{"mainModel":"original"}})], &[], &[], &Map::new()).unwrap();
+    let c = database::open(&f.paths).unwrap();
+    let legacy = query(&c, "SELECT * FROM providers", &[]).unwrap();
+    let models = query(&c, "SELECT * FROM service_provider_models ORDER BY id", &[]).unwrap();
+    c.execute_batch("INSERT INTO service_gateway_requests(id,generation,protocol_in,request_path,state,created_at,finished_at)
+        VALUES('historical',1,'responses','/v1/responses','completed',1,2);").unwrap();
+    for event in ["INSERT", "UPDATE", "DELETE"] {
+        c.execute_batch(&format!("CREATE TRIGGER preserve_legacy_{event} BEFORE {event} ON providers
+            BEGIN SELECT RAISE(ABORT,'禁止改写旧表'); END;")).unwrap();
+    }
+    account_schema_three(&c);
+    c.execute("INSERT INTO service_provider_accounts(id,provider_id,external_account_id,email,access_ciphertext,
+        refresh_ciphertext,id_ciphertext,expires_at,token_generation,refresh_status,quota_json,created_at,updated_at)
+        VALUES('old-credential',?1,'codex-identity','codex@example.test',?2,?3,?4,9999999999000,7,'ready','{\"plan_type\":\"plus\"}',11,22)",
+        params![text(&codex,"id"),encrypt_provider_key("old-access").unwrap(),
+            encrypt_provider_key("old-refresh").unwrap(),encrypt_provider_key("old-id").unwrap()]).unwrap();
+    let tokens = json!({"access_token":"google-access","refresh_token":"google-refresh",
+        "client_id":"original-client","client_secret":"original-secret","expires_at":9999999999i64});
+    let metadata = json!({"project":"project-one","plan":"pro","quotaGroups":[{"remaining":50}]});
+    c.execute("INSERT INTO service_google_accounts(provider_id,external_subject,email,oauth_ciphertext,local_key_ciphertext,
+        expires_at,gateway_port,metadata_json,token_generation,created_at,updated_at)
+        VALUES(?1,'google-identity','google@example.test',?2,?3,9999999999,34567,?4,5,11,33)",
+        params![text(&google,"id"),encrypt_provider_key(&tokens.to_string()).unwrap(),
+            encrypt_provider_key("original-local-key").unwrap(),metadata.to_string()]).unwrap();
+    initialize(&f.paths).unwrap();
+    assert!(!table_exists(&c, "service_provider_accounts").unwrap());
+    assert!(!table_exists(&c, "service_google_accounts").unwrap());
+    assert_eq!(query(&c,"SELECT value FROM app_metadata WHERE key='service_provider:schema_version'",&[]).unwrap()[0]["value"],"5");
+    let account = account(&c, text(&codex,"id")).unwrap();
+    assert_eq!(account["accessToken"], "old-access");
+    assert_eq!(account["refreshToken"], "old-refresh");
+    assert_eq!(account["idToken"], "old-id");
+    assert_eq!(account["token_generation"], 7);
+    assert_eq!(google_tokens(&c,text(&google,"id")).unwrap(), tokens);
+    assert_eq!(google_local_key(&c,text(&google,"id")).unwrap(),"original-local-key");
+    let public = state(&f.paths).unwrap();
+    assert_eq!(public["accounts"][0]["quota"]["plan_type"],"plus");
+    assert_eq!(public["accounts"][0]["refreshStatus"],"ready");
+    assert_eq!(public["googleAccounts"][0]["expiresAt"],9999999999000i64);
+    assert_eq!(public["googleAccounts"][0]["metadata"],metadata);
+    assert!(!public.to_string().contains("old-refresh"));
+    assert!(!public.to_string().contains("original-secret"));
+    assert_eq!(config(&c,text(&codex,"id")).unwrap()["revision"],1);
+    assert_eq!(query(&c,"SELECT * FROM providers",&[]).unwrap(),legacy);
+    assert_eq!(query(&c,"SELECT * FROM service_provider_models ORDER BY id",&[]).unwrap(),models);
+    assert_eq!(query(&c,"SELECT id FROM service_gateway_requests",&[]).unwrap()[0]["id"],"historical");
+    assert!(query(&c,"PRAGMA foreign_key_check",&[]).unwrap().is_empty());
+    let mut edited = config(&c,text(&codex,"id")).unwrap();
+    edited["name"] = json!("编辑名称");
+    edited["credentials_ciphertext"] = json!("界面不得覆盖凭据");
+    save(&f.paths,&edited).unwrap();
+    initialize(&f.paths).unwrap();
+    assert_eq!(super::account(&c,text(&codex,"id")).unwrap()["accessToken"],"old-access");
+    save_google_tokens(&f.paths,text(&google,"id"),&tokens,5).unwrap();
+    assert!(save_google_tokens(&f.paths,text(&google,"id"),&tokens,5).is_err());
+    assert_eq!(config(&c,text(&google,"id")).unwrap()["revision"],1);
+    service_provider::switch_backend(&f.paths,"service").unwrap();
+    service_provider::switch_backend(&f.paths,"legacy").unwrap();
+    assert_eq!(query(&c,"SELECT * FROM providers",&[]).unwrap(),legacy);
+}
+
+#[test]
+fn service_schema_four_rolls_back_account_upgrade_when_credentials_are_unreadable() {
+    let f = Fixture::new();
+    let provider = save(&f.paths,&json!({"name":"损坏凭据","kind":"codex_account"})).unwrap();
+    let c = database::open(&f.paths).unwrap();
+    account_schema_three(&c);
+    c.execute("INSERT INTO service_provider_accounts(id,provider_id,external_account_id,access_ciphertext,created_at,updated_at)
+        VALUES('unreadable',?1,'identity','not-base64!',1,1)",[text(&provider,"id")]).unwrap();
+    let original = query(&c,"SELECT * FROM service_provider_accounts",&[]).unwrap();
+    assert!(initialize(&f.paths).unwrap_err().to_string().contains("已保留原账号表"));
+    assert_eq!(query(&c,"SELECT * FROM service_provider_accounts",&[]).unwrap(),original);
+    assert!(table_exists(&c,"service_google_accounts").unwrap());
+    assert_eq!(query(&c,"SELECT value FROM app_metadata WHERE key='service_provider:schema_version'",&[]).unwrap()[0]["value"],"3");
+    assert!(!query(&c,"SELECT name FROM pragma_table_info('service_provider_configs')",&[]).unwrap()
+        .iter().any(|column|column["name"]=="credentials_ciphertext"));
+}
+
+// 还原实际 v4 审计表及明细外键，覆盖已运行新模式的数据库升级。
+fn operation_schema_four(c: &Connection) {
+    c.execute_batch("DROP TABLE service_provider_migration_items;
+        DROP TABLE service_operations;
+        CREATE TABLE service_provider_migrations (
+          id TEXT PRIMARY KEY NOT NULL,source_schema TEXT NOT NULL,status TEXT NOT NULL,
+          created_at INTEGER NOT NULL,completed_at INTEGER,error_message TEXT NOT NULL DEFAULT ''
+        ) STRICT;
+        CREATE TABLE service_switch_operations (
+          id TEXT PRIMARY KEY NOT NULL,from_backend TEXT NOT NULL,to_backend TEXT NOT NULL,
+          generation INTEGER NOT NULL,stage TEXT NOT NULL,error_message TEXT NOT NULL DEFAULT '',
+          created_at INTEGER NOT NULL,completed_at INTEGER
+        ) STRICT;
+        CREATE TABLE service_compatibility_tests (
+          id TEXT PRIMARY KEY NOT NULL,provider_id TEXT NOT NULL,agent_type TEXT NOT NULL,model_id TEXT NOT NULL,
+          provider_revision INTEGER NOT NULL,agent_version TEXT NOT NULL,adapter_version INTEGER NOT NULL DEFAULT 1,
+          client_protocol TEXT NOT NULL,upstream_protocol TEXT NOT NULL,capability TEXT NOT NULL,
+          status TEXT NOT NULL,evidence_json TEXT NOT NULL,tested_at INTEGER NOT NULL,
+          FOREIGN KEY(provider_id,agent_type) REFERENCES service_provider_agent_bindings(provider_id,agent_type),
+          FOREIGN KEY(provider_id,model_id) REFERENCES service_provider_models(provider_id,id)
+        ) STRICT;
+        CREATE TABLE service_provider_migration_items (
+          id TEXT PRIMARY KEY NOT NULL,migration_id TEXT NOT NULL REFERENCES service_provider_migrations(id),
+          source_table TEXT NOT NULL,source_id TEXT NOT NULL,source_fingerprint TEXT NOT NULL,target_id TEXT,
+          status TEXT NOT NULL,reason TEXT NOT NULL DEFAULT '',UNIQUE(migration_id,source_table,source_id)
+        ) STRICT;
+        CREATE UNIQUE INDEX service_migration_source ON service_provider_migration_items(source_table,source_id)
+          WHERE status IN ('copied','unreadable');
+        UPDATE app_metadata SET value='4' WHERE key='service_provider:schema_version';").unwrap();
+}
+
+#[test]
+fn service_schema_five_merges_operation_history_and_preserves_typed_recovery() {
+    let f = Fixture::new();
+    let provider = f.provider();
+    let c = database::open(&f.paths).unwrap();
+    let model = query(&c,"SELECT id FROM service_provider_models WHERE provider_id=?1",&[&provider]).unwrap()[0]["id"].clone();
+    operation_schema_four(&c);
+    c.execute_batch("INSERT INTO service_provider_migrations VALUES
+        ('migration-completed','providers-v1','completed',10,20,'保留迁移提示'),
+        ('migration-running','providers-v1','running',5,NULL,'');
+        INSERT INTO service_switch_operations VALUES
+        ('switch-completed','legacy','service',7,'completed','',20,30),
+        ('switch-pending','service','legacy',8,'preparing','',40,NULL);
+        INSERT INTO service_provider_migration_items VALUES
+        ('migration-item','migration-completed','providers','source','original-hash','target','copied','原迁移结果');
+        INSERT INTO service_gateway_requests(id,generation,protocol_in,request_path,state,created_at,finished_at)
+          VALUES('operation-history-request',7,'responses','/v1/responses','completed',31,32);").unwrap();
+    c.execute("INSERT INTO service_compatibility_tests(id,provider_id,agent_type,model_id,provider_revision,
+        agent_version,adapter_version,client_protocol,upstream_protocol,capability,status,evidence_json,tested_at)
+        VALUES('compatibility-failed',?1,'codex',?2,3,'agent-version',2,'responses','chat','tool_roundtrip_stream',
+        'failed','{\"error\":\"保留测试证据\"}',50)",params![provider,model.as_str()]).unwrap();
+    let migrations = query(&c,"SELECT * FROM service_provider_migrations ORDER BY id",&[]).unwrap();
+    let switches = query(&c,"SELECT * FROM service_switch_operations ORDER BY id",&[]).unwrap();
+    let compatibility = query(&c,"SELECT * FROM service_compatibility_tests",&[]).unwrap();
+    let items = query(&c,"SELECT * FROM service_provider_migration_items",&[]).unwrap();
+    let configs = query(&c,"SELECT * FROM service_provider_configs",&[]).unwrap();
+    let requests = query(&c,"SELECT * FROM service_gateway_requests",&[]).unwrap();
+    initialize(&f.paths).unwrap();
+    for old in ["service_provider_migrations","service_switch_operations","service_compatibility_tests"] {
+        assert!(!table_exists(&c,old).unwrap());
+    }
+    assert_eq!(query(&c,"SELECT id,source_schema,status,created_at,completed_at,error_message
+        FROM service_operations WHERE operation_type='migration' ORDER BY id",&[]).unwrap(),migrations);
+    assert_eq!(query(&c,"SELECT id,from_backend,to_backend,generation,status AS stage,error_message,created_at,completed_at
+        FROM service_operations WHERE operation_type='switch' ORDER BY id",&[]).unwrap(),switches);
+    assert_eq!(query(&c,"SELECT id,provider_id,agent_type,model_id,provider_revision,agent_version,adapter_version,
+        client_protocol,upstream_protocol,capability,status,evidence_json,completed_at AS tested_at
+        FROM service_operations WHERE operation_type='compatibility'",&[]).unwrap(),compatibility);
+    assert_eq!(query(&c,"SELECT id,migration_id,source_table,source_id,source_fingerprint,target_id,status,reason
+        FROM service_provider_migration_items",&[]).unwrap(),items);
+    assert_eq!(query(&c,"SELECT * FROM service_provider_configs",&[]).unwrap(),configs);
+    assert_eq!(query(&c,"SELECT * FROM service_gateway_requests",&[]).unwrap(),requests);
+    assert!(query(&c,"PRAGMA foreign_key_check",&[]).unwrap().is_empty());
+    assert_eq!(query(&c,"SELECT value FROM app_metadata WHERE key='service_provider:schema_version'",&[]).unwrap()[0]["value"],"5");
+    let operations = query(&c,"SELECT * FROM service_operations ORDER BY id",&[]).unwrap();
+    initialize(&f.paths).unwrap();
+    assert_eq!(query(&c,"SELECT * FROM service_operations ORDER BY id",&[]).unwrap(),operations);
+    let public = state(&f.paths).unwrap();
+    assert_eq!(public["migrations"].as_array().unwrap().len(),2);
+    assert_eq!(public["migrations"][0]["copied"],1);
+    assert_eq!(public["migrationItems"][0]["reason"],"原迁移结果");
+    assert_eq!(public["compatibility"][0]["evidence"]["error"],"保留测试证据");
+    assert_eq!(public["compatibility"][0]["testedAt"],50);
+    // 迁移明细只能挂在迁移批次下，不能误引用同表中的模式切换记录。
+    assert!(c.execute("UPDATE service_provider_migration_items SET migration_id='switch-completed'",[]).is_err());
+    service_provider::recover(&f.paths).unwrap();
+    assert_eq!(query(&c,"SELECT status FROM service_operations WHERE id='switch-pending'",&[]).unwrap()[0]["status"],"interrupted");
+    assert_eq!(query(&c,"SELECT status FROM service_operations WHERE id='migration-running'",&[]).unwrap()[0]["status"],"running");
+    assert_eq!(state(&f.paths).unwrap()["compatibility"],public["compatibility"]);
+}
+
+#[test]
+fn service_schema_five_rolls_back_all_audit_changes_when_history_has_orphan_items() {
+    let f = Fixture::new();
+    let c = database::open(&f.paths).unwrap();
+    operation_schema_four(&c);
+    c.execute_batch("INSERT INTO service_provider_migrations VALUES('migration','providers-v1','completed',1,2,'');").unwrap();
+    c.pragma_update(None,"foreign_keys","OFF").unwrap();
+    c.execute_batch("INSERT INTO service_provider_migration_items
+        VALUES('orphan','missing-migration','providers','source','hash',NULL,'skipped','保留原记录');").unwrap();
+    c.pragma_update(None,"foreign_keys","ON").unwrap();
+    let original = query(&c,"SELECT * FROM service_provider_migration_items",&[]).unwrap();
+    assert!(initialize(&f.paths).unwrap_err().to_string().contains("已回滚升级"));
+    assert!(!table_exists(&c,"service_operations").unwrap());
+    for old in ["service_provider_migrations","service_switch_operations","service_compatibility_tests"] {
+        assert!(table_exists(&c,old).unwrap());
+    }
+    assert_eq!(query(&c,"SELECT * FROM service_provider_migration_items",&[]).unwrap(),original);
+    assert_eq!(query(&c,"SELECT value FROM app_metadata WHERE key='service_provider:schema_version'",&[]).unwrap()[0]["value"],"4");
+    assert!(query(&c,"PRAGMA foreign_key_list(service_provider_migration_items)",&[]).unwrap()
+        .iter().any(|row|row["table"]=="service_provider_migrations"));
+}
+
 #[test]
 fn service_agent_configuration_switches_one_source_and_restores_all_old_directories() {
     let f = Fixture::new();
@@ -179,11 +403,11 @@ fn service_google_migration_is_read_only_and_uses_separate_encrypted_credentials
     assert_eq!(public["providers"][0]["hasCredential"],1);
     assert_eq!(public["googleAccounts"][0]["email"],"google@example.test");
     assert!(!public.to_string().contains("google-private"));
-    assert!(!query(&c,"SELECT oauth_ciphertext,local_key_ciphertext FROM service_google_accounts",&[]).unwrap()[0].to_string().contains("google-private"));
+    assert!(!query(&c,"SELECT credentials_ciphertext,google_local_key_ciphertext FROM service_provider_configs",&[]).unwrap()[0].to_string().contains("google-private"));
     assert_eq!(public_catalog(&f.paths).unwrap()["providers"][0]["type"],"google-account");
     let mut updated = tokens.clone();
     updated["access_token"] = json!("rotated-google-access");
-    save_google_tokens(&f.paths,"old-google",&updated).unwrap();
+    save_google_tokens(&f.paths,"old-google",&updated,1).unwrap();
     update_google_metadata(&f.paths,"old-google",&json!({"status":"ready","plan":"test"})).unwrap();
     migrate(&f.paths).unwrap();
     assert_eq!(google_tokens(&c,"old-google").unwrap(),updated);
@@ -424,9 +648,9 @@ fn service_enable_automatically_copies_codex_and_official_accounts_without_overw
     assert!(copied["providers"].as_array().unwrap().iter().any(|p| p["id"] == "codex-api"));
     assert_eq!(account(&c, "account:official").unwrap()["accessToken"], "access");
     c.execute("UPDATE service_provider_configs SET name='新模式修改' WHERE id='codex-api'", []).unwrap();
-    let runs: i64 = c.query_row("SELECT count(*) FROM service_provider_migrations", [], |r| r.get(0)).unwrap();
+    let runs: i64 = c.query_row("SELECT count(*) FROM service_operations WHERE operation_type='migration'", [], |r| r.get(0)).unwrap();
     service_provider::switch_backend(&f.paths, "service").unwrap();
-    assert_eq!(c.query_row("SELECT count(*) FROM service_provider_migrations", [], |r| r.get::<_,i64>(0)).unwrap(), runs);
+    assert_eq!(c.query_row("SELECT count(*) FROM service_operations WHERE operation_type='migration'", [], |r| r.get::<_,i64>(0)).unwrap(), runs);
     service_provider::switch_backend(&f.paths, "legacy").unwrap();
     service_provider::switch_backend(&f.paths, "service").unwrap();
     assert_eq!(config(&c, "codex-api").unwrap()["name"], "新模式修改");
@@ -443,7 +667,7 @@ fn service_enable_keeps_legacy_mode_when_automatic_migration_fails() {
     c.execute("UPDATE providers SET model_catalog='not-json' WHERE id='broken'", []).unwrap();
     assert!(service_provider::switch_backend(&f.paths, "service").is_err());
     assert!(!active(&f.paths).unwrap());
-    assert_eq!(query(&c, "SELECT status FROM service_provider_migrations", &[]).unwrap()[0]["status"], "failed");
+    assert_eq!(query(&c, "SELECT status FROM service_operations WHERE operation_type='migration'", &[]).unwrap()[0]["status"], "failed");
     assert!(state(&f.paths).unwrap()["providers"].as_array().unwrap().is_empty());
 }
 
@@ -901,7 +1125,7 @@ fn service_migration_copies_official_credentials_and_reports_atomic_failure() {
     assert_eq!(
         query(
             &bad_c,
-            "SELECT status FROM service_provider_migrations",
+            "SELECT status FROM service_operations WHERE operation_type='migration'",
             &[]
         )
         .unwrap()[0]["status"],
@@ -932,7 +1156,7 @@ fn service_account_rotation_keeps_quota_only_for_the_same_official_identity() {
     )
     .unwrap();
     c.execute(
-        "UPDATE service_provider_accounts SET quota_json='{\"plan_type\":\"plus\"}' WHERE provider_id=?1",
+        "UPDATE service_provider_configs SET quota_json='{\"plan_type\":\"plus\"}' WHERE id=?1",
         [provider],
     ).unwrap();
     save_account(
@@ -957,7 +1181,7 @@ fn service_account_rotation_keeps_quota_only_for_the_same_official_identity() {
     .unwrap();
     let account = account(&c, provider).unwrap();
     assert_eq!(account["accessToken"], "access-b");
-    assert_eq!(account["token_generation"], 2);
+    assert_eq!(account["token_generation"], 3);
     assert_eq!(state(&f.paths).unwrap()["accounts"][0]["quota"], json!({}));
 }
 
@@ -1195,4 +1419,71 @@ fn service_business_backup_omits_secrets_and_restores_natural_model_relationship
     );
     assert_eq!(target_c.query_row("SELECT default_model_id FROM service_provider_agent_bindings WHERE agent_type='codex'",[],|r|r.get::<_,String>(0)).unwrap(),"local-model");
     assert!(!fk.exists([]).unwrap());
+}
+
+#[test]
+fn service_account_config_backup_omits_local_fields_and_restore_preserves_local_credentials() {
+    let source = Fixture::new();
+    let codex = save(&source.paths,&json!({"name":"Codex 配置","kind":"codex_account"})).unwrap();
+    let google = save(&source.paths,&json!({"name":"Google 配置","kind":"google_account"})).unwrap();
+    let codex = text(&codex,"id");
+    let google = text(&google,"id");
+    let c = database::open(&source.paths).unwrap();
+    save_account(&c,codex,&json!({"account_id":"source-account","email":"source@example.test",
+        "access_token":"source-access","refresh_token":"source-refresh","expires_at":9999999999000i64})).unwrap();
+    let metadata = json!({"subject":"source-subject","email":"google@example.test","port":34567,"project":"source-project"});
+    let tokens = json!({"access_token":"source-google-access","refresh_token":"source-google-refresh","expires_at":9999999999i64});
+    save_google_credentials(&c,google,&metadata,&tokens).unwrap();
+    c.execute("UPDATE service_provider_configs SET quota_json='{\"remaining\":10}' WHERE id=?1",[codex]).unwrap();
+    service_provider::switch_backend(&source.paths,"service").unwrap();
+    let bytes = database::backup(&source.paths).unwrap();
+    let backup_path = source.root.join("account-backup.db");
+    std::fs::write(&backup_path,&bytes).unwrap();
+    let backup = Connection::open(&backup_path).unwrap();
+    for row in query(&backup,"SELECT * FROM service_provider_configs",&[]).unwrap() {
+        for column in ACCOUNT_LOCAL_COLUMNS {
+            assert_eq!(row[*column],account_local_default(column),"{column}");
+        }
+    }
+    let target = Fixture::new();
+    service_provider::switch_backend(&target.paths,"service").unwrap();
+    let choices = Map::from_iter([("*".into(),json!("backup"))]);
+    database::restore_merged(&target.paths,&bytes,&choices).unwrap();
+    let target_c = database::open(&target.paths).unwrap();
+    assert!(account(&target_c,codex).is_err());
+    assert!(google_tokens(&target_c,google).is_err());
+    assert_eq!(config(&target_c,codex).unwrap()["enabled"],0);
+    save_account(&target_c,codex,&json!({"account_id":"local-account","access_token":"local-access",
+        "refresh_token":"local-refresh","email":"local@example.test"})).unwrap();
+    save_google_credentials(&target_c,google,
+        &json!({"subject":"local-subject","email":"local-google@example.test","port":34568}),
+        &json!({"access_token":"local-google-access","refresh_token":"local-google-refresh","expires_at":9999999999i64})).unwrap();
+    let local = query(&target_c,"SELECT * FROM service_provider_configs ORDER BY id",&[]).unwrap();
+    // 即使备份中手工混入账号数据，预览也不暴露，覆盖恢复也不写入本机账号字段。
+    backup.execute_batch("UPDATE service_provider_configs SET name='备份中的名称',account_id='foreign-account',
+        account_email='foreign@example.test',credentials_ciphertext='foreign-secret',credential_generation=999,
+        account_metadata_json='{\"project\":\"foreign-project\"}',google_local_key_ciphertext='foreign-local-key';").unwrap();
+    drop(backup);
+    let tampered = std::fs::read(&backup_path).unwrap();
+    let preview = database::preview_rows(&target.paths,&tampered).unwrap();
+    assert!(!preview.is_empty());
+    for difference in preview {
+        assert!(!difference.backup.to_string().contains("foreign-secret"));
+        assert!(!difference.current.unwrap_or(Value::Null).to_string().contains("local-access"));
+    }
+    database::restore_merged(&target.paths,&tampered,&choices).unwrap();
+    let restored = query(&target_c,"SELECT * FROM service_provider_configs ORDER BY id",&[]).unwrap();
+    for (before,after) in local.iter().zip(restored.iter()) {
+        assert_eq!(after["name"],"备份中的名称");
+        for column in ACCOUNT_LOCAL_COLUMNS {
+            assert_eq!(before[*column],after[*column],"{column}");
+        }
+    }
+    let fresh = Fixture::new();
+    service_provider::switch_backend(&fresh.paths,"service").unwrap();
+    database::restore_merged(&fresh.paths,&tampered,&choices).unwrap();
+    let fresh_c = database::open(&fresh.paths).unwrap();
+    assert!(account(&fresh_c,codex).is_err());
+    assert!(google_tokens(&fresh_c,google).is_err());
+    assert!(query(&fresh_c,"PRAGMA foreign_key_check",&[]).unwrap().is_empty());
 }

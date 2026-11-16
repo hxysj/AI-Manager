@@ -752,8 +752,8 @@ pub(crate) fn switch_backend(paths: &AppPaths, backend: &str) -> Result<(), Mana
     };
     let c = database::open(paths)?;
     let operation = store::id();
-    c.execute("INSERT INTO service_switch_operations(id,from_backend,to_backend,generation,stage,created_at)
-        VALUES(?1,?2,?3,?4,'preparing',?5)",params![operation,current,backend,store::generation(&c)?+1,store::now()])?;
+    c.execute("INSERT INTO service_operations(id,operation_type,from_backend,to_backend,generation,status,created_at)
+        VALUES(?1,'switch',?2,?3,?4,'preparing',?5)",params![operation,current,backend,store::generation(&c)?+1,store::now()])?;
     c.execute("INSERT INTO app_metadata(key,value) VALUES('service_provider:accepting','0') ON CONFLICT(key) DO UPDATE SET value='0'",[])?;
     let result = (|| {
         if active_requests(paths, None)? {
@@ -779,14 +779,14 @@ pub(crate) fn switch_backend(paths: &AppPaths, backend: &str) -> Result<(), Mana
         tx.execute("INSERT INTO app_metadata(key,value) VALUES(?1,?2) ON CONFLICT(key) DO UPDATE SET value=excluded.value",params![store::MODE_KEY,backend])?;
         tx.execute("INSERT INTO app_metadata(key,value) VALUES(?1,'1') ON CONFLICT(key) DO UPDATE SET value=CAST(CAST(value AS INTEGER)+1 AS TEXT)",[store::GENERATION_KEY])?;
         tx.execute(
-            "UPDATE service_switch_operations SET stage='completed',completed_at=?2 WHERE id=?1",
+            "UPDATE service_operations SET status='completed',completed_at=?2 WHERE id=?1 AND operation_type='switch'",
             params![operation, store::now()],
         )?;
         tx.commit()?;
         Ok::<_, ManagerError>(())
     })();
     if let Err(error) = &result {
-        c.execute("UPDATE service_switch_operations SET stage='failed',error_message=?2,completed_at=?3 WHERE id=?1",params![operation,error.to_string(),store::now()])?;
+        c.execute("UPDATE service_operations SET status='failed',error_message=?2,completed_at=?3 WHERE id=?1 AND operation_type='switch'",params![operation,error.to_string(),store::now()])?;
     }
     c.execute(
         "UPDATE app_metadata SET value='1' WHERE key='service_provider:accepting'",
@@ -802,7 +802,8 @@ pub(crate) fn recover(paths: &AppPaths) -> Result<(), ManagerError> {
     c.execute("UPDATE service_gateway_tokens SET status='revoked',revoked_at=?1 WHERE instance_id IN
         (SELECT id FROM service_agent_instances WHERE config_path LIKE 'internal:%' OR config_path LIKE 'test:%')",[store::now()])?;
     c.execute("UPDATE service_agent_instances SET status='detached',sync_status='restored' WHERE config_path LIKE 'internal:%' OR config_path LIKE 'test:%'",[])?;
-    c.execute("UPDATE service_switch_operations SET stage='interrupted',error_message='应用退出导致切换中断',completed_at=?1 WHERE completed_at IS NULL",[store::now()])?;
+    c.execute("UPDATE service_operations SET status='interrupted',error_message='应用退出导致切换中断',completed_at=?1
+        WHERE operation_type='switch' AND completed_at IS NULL",[store::now()])?;
     c.execute(
         "UPDATE app_metadata SET value='1' WHERE key='service_provider:accepting'",
         [],

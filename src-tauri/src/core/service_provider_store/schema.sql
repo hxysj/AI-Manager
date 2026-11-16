@@ -14,6 +14,17 @@ CREATE TABLE IF NOT EXISTS service_provider_configs (
   deleted_at INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
+  account_id TEXT NOT NULL DEFAULT '',
+  account_email TEXT NOT NULL DEFAULT '',
+  credentials_ciphertext TEXT NOT NULL DEFAULT '',
+  token_expires_at INTEGER,
+  credential_generation INTEGER NOT NULL DEFAULT 0 CHECK(credential_generation>=0),
+  refresh_status TEXT NOT NULL DEFAULT '',
+  quota_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(quota_json)),
+  account_updated_at INTEGER,
+  account_metadata_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(account_metadata_json) AND json_type(account_metadata_json)='object'),
+  google_local_key_ciphertext TEXT NOT NULL DEFAULT '',
+  google_gateway_port INTEGER CHECK(google_gateway_port BETWEEN 1 AND 65535),
   CHECK(kind='api' OR upstream_protocol='responses')
 ) STRICT;
 CREATE TABLE IF NOT EXISTS service_provider_keys (
@@ -36,38 +47,6 @@ CREATE TABLE IF NOT EXISTS service_provider_keys (
 ) STRICT;
 CREATE UNIQUE INDEX IF NOT EXISTS service_keys_current ON service_provider_keys(provider_id,logical_id) WHERE is_current=1;
 CREATE UNIQUE INDEX IF NOT EXISTS service_keys_active ON service_provider_keys(provider_id) WHERE is_active=1;
-CREATE TABLE IF NOT EXISTS service_provider_accounts (
-  id TEXT PRIMARY KEY NOT NULL,
-  provider_id TEXT NOT NULL UNIQUE REFERENCES service_provider_configs(id) ON DELETE RESTRICT,
-  external_account_id TEXT NOT NULL,
-  email TEXT NOT NULL DEFAULT '',
-  access_ciphertext TEXT NOT NULL DEFAULT '',
-  refresh_ciphertext TEXT NOT NULL DEFAULT '',
-  id_ciphertext TEXT NOT NULL DEFAULT '',
-  expires_at INTEGER,
-  token_generation INTEGER NOT NULL DEFAULT 0,
-  refresh_status TEXT NOT NULL DEFAULT '',
-  quota_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(quota_json)),
-  revision INTEGER NOT NULL DEFAULT 1,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-) STRICT;
--- Google OAuth 与本地转发令牌独立加密，公开状态只读取身份及额度元数据。
-CREATE TABLE IF NOT EXISTS service_google_accounts (
-  provider_id TEXT PRIMARY KEY NOT NULL REFERENCES service_provider_configs(id) ON DELETE RESTRICT,
-  external_subject TEXT NOT NULL,
-  email TEXT NOT NULL DEFAULT '',
-  oauth_ciphertext TEXT NOT NULL,
-  local_key_ciphertext TEXT NOT NULL,
-  expires_at INTEGER,
-  gateway_port INTEGER NOT NULL CHECK(gateway_port BETWEEN 1 AND 65535),
-  metadata_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(metadata_json) AND json_type(metadata_json)='object'),
-  token_generation INTEGER NOT NULL DEFAULT 1 CHECK(token_generation>0),
-  revision INTEGER NOT NULL DEFAULT 1 CHECK(revision>0),
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
-) STRICT;
-CREATE UNIQUE INDEX IF NOT EXISTS service_google_subject ON service_google_accounts(external_subject);
 CREATE TABLE IF NOT EXISTS service_provider_models (
   id TEXT PRIMARY KEY NOT NULL,
   provider_id TEXT NOT NULL REFERENCES service_provider_configs(id) ON DELETE RESTRICT,
@@ -109,23 +88,41 @@ CREATE TABLE IF NOT EXISTS service_agent_model_routes (
   FOREIGN KEY(provider_id,model_id) REFERENCES service_provider_models(provider_id,id) ON DELETE RESTRICT,
   UNIQUE(provider_id,agent_type,client_model_name)
 ) STRICT;
-CREATE TABLE IF NOT EXISTS service_compatibility_tests (
+-- 迁移批次、模式切换和兼容性测试共用操作审计；类型约束防止不同操作互相更新。
+CREATE TABLE IF NOT EXISTS service_operations (
   id TEXT PRIMARY KEY NOT NULL,
-  provider_id TEXT NOT NULL,
-  agent_type TEXT NOT NULL,
-  model_id TEXT NOT NULL,
-  provider_revision INTEGER NOT NULL,
-  agent_version TEXT NOT NULL,
+  operation_type TEXT NOT NULL CHECK(operation_type IN ('migration','switch','compatibility')),
+  status TEXT NOT NULL,
+  error_message TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  completed_at INTEGER,
+  source_schema TEXT NOT NULL DEFAULT '',
+  from_backend TEXT CHECK(from_backend IN ('legacy','service')),
+  to_backend TEXT CHECK(to_backend IN ('legacy','service')),
+  generation INTEGER,
+  provider_id TEXT,
+  agent_type TEXT,
+  model_id TEXT,
+  provider_revision INTEGER,
+  agent_version TEXT NOT NULL DEFAULT '',
   adapter_version INTEGER NOT NULL DEFAULT 1,
-  client_protocol TEXT NOT NULL,
-  upstream_protocol TEXT NOT NULL,
-  capability TEXT NOT NULL,
-  status TEXT NOT NULL CHECK(status IN ('passed','failed','unsupported')),
-  evidence_json TEXT NOT NULL CHECK(json_valid(evidence_json)),
-  tested_at INTEGER NOT NULL,
+  client_protocol TEXT NOT NULL DEFAULT '',
+  upstream_protocol TEXT NOT NULL DEFAULT '',
+  capability TEXT NOT NULL DEFAULT '',
+  evidence_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(evidence_json)),
+  UNIQUE(id,operation_type),
+  CHECK(
+    (operation_type='migration' AND status IN ('running','completed','failed')) OR
+    (operation_type='switch' AND status IN ('preparing','completed','failed','interrupted')
+      AND from_backend IS NOT NULL AND to_backend IS NOT NULL AND generation IS NOT NULL) OR
+    (operation_type='compatibility' AND status IN ('passed','failed','unsupported')
+      AND provider_id IS NOT NULL AND agent_type IS NOT NULL AND model_id IS NOT NULL
+      AND provider_revision IS NOT NULL AND completed_at IS NOT NULL)
+  ),
   FOREIGN KEY(provider_id,agent_type) REFERENCES service_provider_agent_bindings(provider_id,agent_type) ON DELETE RESTRICT,
   FOREIGN KEY(provider_id,model_id) REFERENCES service_provider_models(provider_id,id) ON DELETE RESTRICT
 ) STRICT;
+CREATE INDEX IF NOT EXISTS service_operations_recent ON service_operations(operation_type,created_at DESC,id);
 CREATE TABLE IF NOT EXISTS service_agent_instances (
   id TEXT PRIMARY KEY NOT NULL,
   agent_type TEXT NOT NULL CHECK(length(agent_type)>0),
@@ -162,16 +159,6 @@ CREATE TABLE IF NOT EXISTS service_gateway_tokens (
   revoked_at INTEGER
 ) STRICT;
 CREATE UNIQUE INDEX IF NOT EXISTS service_token_current ON service_gateway_tokens(instance_id) WHERE status='active';
-CREATE TABLE IF NOT EXISTS service_switch_operations (
-  id TEXT PRIMARY KEY NOT NULL,
-  from_backend TEXT NOT NULL CHECK(from_backend IN ('legacy','service')),
-  to_backend TEXT NOT NULL CHECK(to_backend IN ('legacy','service')),
-  generation INTEGER NOT NULL,
-  stage TEXT NOT NULL,
-  error_message TEXT NOT NULL DEFAULT '',
-  created_at INTEGER NOT NULL,
-  completed_at INTEGER
-) STRICT;
 CREATE TABLE IF NOT EXISTS service_managed_files (
   id TEXT PRIMARY KEY NOT NULL,
   operation_id TEXT NOT NULL,
@@ -209,7 +196,7 @@ CREATE TABLE IF NOT EXISTS service_gateway_requests (
 ) STRICT;
 CREATE INDEX IF NOT EXISTS service_requests_created ON service_gateway_requests(created_at);
 -- 仅保存可观测的 Skill 事件及请求关联，不保存提示词、工具参数或会话正文。
--- 纯新增表，保持 schema v3 的已有表结构和旧版本回退兼容。
+-- Skill 事件独立于账号存储升级，旧 Usage 历史继续保留。
 CREATE TABLE IF NOT EXISTS service_gateway_skill_events (
   id TEXT PRIMARY KEY NOT NULL,
   scope_hash TEXT NOT NULL,
@@ -260,26 +247,21 @@ CREATE TABLE IF NOT EXISTS service_gateway_attempts (
   UNIQUE(request_id,attempt_no),
   FOREIGN KEY(provider_id,model_id) REFERENCES service_provider_models(provider_id,id) ON DELETE RESTRICT
 ) STRICT;
-CREATE TABLE IF NOT EXISTS service_provider_migrations (
-  id TEXT PRIMARY KEY NOT NULL,
-  source_schema TEXT NOT NULL,
-  status TEXT NOT NULL CHECK(status IN ('running','completed','failed')),
-  created_at INTEGER NOT NULL,
-  completed_at INTEGER,
-  error_message TEXT NOT NULL DEFAULT ''
-) STRICT;
 CREATE TABLE IF NOT EXISTS service_provider_migration_items (
   id TEXT PRIMARY KEY NOT NULL,
-  migration_id TEXT NOT NULL REFERENCES service_provider_migrations(id) ON DELETE RESTRICT,
+  migration_id TEXT NOT NULL,
+  migration_type TEXT NOT NULL DEFAULT 'migration' CHECK(migration_type='migration'),
   source_table TEXT NOT NULL,
   source_id TEXT NOT NULL,
   source_fingerprint TEXT NOT NULL,
   target_id TEXT,
   status TEXT NOT NULL CHECK(status IN ('copied','skipped','unreadable','already_copied')),
   reason TEXT NOT NULL DEFAULT '',
-  UNIQUE(migration_id,source_table,source_id)
+  UNIQUE(migration_id,source_table,source_id),
+  FOREIGN KEY(migration_id,migration_type) REFERENCES service_operations(id,operation_type) ON DELETE RESTRICT
 ) STRICT;
 CREATE UNIQUE INDEX IF NOT EXISTS service_migration_source ON service_provider_migration_items(source_table,source_id) WHERE status IN ('copied','unreadable');
+CREATE UNIQUE INDEX IF NOT EXISTS service_config_google_subject ON service_provider_configs(account_id) WHERE kind='google_account' AND account_id<>'';
 -- 新采集器上线前的 Skill 历史继续保留；回滚扫描时据此排除新模式时段的重复事件。
 INSERT OR IGNORE INTO app_metadata(key,value) VALUES(
   'service_gateway:skills_started_at',CAST(round((julianday('now')-2440587.5)*86400000) AS TEXT)
