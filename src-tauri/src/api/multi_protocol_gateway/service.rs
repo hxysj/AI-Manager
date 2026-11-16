@@ -162,10 +162,10 @@ pub(super) fn resolve(
             auth_field: String::new(),
             headers: config["headers"].clone(),
             cli: agent.into(),
-            kind: if config["kind"] == "codex_account" {
-                TargetKind::CodexAccount
-            } else {
-                TargetKind::Provider
+            kind: match store::text(&config, "kind") {
+                "codex_account" => TargetKind::CodexAccount,
+                "google_account" => TargetKind::GoogleAccount,
+                _ => TargetKind::Provider,
             },
         },
         model,
@@ -316,6 +316,14 @@ pub(super) async fn target_auth(
             key_id: target.id.clone(),
             account_id: store::text(&auth, "accountId").into(),
         })
+    } else if target.kind == TargetKind::GoogleAccount {
+        let provider = crate::api::google_account::find_account(paths, &target.id)?;
+        crate::api::google_gateway::ensure_started(paths, &provider).await?;
+        Ok(TargetAuth {
+            token: store::google_local_key(&database::open(paths)?, &target.id)?,
+            key_id: target.id.clone(),
+            account_id: String::new(),
+        })
     } else {
         let key = store::credential(&database::open(paths)?, &target.id)?;
         Ok(TargetAuth {
@@ -375,6 +383,13 @@ pub(super) fn start_attempt(
             store::text(&row, "email").to_string(),
             String::new(),
         )
+    } else if target.kind == TargetKind::GoogleAccount {
+        if store::google_local_key(&tx, &target.id)? != auth.token {
+            return Err(store::fail("Google 转发凭据已变化，请重试"));
+        }
+        let row = store::query(&tx, "SELECT email,token_generation FROM service_google_accounts WHERE provider_id=?1", &[&target.id])?
+            .pop().ok_or_else(|| store::fail("Google 账号不存在"))?;
+        (format!("google:{}:{}", target.id, row["token_generation"]), store::text(&row, "email").into(), String::new())
     } else {
         let row = store::credential(&tx, &target.id)?;
         if store::text(&row, "id") != auth.key_id || store::text(&row, "secret") != auth.token {
@@ -501,10 +516,10 @@ fn configured_target(
             headers: config["headers"].clone(),
             auth_field: String::new(),
             cli: String::new(),
-            kind: if config["kind"] == "codex_account" {
-                TargetKind::CodexAccount
-            } else {
-                TargetKind::Provider
+            kind: match store::text(&config, "kind") {
+                "codex_account" => TargetKind::CodexAccount,
+                "google_account" => TargetKind::GoogleAccount,
+                _ => TargetKind::Provider,
             },
         },
         config["revision"].as_i64().unwrap_or(0),
@@ -513,6 +528,10 @@ fn configured_target(
 
 pub async fn fetch_models(paths: &AppPaths, value: &Value) -> Result<Value, ManagerError> {
     let (target, revision) = configured_target(paths, store::text(value, "providerId"))?;
+    if target.kind == TargetKind::GoogleAccount {
+        crate::api::google_account::refresh(paths, &target.id).await?;
+        return store::state(paths);
+    }
     let auth = target_auth(paths, &target).await?;
     let client = target_client(&target)?;
     let mut headers = HeaderMap::new();

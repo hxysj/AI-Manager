@@ -8,12 +8,13 @@ import {
   parse
 } from "@vue/compiler-sfc"
 import { transformSync } from "esbuild"
-import { createSSRApp, h, nextTick, reactive } from "vue"
+import { createRenderer, createSSRApp, h, nextTick, reactive } from "vue"
 import { renderToString } from "@vue/server-renderer"
 
 const require = createRequire(import.meta.url)
 const files = [
   "src/App.vue",
+  "src/components/AppSidebar.vue",
   "src/components/QuickSwitchPanel.vue",
   "src/features/providers/components/ServiceProviderCenter.vue",
   "src/features/providers/components/ProviderIconPicker.vue",
@@ -69,7 +70,11 @@ for (const filename of files) {
       `${script.content}\n${template.code}\n__component.render = render\nexport default __component`,
       { format: "cjs" }
     ).code
-  } else if (/ProviderIconPicker|ProviderModelListEditor|ServiceAgentModelFields/.test(filename)) {
+  } else if (
+    /ProviderIconPicker|ProviderModelListEditor|ServiceAgentModelFields/.test(
+      filename
+    )
+  ) {
     editorComponents.set(
       filename.split("/").pop(),
       transformSync(
@@ -188,9 +193,16 @@ let state = {
 const calls = []
 const messages = []
 let failState = false
+let failSave = false
 let detailOverride = {}
+let quotaHandler
+let googleStateHandler
 const invoke = async (action, payload) => {
   calls.push({ action, payload })
+  if (action === "refresh-quota" && quotaHandler) return quotaHandler(payload)
+  if (action === "google-login-state" && googleStateHandler) return googleStateHandler()
+  if (["save", "configure-agent"].includes(action) && failSave)
+    throw new Error("配置已被修改，请刷新后重试")
   if (action === "state") {
     if (failState) throw new Error("状态读取失败")
     return state
@@ -239,6 +251,9 @@ const invoke = async (action, payload) => {
     }
     throw new Error("恢复文件冲突")
   }
+  if (action === "save") return { id: payload.id || `new-${payload.kind}` }
+  if (action === "google-login")
+    return { status: "pending", message: "等待授权" }
   return {}
 }
 const localRequire = (name) => {
@@ -305,10 +320,24 @@ const Center = module.exports.default
 const runtimeConfigSchemas = {
   codex: {
     optionFields: [
-      { key: "modelContextWindowEnabled", label: "1M 上下文窗口", type: "boolean" },
-      { key: "modelAutoCompactTokenLimit", label: "压缩阈值", type: "number", dependsOn: "modelContextWindowEnabled" },
+      {
+        key: "modelContextWindowEnabled",
+        label: "1M 上下文窗口",
+        type: "boolean"
+      },
+      {
+        key: "modelAutoCompactTokenLimit",
+        label: "压缩阈值",
+        type: "number",
+        dependsOn: "modelContextWindowEnabled"
+      },
       { key: "serviceTierFast", label: "开启 Fast 模式", type: "boolean" },
-      { key: "modelReasoningEffort", label: "思考强度", type: "select", options: ["low", "medium", "high", "xhigh"] }
+      {
+        key: "modelReasoningEffort",
+        label: "思考强度",
+        type: "select",
+        options: ["low", "medium", "high", "xhigh"]
+      }
     ]
   },
   claude: {
@@ -320,6 +349,17 @@ const runtimeConfigSchemas = {
     ]
   }
 }
+const cliTargets = [
+  {
+    id: "codex",
+    installed: true,
+    icon: "codex.svg",
+    configPath: "D:/test-codex",
+    version: "test"
+  },
+  { id: "claude", installed: true, configPath: "D:/test-claude" },
+  { id: "claude-desktop", installed: false }
+]
 let bindings
 const app = createSSRApp(
   {
@@ -332,37 +372,24 @@ const app = createSSRApp(
   {
     initialState: state,
     runtimeConfigSchemas,
-    cliTargets: [{ id: "codex", configPath: "D:/test-codex", version: "test" }]
+    cliTargets
   }
 )
 const failures = []
 app.config.errorHandler = (error) => failures.push(error)
 const html = await renderToString(app)
 assert.deepEqual(failures, [])
+assert.ok(html.includes("Agent 列表") && html.includes("agent-card"))
+assert.ok(html.includes("Codex") && html.includes("Claude Code"))
+assert.ok(!html.includes('aria-label="配置 Claude Desktop"'))
+assert.ok(html.includes('aria-label="配置 Codex"'))
 assert.ok(
-  html.includes("统一服务商") &&
-    html.includes("provider-avatar") &&
-    html.includes("icon-actions")
+  !html.includes('aria-label="新增服务商"') && !html.includes("显示停用项")
 )
-assert.ok(html.includes("管理 API Key") && html.includes("查看详情"))
-assert.ok(html.includes('data-provider-icon="alibabacloud.svg"'))
+assert.ok(!html.includes("provider-avatar") && !html.includes("内置会话"))
 assert.ok(
-  !html.includes("网关统计") &&
-    !html.includes("外部工具") &&
-    !html.includes("服务商配置中心")
-)
-assert.ok(!html.includes("内置会话"))
-assert.ok(
-  html.includes("可用") &&
-    !html.includes("未启用") &&
-    !html.includes("取消使用")
-)
-assert.ok(
-  !html.includes("provider-enable") && !html.includes("provider-card-active")
-)
-assert.ok(
-  !/<button\b[^>]*>\s*(?:复制旧 Codex 配置|启用新模式|回滚旧模式)\s*<\/button>/u.test(
-    html
+  !readFileSync("src/components/AppSidebar.vue", "utf8").includes(
+    "Detected CLI"
   )
 )
 const renderCenter = async (initialState, configure) => {
@@ -371,14 +398,31 @@ const renderCenter = async (initialState, configure) => {
       ...Center,
       setup(props, context) {
         const value = Center.setup(props, context)
+        value.providerTab.value = "api"
         configure?.(value)
         return value
       }
     },
-    { initialState, runtimeConfigSchemas }
+    { initialState, runtimeConfigSchemas, cliTargets }
   )
   return renderToString(app)
 }
+const providerHtml = await renderCenter(state)
+assert.ok(
+  providerHtml.includes("统一服务商") &&
+    providerHtml.includes("provider-avatar")
+)
+assert.ok(
+  providerHtml.includes("管理 API Key") && providerHtml.includes("查看详情")
+)
+assert.ok(providerHtml.includes('data-provider-icon="alibabacloud.svg"'))
+assert.ok(
+  providerHtml.includes('aria-label="新增服务商"') &&
+    providerHtml.includes("显示停用项")
+)
+assert.ok(
+  !providerHtml.includes("state-pill") && !providerHtml.includes("Agent 配置")
+)
 const managerHtml = await renderCenter(state, (value) => {
   value.showGatewayManager.value = true
 })
@@ -420,7 +464,9 @@ const listState = {
     }
   ]
 }
-const listHtml = await renderCenter(listState)
+const listHtml = await renderCenter(listState, (value) => {
+  value.providerTab.value = "codex_account"
+})
 assert.ok(
   listHtml.includes("official@example.test") && listHtml.includes("75%")
 )
@@ -442,10 +488,15 @@ assert.ok(officialDetailHtml.includes("使用官方模型列表"))
 assert.ok(!officialDetailHtml.includes("获取模型"))
 assert.ok(!officialDetailHtml.includes("尚未配置模型"))
 const customIcon = "data:image/png;base64,aWNvbg=="
-const customIconHtml = await renderCenter({
-  ...listState,
-  providers: [{ ...official, icon: customIcon }]
-})
+const customIconHtml = await renderCenter(
+  {
+    ...listState,
+    providers: [{ ...official, icon: customIcon }]
+  },
+  (value) => {
+    value.providerTab.value = "codex_account"
+  }
+)
 assert.ok(customIconHtml.includes(`data-provider-icon="${customIcon}"`))
 const noIconHtml = await renderCenter({
   ...state,
@@ -456,7 +507,9 @@ const disabledHtml = await renderCenter(listState, (value) => {
   value.showDisabledItems.value = true
 })
 assert.ok(disabledHtml.includes("已禁用服务商"))
-assert.ok(disabledHtml.includes("已停用") && disabledHtml.includes("恢复可用"))
+assert.ok(
+  !disabledHtml.includes("state-pill") && disabledHtml.includes("恢复可用")
+)
 const keysHtml = await renderCenter(state, (value) => {
   value.openProviderDetail(state.providers[0], "keys")
 })
@@ -476,11 +529,12 @@ const instance = {
   providerId: "p",
   agentType: "codex",
   configPath: "D:/test-codex",
-  status: "active"
+  status: "active",
+  syncStatus: "synced"
 }
 const activeHtml = await renderCenter({ ...state, instances: [instance] })
 assert.ok(
-  activeHtml.includes("可用") &&
+  activeHtml.includes("running-agent-tag") &&
     !activeHtml.includes("取消使用") &&
     !activeHtml.includes("provider-card-active")
 )
@@ -521,16 +575,48 @@ assert.equal(bindings.showGatewayManager.value, false)
 const editHtml = await renderCenter(state, (value) => {
   value.form.value = bindings.form.value
 })
-assert.ok(editHtml.includes("选择服务商图标") && editHtml.includes("模型列表"))
 assert.ok(
-  editHtml.includes("同步模型列表") && !editHtml.includes("恢复默认模型")
+  editHtml.includes("选择服务商图标") && editHtml.includes("服务商模型目录")
 )
-assert.ok(editHtml.includes("1M 上下文窗口") && editHtml.includes("思考强度"))
-assert.ok(!editHtml.includes("Haiku 默认模型") && !editHtml.includes("子 Agent 模型"))
+assert.ok(
+  !editHtml.includes("同步模型列表") && !editHtml.includes("agent-fields")
+)
+assert.ok(!editHtml.includes("1M 上下文窗口") && !editHtml.includes("思考强度"))
+assert.ok(
+  !editHtml.includes("Haiku 默认模型") && !editHtml.includes("子 Agent 模型")
+)
+assert.ok(editHtml.includes("获取上游模型") && editHtml.includes("批量编辑"))
+bindings.agentConfig.value = cliTargets[0]
+bindings.agentProviderId.value = "p"
+await bindings.selectAgentProvider()
+assert.equal(bindings.editorSection.value, "agent")
+const codexAgentHtml = await renderCenter(state, (value) => {
+  value.form.value = bindings.form.value
+  value.editorSection.value = "agent"
+  value.agentConfig.value = cliTargets[0]
+  value.agentProviderId.value = "p"
+})
+assert.ok(
+  codexAgentHtml.includes("保存并应用") &&
+    codexAgentHtml.includes("agent-model-fields")
+)
+assert.ok(
+  codexAgentHtml.includes("1M 上下文窗口") &&
+    codexAgentHtml.includes("思考强度")
+)
+for (const forbidden of [
+  "选择服务商图标",
+  "基础地址",
+  "请求头 JSON",
+  "模型别名 JSON",
+  "获取上游模型",
+  "批量编辑"
+])
+  assert.ok(!codexAgentHtml.includes(forbidden), forbidden)
 assert.equal(bindings.form.value.bindings[0].options.syncModelList, true)
 assert.equal(bindings.form.value.bindings[0].options.modelList, undefined)
-const codexSection = editHtml
-  .slice(editHtml.indexOf('data-agent="codex"'))
+const codexSection = codexAgentHtml
+  .slice(codexAgentHtml.indexOf('data-agent="codex"'))
   .split("</fieldset>")[0]
 assert.ok(codexSection.includes('title="upstream-model"'))
 assert.ok(!codexSection.includes("暂无自定义模型"))
@@ -541,10 +627,12 @@ for (const forbidden of [
   "provider-model-add",
   "批量编辑",
   "获取上游模型"
-]) assert.ok(!codexSection.includes(forbidden), forbidden)
-assert.ok(codexSection.includes("服务商模型列表") && codexSection.includes("1 个"))
+])
+  assert.ok(!codexSection.includes(forbidden), forbidden)
+assert.ok(
+  codexSection.includes("服务商模型列表") && codexSection.includes("1 个")
+)
 assert.ok(codexSection.includes("同步模型列表"))
-assert.ok(editHtml.includes("获取上游模型") && editHtml.includes("批量编辑"))
 const officialEditHtml = await renderCenter(state, (value) => {
   value.form.value = { ...bindings.form.value, kind: "codex_account" }
 })
@@ -553,26 +641,91 @@ assert.ok(!officialEditHtml.includes("provider-model-editor"))
 assert.ok(!officialEditHtml.includes("同步模型列表"))
 assert.ok(!officialEditHtml.includes("获取上游模型"))
 assert.ok(!officialEditHtml.includes("模型详情 JSON"))
-assert.ok(officialEditHtml.includes("思考强度"))
+assert.ok(!officialEditHtml.includes("思考强度"))
+const officialAgentHtml = await renderCenter(
+  {
+    ...state,
+    providers: [official]
+  },
+  (value) => {
+    value.form.value = { ...bindings.form.value, kind: "codex_account" }
+    value.editorSection.value = "agent"
+    value.agentConfig.value = cliTargets[0]
+    value.agentProviderId.value = "p"
+  }
+)
+assert.ok(
+  officialAgentHtml.includes("使用来源") &&
+    officialAgentHtml.includes("思考强度")
+)
+assert.ok(officialAgentHtml.includes("使用官方模型列表"))
+for (const forbidden of [
+  "provider-model-editor",
+  "同步模型列表",
+  "获取上游模型",
+  "模型详情 JSON"
+])
+  assert.ok(!officialAgentHtml.includes(forbidden), forbidden)
 // 各 Agent 展开自己的规则，保留独立参数并共用服务商模型目录。
 bindings.form.value.bindings[0].options.syncModelList = false
 bindings.form.value.bindings[1].enabled = true
-bindings.form.value.bindings[1].options = { haikuModel: "upstream-model", sonnetModel: "", opusModel: "upstream-model", subagentModel: "" }
+bindings.form.value.bindings[1].options = {
+  haikuModel: "upstream-model",
+  sonnetModel: "",
+  opusModel: "upstream-model",
+  subagentModel: ""
+}
 bindings.form.value.bindings[2].enabled = true
 bindings.form.value.bindings[2].options = {
-  modelMappings: { "claude-fable-5": { model: "upstream-model", labelOverride: "自定义 Fable", supports1m: true } }
+  modelMappings: {
+    "claude-fable-5": {
+      model: "upstream-model",
+      labelOverride: "自定义 Fable",
+      supports1m: true
+    }
+  }
 }
-const agentHtml = await renderCenter({
-  ...state,
-  desktopModelRoutes: [
-    { id: "claude-sonnet-4-6", label: "Sonnet" },
-    { id: "claude-opus-4-8", label: "Opus" },
-    { id: "claude-fable-5", label: "Fable" },
-    { id: "claude-haiku-4-5", label: "Haiku" }
-  ]
-}, (value) => { value.form.value = bindings.form.value })
-assert.ok(agentHtml.includes("Haiku 默认模型") && agentHtml.includes("子 Agent 模型"))
-assert.ok(agentHtml.includes("Fable 模型") && agentHtml.includes("自定义 Fable"))
+const agentHtml = await renderCenter(
+  {
+    ...state,
+    desktopModelRoutes: [
+      { id: "claude-sonnet-4-6", label: "Sonnet" },
+      { id: "claude-opus-4-8", label: "Opus" },
+      { id: "claude-fable-5", label: "Fable" },
+      { id: "claude-haiku-4-5", label: "Haiku" }
+    ]
+  },
+  (value) => {
+    value.form.value = bindings.form.value
+    value.editorSection.value = "agent"
+    value.agentConfig.value = cliTargets[0]
+    value.agentProviderId.value = "p"
+  }
+)
+const claudeHtml = await renderCenter(state, (value) => {
+  value.form.value = bindings.form.value
+  value.editorSection.value = "agent"
+  value.agentConfig.value = cliTargets[1]
+  value.agentProviderId.value = "p"
+})
+assert.ok(
+  claudeHtml.includes("Haiku 默认模型") && claudeHtml.includes("子 Agent 模型")
+)
+assert.ok(
+  !claudeHtml.includes("同步模型列表") && !claudeHtml.includes("思考强度")
+)
+const desktopHtml = await renderCenter(
+  { ...state, desktopModelRoutes: [{ id: "claude-fable-5", label: "Fable" }] },
+  (value) => {
+    value.form.value = bindings.form.value
+    value.editorSection.value = "agent"
+    value.agentConfig.value = { id: "claude-desktop" }
+    value.agentProviderId.value = "p"
+  }
+)
+assert.ok(
+  desktopHtml.includes("Fable 模型") && desktopHtml.includes("自定义 Fable")
+)
 bindings.form.value.bindings[2].enabled = false
 const AgentFields = editorModules.get("ServiceAgentModelFields.vue").default
 const agentProps = reactive({
@@ -591,6 +744,7 @@ const agentFields = AgentFields.setup(agentProps, {
   }
 })
 assert.equal(agentFields.modelNames.value, "upstream-model")
+bindings.editorSection.value = "provider"
 bindings.updateDraftModelNames("upstream-model, shared-added;shared-added")
 agentProps.models = bindings.draftModels.value.filter((item) => item.enabled)
 assert.equal(agentFields.modelNames.value, "upstream-model\nshared-added")
@@ -611,27 +765,31 @@ readonlyEditor.addModels()
 readonlyEditor.removeModel("upstream-model")
 readonlyEditor.resetModels()
 assert.deepEqual(readonlyEvents, [])
-const emptyCodexHtml = await renderToString(createSSRApp(AgentFields, {
-  modelValue: agentProps.modelValue,
-  models: []
-}))
+const emptyCodexHtml = await renderToString(
+  createSSRApp(AgentFields, {
+    modelValue: agentProps.modelValue,
+    models: []
+  })
+)
 assert.ok(emptyCodexHtml.includes("请在服务商模型目录中配置可用模型。"))
 assert.ok(!emptyCodexHtml.includes("获取上游模型"))
-const oldReadonlyHtml = await renderToString(createSSRApp(ModelListEditor, {
-  modelValue: "upstream-model", readonly: true
-}))
+const oldReadonlyHtml = await renderToString(
+  createSSRApp(ModelListEditor, {
+    modelValue: "upstream-model",
+    readonly: true
+  })
+)
 assert.ok(!oldReadonlyHtml.includes("provider-model-toolbar"))
 assert.ok(!oldReadonlyHtml.includes("同步模型列表"))
 const ruleProps = reactive({
   modelValue: {
-    agentType: "codex", defaultModelName: "gpt-5.6-sol",
+    agentType: "codex",
+    defaultModelName: "gpt-5.6-sol",
     options: { modelReasoningEffort: "ultra" }
   },
   models: [{ upstreamModelId: "gpt-5.6-sol" }],
   schema: runtimeConfigSchemas.codex,
-  desktopRoutes: [
-    { id: "claude-sonnet-4-6" }, { id: "claude-fable-5" }
-  ]
+  desktopRoutes: [{ id: "claude-sonnet-4-6" }, { id: "claude-fable-5" }]
 })
 const ruleFields = AgentFields.setup(ruleProps, {
   expose() {},
@@ -654,7 +812,11 @@ assert.equal(ruleProps.modelValue.options.modelReasoningEffort, "low")
 assert.ok(!ruleFields.optionValues(effortField).includes("ultra"))
 ruleProps.modelValue = {
   agentType: "claude-desktop",
-  options: { modelMappings: { "claude-fable-5": { model: "upstream-model", supports1m: true } } }
+  options: {
+    modelMappings: {
+      "claude-fable-5": { model: "upstream-model", supports1m: true }
+    }
+  }
 }
 assert.equal(ruleFields.desktopSupports1m("claude-sonnet-4-6"), true)
 ruleFields.updateDesktop("claude-sonnet-4-6", "supports1m", false)
@@ -684,7 +846,10 @@ assert.equal(saved.bindings[0].defaultModelName, "new-model")
 assert.equal(saved.bindings[0].options.syncModelList, false)
 assert.equal(saved.bindings[0].options.modelList, undefined)
 assert.equal(saved.bindings[2].enabled, false)
-assert.equal(saved.bindings[2].options.modelMappings["claude-fable-5"].labelOverride, "自定义 Fable")
+assert.equal(
+  saved.bindings[2].options.modelMappings["claude-fable-5"].labelOverride,
+  "自定义 Fable"
+)
 assert.equal(saved.keyLogicalId, "production")
 assert.equal(saved.apiKey, "replacement-key")
 assert.equal(
@@ -695,14 +860,69 @@ assert.equal(saved.routes[0].modelId, "m")
 assert.equal(saved.revision, 7)
 assert.equal(saved.icon, customIcon)
 assert.equal(bindings.form.value, null)
-const disabledAgentHtml = await renderCenter(state, (value) => {
-  value.form.value = {
-    ...saved,
-    modelsJson: JSON.stringify(saved.models),
-    bindings: saved.bindings.map((item) => ({ ...item, enabled: false }))
-  }
+// 单个 Agent 独立选择来源，取消不污染状态，失败保留草稿。
+const originalBindings = JSON.stringify(state.bindings)
+await bindings.openAgentConfig(cliTargets[0])
+assert.equal(bindings.agentProviderId.value, "")
+bindings.agentProviderId.value = "p"
+await bindings.selectAgentProvider()
+bindings.form.value.bindings[0].options.syncModelList = false
+bindings.closeAgentConfig()
+assert.equal(JSON.stringify(state.bindings), originalBindings)
+await bindings.openAgentConfig(cliTargets[0])
+bindings.agentProviderId.value = "p"
+await bindings.selectAgentProvider()
+assert.equal(bindings.form.value.bindings[0].enabled, true)
+bindings.form.value.bindings[0].options.syncModelList = false
+const agentDraft = bindings.form.value
+failSave = true
+calls.length = 0
+await bindings.saveAgentConfig()
+assert.equal(bindings.form.value, agentDraft)
+assert.equal(bindings.editorSection.value, "agent")
+assert.equal(bindings.busy.value, false)
+failSave = false
+await bindings.saveAgentConfig()
+const savedAgent = calls
+  .filter((item) => item.action === "configure-agent")
+  .at(-1).payload
+assert.deepEqual(savedAgent, {
+  agentType: "codex",
+  providerId: "p",
+  revision: 7,
+  defaultModelName: "upstream-model",
+  options: agentDraft.bindings[0].options
 })
-assert.ok(!disabledAgentHtml.includes("同步模型列表") && !disabledAgentHtml.includes("Haiku 默认模型"))
+assert.equal(JSON.stringify(state.bindings), originalBindings)
+assert.equal(bindings.form.value, null)
+assert.equal(bindings.agentConfig.value, null)
+await bindings.openAgentConfig(cliTargets[0])
+await bindings.saveAgentConfig()
+assert.equal(
+  calls.filter((item) => item.action === "configure-agent").at(-1).payload
+    .providerId,
+  ""
+)
+const sourceHtml = await renderCenter(listState, (value) => {
+  value.editorSection.value = "agent"
+  value.agentConfig.value = cliTargets[0]
+})
+assert.ok(!sourceHtml.includes('value="disabled"'))
+assert.ok(!sourceHtml.includes("（已禁用）"))
+assert.ok(!sourceHtml.includes('label="Google 账号"'))
+const uncredentialedSourceHtml = await renderCenter({
+  ...listState,
+  providers: [...listState.providers, {
+    id: "uncredentialed", name: "待配置", kind: "google_account", enabled: 1, hasCredential: 0
+  }]
+}, value => { value.agentConfig.value = cliTargets[0] })
+assert.match(uncredentialedSourceHtml, /value="uncredentialed" disabled/)
+const optionsHtml = await renderCenter(state, (value) => {
+  value.showCreateOptions.value = true
+})
+for (const label of ["API 服务商", "GPT / Codex 官方账号", "Google 账号"])
+  assert.ok(optionsHtml.includes(label))
+calls.length = 0
 // 模型获取合并新目录，保留尚未保存的模型和价格；连接信息未保存时不调用旧上游。
 await bindings.editProvider(state.providers[0])
 bindings.updateDraftModelNames("upstream-model\nlocal-draft")
@@ -719,47 +939,54 @@ assert.equal(
   bindings.draftModels.value.find((item) => item.id === "m").inputPriceMicros,
   2000000
 )
-const fetchedCodexHtml = await renderToString(createSSRApp(AgentFields, {
-  modelValue: bindings.form.value.bindings[0],
-  models: bindings.draftModels.value.filter((item) => item.enabled),
-  schema: runtimeConfigSchemas.codex
-}))
+const fetchedCodexHtml = await renderToString(
+  createSSRApp(AgentFields, {
+    modelValue: bindings.form.value.bindings[0],
+    models: bindings.draftModels.value.filter((item) => item.enabled),
+    schema: runtimeConfigSchemas.codex
+  })
+)
 assert.ok(fetchedCodexHtml.includes('title="fetched-model"'))
 assert.ok(fetchedCodexHtml.includes('title="local-draft"'))
 for (const agentType of ["claude", "claude-desktop"]) {
-  const sharedHtml = await renderToString(createSSRApp(AgentFields, {
-    modelValue: bindings.form.value.bindings.find((item) => item.agentType === agentType),
-    models: bindings.draftModels.value.filter((item) => item.enabled),
-    schema: runtimeConfigSchemas[agentType] || {},
-    desktopRoutes: [{ id: "claude-fable-5", label: "Fable" }]
-  }))
+  const sharedHtml = await renderToString(
+    createSSRApp(AgentFields, {
+      modelValue: bindings.form.value.bindings.find(
+        (item) => item.agentType === agentType
+      ),
+      models: bindings.draftModels.value.filter((item) => item.enabled),
+      schema: runtimeConfigSchemas[agentType] || {},
+      desktopRoutes: [{ id: "claude-fable-5", label: "Fable" }]
+    })
+  )
   assert.ok(sharedHtml.includes('value="fetched-model"'))
 }
 bindings.form.value.bindings[0].options.syncModelList = true
 calls.length = 0
 await bindings.saveProvider()
-assert.equal(calls.find((item) => item.action === "save").payload.bindings[0].options.syncModelList, true)
+assert.equal(
+  calls.find((item) => item.action === "save").payload.bindings[0].options
+    .syncModelList,
+  true
+)
 await bindings.editProvider(state.providers[0])
 calls.length = 0
 bindings.form.value.baseUrl = "https://unsaved.test/v1"
 await bindings.fetchEditorModels()
 assert.ok(!calls.some((item) => item.action === "fetch-models"))
 bindings.form.value = null
-// 新建时可直接选择本次新增的模型，不需要先保存再编辑。
+// 新建先保存公共模型目录，再从 Agent 列表选择来源。
 await bindings.editProvider()
+assert.equal(bindings.editorSection.value, "provider")
 assert.equal(bindings.form.value.bindings[0].options.syncModelList, false)
 bindings.updateDraftModelNames("brand-new-model")
 bindings.form.value.name = "新服务商"
 bindings.form.value.baseUrl = "https://new.test/v1"
-bindings.form.value.bindings[0].enabled = true
-bindings.form.value.bindings[0].defaultModelName = "brand-new-model"
 calls.length = 0
 await bindings.saveProvider()
-assert.equal(
-  calls.find((item) => item.action === "save").payload.bindings[0]
-    .defaultModelName,
-  "brand-new-model"
-)
+const created = calls.find((item) => item.action === "save").payload
+assert.equal(created.models[0].upstreamModelId, "brand-new-model")
+assert.ok(created.bindings.every((item) => !item.enabled))
 await bindings.editProvider()
 bindings.form.value.kind = "codex_account"
 bindings.form.value.name = "新官方账号"
@@ -767,6 +994,29 @@ bindings.form.value.apiKey = "previous-api-draft"
 calls.length = 0
 await bindings.saveProvider()
 assert.equal(calls.find((item) => item.action === "save").payload.apiKey, "")
+assert.deepEqual(calls.find((item) => item.action === "login").payload, {
+  accountId: "new-codex_account", proxy: ""
+})
+await bindings.createSource(bindings.createSources.find((item) => item.kind === "google_account"))
+calls.length = 0
+await bindings.saveProvider()
+assert.deepEqual(calls.find((item) => item.action === "google-login").payload, {
+  providerId: "new-google_account", proxy: ""
+})
+assert.equal(bindings.googleLoginState.value.status, "pending")
+let releaseGoogleState
+googleStateHandler = () => new Promise((resolve) => { releaseGoogleState = resolve })
+const pendingGooglePoll = bindings.pollGoogleLogin()
+await bindings.cancelGoogleLogin()
+releaseGoogleState({ status: "pending" })
+await pendingGooglePoll
+googleStateHandler = undefined
+assert.equal(bindings.googleLoginState.value, null)
+await bindings.openToolConfig(state.providers[0])
+assert.equal(bindings.agentConfig.value.id, "gateway")
+await bindings.saveAgentConfig()
+assert.equal(calls.filter((item) => item.action === "configure-agent").at(-1).payload.agentType, "gateway")
+assert.equal(bindings.showGatewayManager.value, true)
 bindings.openApply(state.providers[0])
 assert.equal(bindings.applyForm.value.modelId, "m")
 assert.equal(bindings.applyForm.value.configPath, "D:/test-codex")
@@ -788,6 +1038,94 @@ assert.equal(
   false
 )
 assert.equal(bindings.busy.value, false)
+
+// 实际挂载验证：Agent/服务商页与来源弹框不查询额度；官方页按需查询、去重并在离开时停止余下任务。
+failState = false
+const previousState = state
+state = {
+  ...previousState,
+  providers: [
+    ...previousState.providers,
+    official,
+    { id: "google", name: "Google", kind: "google_account", enabled: 1, hasCredential: 1 },
+    { ...official, id: "disabled-account", enabled: 0 },
+    { ...official, id: "uncredentialed-account", hasCredential: 0 }
+  ]
+}
+const testRenderer = createRenderer({
+  createElement: () => ({}),
+  createComment: () => ({}),
+  createText: () => ({}),
+  insert() {},
+  remove() {},
+  parentNode: () => null,
+  nextSibling: () => null,
+  setText() {},
+  setElementText() {},
+  patchProp() {}
+})
+let liveBindings
+const liveApp = testRenderer.createApp({
+  setup(_, context) {
+    liveBindings = Center.setup({
+      initialState: state, cliTargets, runtimeConfigSchemas, loginState: null
+    }, context)
+    return () => null
+  }
+})
+const settle = async () => {
+  await nextTick()
+  await new Promise(setImmediate)
+}
+calls.length = 0
+liveApp.mount({})
+await settle()
+assert.ok(calls.some((item) => item.action === "refresh-agents"))
+assert.ok(!calls.some((item) => item.action === "refresh-quota"))
+liveBindings.providerTab.value = "api"
+await settle()
+await liveBindings.refresh()
+await liveBindings.openAgentConfig(cliTargets[0])
+liveBindings.agentProviderId.value = official.id
+await liveBindings.selectAgentProvider()
+liveBindings.closeAgentConfig()
+assert.ok(!calls.some((item) => item.action === "refresh-quota"))
+let releaseQuota
+quotaHandler = () => new Promise((resolve) => { releaseQuota = resolve })
+liveBindings.providerTab.value = "codex_account"
+await settle()
+assert.equal(calls.filter((item) => item.action === "refresh-quota").length, 1)
+const repeatedQuotaBatch = liveBindings.refreshOfficialQuotas()
+assert.equal(await liveBindings.refreshQuota(official), false)
+liveBindings.providerTab.value = "agents"
+releaseQuota({})
+await repeatedQuotaBatch
+await settle()
+assert.equal(calls.filter((item) => item.action === "refresh-quota").length, 1)
+quotaHandler = async ({ providerId }) => {
+  if (providerId === official.id) throw new Error("模拟额度接口失败")
+  return {}
+}
+calls.length = 0
+liveBindings.providerTab.value = "codex_account"
+await settle()
+assert.deepEqual(calls.filter((item) => item.action === "refresh-quota")
+  .map((item) => item.payload.providerId), [official.id, "google"])
+assert.equal(liveBindings.refreshingQuotaIds.value.size, 0)
+assert.ok(messages.some((message) => message.includes("模拟额度接口失败")))
+liveBindings.providerTab.value = "api"
+await settle()
+quotaHandler = () => new Promise((resolve) => { releaseQuota = resolve })
+calls.length = 0
+liveBindings.providerTab.value = "codex_account"
+await settle()
+const pendingQuotaBatch = liveBindings.refreshOfficialQuotas()
+liveApp.unmount()
+releaseQuota({})
+await pendingQuotaBatch
+assert.deepEqual(calls.map((item) => item.action), ["refresh-quota"])
+quotaHandler = undefined
+state = previousState
 
 // 模式入口位于系统设置；等待同步时阻止重复点击，失败保持旧模式，成功后显示后端新状态。
 const settingsModule = { exports: {} }

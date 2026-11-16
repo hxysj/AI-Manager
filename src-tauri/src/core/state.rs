@@ -613,6 +613,11 @@ impl ManagerState {
     ) -> Result<Value, ManagerError> {
         if let Some(action) = channel.strip_prefix("service-provider:") {
             let payload = payload.unwrap_or_else(|| json!({}));
+            if action == "refresh-agents" {
+                self.refresh_state().await?;
+                self.emit_state_changed(&app)?;
+                return Ok(self.state["serviceProviders"].clone());
+            }
             if action == "login" {
                 return codex_account::start_login(&app, &self.paths, &self.codex_login_cache,
                     &self.state["cliTargets"], payload).await;
@@ -620,8 +625,24 @@ impl ManagerState {
             if action == "cancel-login" {
                 return codex_account::cancel_login(&self.paths, &self.codex_login_cache).await;
             }
+            if matches!(action, "google-login" | "google-login-state" | "google-cancel-login") {
+                if !crate::core::service_provider_store::active(&self.paths)? {
+                    return Err(ManagerError::System("请先启用服务商配置中心".into()));
+                }
+                let result = match action {
+                    "google-login" => self.google_login.start(&app, &self.paths, payload).await?,
+                    "google-cancel-login" => self.google_login.cancel().await,
+                    _ => self.google_login.state().await,
+                };
+                if result["status"] == "success" {
+                    self.refresh_state().await?;
+                    self.emit_state_changed(&app)?;
+                }
+                return Ok(result);
+            }
             if action == "switch-backend" {
-                if self.codex_login_cache.state().await.is_some_and(|v|v["status"]=="pending") {
+                if self.codex_login_cache.state().await.is_some_and(|v|v["status"]=="pending")
+                    || self.google_login.state().await["status"] == "pending" {
                     return Err(ManagerError::System("官方登录尚未结束，请完成或取消登录后切换模式".into()));
                 }
                 let backend = payload["backend"].as_str().unwrap_or("");

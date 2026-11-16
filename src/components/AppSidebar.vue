@@ -65,53 +65,6 @@
         }}</span>
       </button>
     </el-scrollbar>
-
-    <section class="app-sidebar__section">
-      <div v-if="!collapsed" class="app-sidebar__section-header">
-        Detected CLI
-      </div>
-      <div class="app-sidebar__cli-list">
-        <article
-          v-for="cli in cliTargets"
-          :key="cli.id"
-          :class="[
-            'app-sidebar__cli-card',
-            { 'app-sidebar__cli-card--offline': !cli.installed }
-          ]"
-        >
-          <span class="app-sidebar__cli-icon">
-            <AiIcon
-              v-if="cli.icon"
-              class="app-sidebar__cli-icon-image"
-              :name="cli.icon"
-              :alt="`${cli.name} 图标`"
-            />
-            <span
-              v-else
-              class="app-sidebar__cli-swatch"
-              :style="{ background: colorMap[cli.id] || colorMap.default }"
-            ></span>
-          </span>
-          <div v-if="!collapsed" class="app-sidebar__cli-info">
-            <span data-emphasis>{{ cli.name }}</span>
-            <small>{{
-              cli.installed && cli.version
-                ? cli.version
-                : cli.installed
-                  ? "已检测"
-                  : "未安装"
-            }}</small>
-          </div>
-          <span
-            v-if="!collapsed"
-            :class="[
-              'app-sidebar__cli-dot',
-              { 'app-sidebar__cli-dot--offline': !cli.installed }
-            ]"
-          ></span>
-        </article>
-      </div>
-    </section>
   </aside>
 </template>
 
@@ -119,16 +72,11 @@
 import { Bot, Moon, Sun } from "lucide-vue-next"
 import { ElScrollbar } from "element-plus"
 import "element-plus/es/components/scrollbar/style/css"
-import AiIcon from "@/components/AiIcon.vue"
 import logoUrl from "@/assets/ai-manager-logo.png?url"
 
 defineProps({
   activeView: {
     type: String,
-    required: true
-  },
-  cliTargets: {
-    type: Array,
     required: true
   },
   collapsed: {
@@ -152,15 +100,6 @@ defineEmits([
   "title-click",
   "open-assistant"
 ])
-
-const colorMap = {
-  claude: "#c58f72",
-  codex: "#7d8aa3",
-  // 当前版本暂不启用 Gemini 和 OpenCode。
-  // gemini: '#9fb5d6',
-  // ['open' + 'code']: '#aaa3c7',
-  default: "#a8b0bd"
-}
 </script>
 
 <style scoped lang="less">
@@ -212,28 +151,6 @@ const colorMap = {
 
   &--collapsed &__nav-item--active::before {
     left: -8px;
-  }
-
-  &--collapsed &__section {
-    padding: 12px 0 14px;
-  }
-
-  &--collapsed &__cli-list {
-    align-items: center;
-    gap: 10px;
-  }
-
-  &--collapsed &__cli-card {
-    width: 38px;
-    height: 38px;
-    padding: 0;
-    border-color: transparent;
-    border-radius: 10px;
-    background: transparent;
-  }
-
-  &--collapsed &__cli-card:hover {
-    background: var(--color-panel-soft);
   }
 
   &__header {
@@ -389,89 +306,6 @@ const colorMap = {
 
   &__nav-label {
     font-size: var(--font-size-base);
-  }
-
-  &__section {
-    flex: none;
-    padding: 0 12px 14px;
-    border-top: 1px solid var(--color-line);
-  }
-
-  &__section-header {
-    padding: 14px 8px 10px;
-    color: var(--color-text-soft);
-    font-size: var(--font-size-xs);
-    letter-spacing: 0.14em;
-    text-transform: uppercase;
-  }
-
-  &__cli-list {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-
-  &__cli-card {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 10px;
-    padding: 8px 8px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    background: var(--color-panel);
-  }
-
-  &__cli-card--offline {
-    opacity: 0.62;
-  }
-
-  &__cli-icon {
-    display: grid;
-    width: 22px;
-    height: 22px;
-    flex: 0 0 22px;
-    place-items: center;
-  }
-
-  &__cli-icon-image {
-    width: 22px;
-    height: 22px;
-    object-fit: contain;
-  }
-
-  &__cli-swatch {
-    width: 18px;
-    height: 18px;
-    flex: 0 0 18px;
-    border-radius: 50%;
-  }
-
-  &__cli-info {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    gap: 2px;
-  }
-
-  &__cli-info [data-emphasis] {
-    font-size: var(--font-size-base);
-  }
-
-  &__cli-info small {
-    color: var(--color-text-soft);
-    font-size: var(--font-size-sm);
-  }
-
-  &__cli-dot {
-    width: 8px;
-    height: 8px;
-    border-radius: 999px;
-    background: var(--color-success);
-  }
-
-  &__cli-dot--offline {
-    background: #9ca3af;
   }
 }
 </style>

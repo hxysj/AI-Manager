@@ -45,13 +45,15 @@ fn copy_configuration(paths: &AppPaths, migration: &str) -> Result<Value, Manage
                 )?;
                 continue;
             }
-            let kind = if text(&source, "type") == "codex-account" {
+            let kind = if text(&source, "type") == "google-account" {
+                "google_account"
+            } else if text(&source, "type") == "codex-account" {
                 "codex_account"
             } else {
                 "api"
             };
             if text(&source, "cli") != "codex"
-                || ["google-account", "anthropic", "gemini"].contains(&text(&source, "type"))
+                || ["anthropic", "gemini"].contains(&text(&source, "type"))
                 || (kind == "codex_account"
                     && source["account_kind"]
                         .as_str()
@@ -65,7 +67,7 @@ fn copy_configuration(paths: &AppPaths, migration: &str) -> Result<Value, Manage
                     &source,
                     None,
                     "skipped",
-                    "新配置中心仅迁移 Codex API 服务商与 Codex 官方账号",
+                    "新配置中心迁移 Codex API 服务商、GPT 官方账号和 Google 账号",
                 )?;
                 continue;
             }
@@ -82,9 +84,26 @@ fn copy_configuration(paths: &AppPaths, migration: &str) -> Result<Value, Manage
             tx.execute("INSERT INTO service_provider_configs(id,name,kind,upstream_protocol,base_url,proxy,headers_json,note,enabled,created_at,updated_at,icon)
                 VALUES(?1,?2,?3,?10,?4,?5,?6,?7,?8,?9,?9,?11)",params![provider,
                 source["name"].as_str().filter(|v|!v.trim().is_empty()).unwrap_or(source_id),kind,text(&source,"base_url"),
-                text(&source,"proxy"),headers.to_string(),text(&source,"note"),source["enabled"].as_i64().unwrap_or(1)!=0,now(),if kind=="api"{protocol}else{"responses"},text(&source,"icon")])?;
+                if kind=="google_account"{text(&source,"google_proxy")}else{text(&source,"proxy")},headers.to_string(),text(&source,"note"),source["enabled"].as_i64().unwrap_or(1)!=0,now(),if kind=="api"{protocol}else{"responses"},text(&source,"icon")])?;
             let mut unreadable = false;
-            if kind == "codex_account" {
+            if kind == "google_account" {
+                let mut metadata = json!({});
+                for key in ["subject","email","name","picture","project","plan","port","status","message","quota_warning"] {
+                    metadata[key] = source[format!("google_{key}")].clone();
+                }
+                metadata["models"] = decode(&source, "google_models", json!([]))?;
+                metadata["quotaGroups"] = decode(&source, "google_quota_groups", json!([]))?;
+                let result = decrypt_provider_key(text(&source, "oauth_credentials"))
+                    .and_then(|plain| Ok(serde_json::from_str::<Value>(&plain)?))
+                    .and_then(|tokens| save_google_credentials(&tx, &provider, &metadata, &tokens));
+                unreadable = result.is_err();
+                for model in metadata["models"].as_array().into_iter().flatten() {
+                    if !text(model,"id").is_empty() {
+                        save_model(&tx,&provider,&json!({"upstreamModelId":model["id"],
+                            "displayName":model["displayName"],"contextWindow":model["maxTokens"].as_i64().filter(|v|*v>0)}))?;
+                    }
+                }
+            } else if kind == "codex_account" {
                 let mut auth = source.clone();
                 auth["account_id"] = source["account_id"].clone();
                 auth["auth"] = json!({"expiresAt":source["auth_expires_at"]});

@@ -36,6 +36,170 @@ impl Drop for Fixture {
 }
 
 #[test]
+fn service_agent_configuration_switches_one_source_and_restores_all_old_directories() {
+    let f = Fixture::new();
+    let first = f.provider();
+    let second = f.provider();
+    let dir = f.root.join("agent-primary");
+    let extra = f.root.join("agent-extra");
+    for path in [&dir, &extra] {
+        std::fs::create_dir_all(path).unwrap();
+        std::fs::write(path.join("config.toml"), "model = \"original\"\n").unwrap();
+    }
+    let targets = json!([{"id":"codex","installed":true,"configPath":dir}]);
+    service_provider::switch_backend(&f.paths, "service").unwrap();
+    let c = database::open(&f.paths).unwrap();
+    let other_model: String = c.query_row("SELECT id FROM service_provider_models WHERE provider_id=?1",
+        [&second], |row| row.get(0)).unwrap();
+    let value = |provider: &str| json!({"agentType":"codex","providerId":provider,
+        "revision":config(&c,provider).unwrap()["revision"],"defaultModelName":"model",
+        "options":{"syncModelList":false}});
+    service_provider::configure_agent(&f.paths, &targets, &value(&first)).unwrap();
+    service_provider::activate(&f.paths, &targets,
+        &json!({"agentType":"codex","providerId":first,"configPath":extra})).unwrap();
+    let internal = service_provider::internal_session(&f.paths, &first, "model", "responses").unwrap();
+    assert!(service_provider::activate(&f.paths, &targets,
+        &json!({"agentType":"codex","providerId":second,"modelId":other_model,"configPath":f.root.join("blocked")}))
+        .unwrap_err().to_string().contains("正在使用其他服务商"));
+    let mut invalid = value(&second);
+    invalid["defaultModelName"] = json!("missing");
+    assert!(service_provider::configure_agent(&f.paths, &targets, &invalid).is_err());
+    assert!(std::fs::read_to_string(extra.join("config.toml")).unwrap().contains("ai_manager_service"));
+    invalid = value(&second);
+    invalid["revision"] = json!(0);
+    assert!(service_provider::configure_agent(&f.paths, &targets, &invalid).is_err());
+    assert!(service_provider::configure_agent(&f.paths, &json!([]), &value(&second)).is_err());
+    service_provider::configure_agent(&f.paths, &targets, &value(&second)).unwrap();
+    assert_eq!(std::fs::read_to_string(extra.join("config.toml")).unwrap(), "model = \"original\"\n");
+    let running = query(&c,"SELECT provider_id FROM service_agent_instances WHERE agent_type='codex'
+        AND status='active' AND config_path NOT LIKE 'internal:%'",&[]).unwrap();
+    assert_eq!(running.len(),1);
+    assert_eq!(running[0]["provider_id"],second);
+    assert!(service::authorize(&c,text(&internal,"token")).is_ok());
+    service_provider::configure_agent(&f.paths, &targets,
+        &json!({"agentType":"codex","providerId":""})).unwrap();
+    assert_eq!(std::fs::read_to_string(dir.join("config.toml")).unwrap(), "model = \"original\"\n");
+}
+
+#[test]
+fn service_disable_revokes_access_preserves_rules_and_restores_or_reports_conflicts() {
+    let f = Fixture::new();
+    let provider = f.provider();
+    service_provider::switch_backend(&f.paths, "service").unwrap();
+    let dir = f.root.join("disable-client");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("config.toml"), "model = \"before\"\n").unwrap();
+    let c = database::open(&f.paths).unwrap();
+    let model: String = c.query_row("SELECT id FROM service_provider_models WHERE provider_id=?1",
+        [&provider], |row| row.get(0)).unwrap();
+    let result = service_provider::activate(&f.paths, &json!([]),
+        &json!({"agentType":"codex","providerId":provider,"modelId":model,"configPath":dir})).unwrap();
+    c.execute("INSERT INTO service_gateway_requests(id,instance_id,generation,protocol_in,request_path,state,created_at)
+        VALUES('disable-inflight',?1,1,'responses','/responses','received',1)",[text(&result,"instanceId")]).unwrap();
+    let mut disabled = config(&c,&provider).unwrap();
+    disabled["enabled"] = json!(false);
+    assert!(save(&f.paths,&disabled).is_err());
+    assert_eq!(config(&c,&provider).unwrap()["enabled"],1);
+    c.execute("UPDATE service_gateway_requests SET finished_at=2,state='completed'",[]).unwrap();
+    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(
+        service_provider::dispatch(&f.paths,&json!([]),"save",disabled)).unwrap();
+    assert_eq!(std::fs::read_to_string(dir.join("config.toml")).unwrap(), "model = \"before\"\n");
+    assert_eq!(query(&c,"SELECT count(*) AS count FROM service_agent_instances WHERE status='active'",&[]).unwrap()[0]["count"],0);
+    assert_eq!(query(&c,"SELECT count(*) AS count FROM service_gateway_tokens WHERE status='active'",&[]).unwrap()[0]["count"],0);
+    assert!(query(&c,"SELECT enabled FROM service_provider_agent_bindings WHERE provider_id=?1",&[&provider]).unwrap().iter().all(|row|row["enabled"]==0));
+    assert_eq!(credential(&c,&provider).unwrap()["secret"],"test-secret");
+    let mut enabled = config(&c,&provider).unwrap();
+    enabled["enabled"] = json!(true);
+    enabled["bindings"] = json!([{"agentType":"codex","enabled":true,"defaultModelName":"model","options":{"syncModelList":false}}]);
+    save(&f.paths,&enabled).unwrap();
+    service_provider::activate(&f.paths, &json!([]),
+        &json!({"agentType":"codex","providerId":provider,"configPath":dir})).unwrap();
+    std::fs::write(dir.join("config.toml"), "model = \"external-edit\"\n").unwrap();
+    let mut disabled = config(&c,&provider).unwrap();
+    disabled["enabled"] = json!(false);
+    assert!(tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(
+        service_provider::dispatch(&f.paths,&json!([]),"save",disabled)).is_err());
+    assert_eq!(config(&c,&provider).unwrap()["enabled"],0);
+    assert_eq!(std::fs::read_to_string(dir.join("config.toml")).unwrap(), "model = \"external-edit\"\n");
+    assert_eq!(query(&c,"SELECT sync_status FROM service_agent_instances WHERE provider_id=?1",&[&provider]).unwrap()[0]["sync_status"],"conflict");
+    assert_eq!(query(&c,"SELECT options_json AS optionsJson FROM service_provider_agent_bindings
+        WHERE provider_id=?1 AND agent_type='codex'",&[&provider]).unwrap()[0]["options"]["syncModelList"],false);
+}
+
+#[test]
+fn service_schema_three_upgrades_old_type_constraint_and_preserves_foreign_keys() {
+    let f = Fixture::new();
+    let c = database::open(&f.paths).unwrap();
+    c.pragma_update(None,"foreign_keys","OFF").unwrap();
+    c.execute_batch("DROP TABLE service_provider_configs;").unwrap();
+    let old = SCHEMA.split("CREATE TABLE IF NOT EXISTS service_provider_keys").next().unwrap()
+        .replace("'api','codex_account','google_account'","'api','codex_account'");
+    c.execute_batch(&old).unwrap();
+    c.execute_batch("INSERT INTO service_provider_configs(id,name,kind,upstream_protocol,revision,created_at,updated_at)
+        VALUES('old-v2','旧版服务商','api','responses',8,1,1);
+        INSERT INTO service_provider_models(id,provider_id,upstream_model_id,created_at,updated_at)
+        VALUES('old-model','old-v2','model',1,1);
+        INSERT INTO service_provider_agent_bindings(provider_id,agent_type,enabled,default_model_id,updated_at)
+        VALUES('old-v2','codex',1,'old-model',1);
+        UPDATE app_metadata SET value='2' WHERE key='service_provider:schema_version';").unwrap();
+    c.pragma_update(None,"foreign_keys","ON").unwrap();
+    initialize(&f.paths).unwrap();
+    assert_eq!(config(&c,"old-v2").unwrap()["revision"],8);
+    assert_eq!(query(&c,"SELECT default_model_id FROM service_provider_agent_bindings",&[]).unwrap()[0]["default_model_id"],"old-model");
+    assert!(query(&c,"PRAGMA foreign_key_check",&[]).unwrap().is_empty());
+    assert!(save(&f.paths,&json!({"name":"Google","kind":"google_account"})).is_ok());
+    assert!(c.execute("UPDATE service_provider_agent_bindings SET default_model_id='missing'",[]).is_err());
+}
+
+#[test]
+fn service_google_migration_is_read_only_and_uses_separate_encrypted_credentials() {
+    let f = Fixture::new();
+    let provider = json!({"id":"old-google","cli":"codex","type":"google-account","name":"旧 Google","icon":"google.svg",
+        "google":{"subject":"google-subject","email":"google@example.test","port":34567,"proxy":"http://127.0.0.1:7890",
+            "models":[{"id":"gemini-test","displayName":"Gemini 测试","maxTokens":100000}]},
+        "runtimeConfig":{"mainModel":"gemini-test"}});
+    provider_store::write_provider_bundle(&f.paths,&[provider],&[],&[],&Map::new()).unwrap();
+    let c = database::open(&f.paths).unwrap();
+    let tokens = json!({"access_token":"google-private-access","refresh_token":"google-private-refresh","expires_at":9999999999i64});
+    c.execute("UPDATE providers SET oauth_credentials=?1 WHERE id='old-google'",
+        [encrypt_provider_key(&tokens.to_string()).unwrap()]).unwrap();
+    let before = query(&c,"SELECT * FROM providers",&[]).unwrap();
+    for event in ["INSERT","UPDATE","DELETE"] {
+        c.execute_batch(&format!("CREATE TRIGGER protect_google_{event} BEFORE {event} ON providers
+            BEGIN SELECT RAISE(ABORT,'禁止写旧表'); END;")).unwrap();
+    }
+    service_provider::switch_backend(&f.paths,"service").unwrap();
+    assert_eq!(google_tokens(&c,"old-google").unwrap(),tokens);
+    let account = google_provider(&c,"old-google").unwrap();
+    assert_eq!(account["google"]["port"],34567);
+    assert_eq!(account["google"]["proxy"],"http://127.0.0.1:7890");
+    assert_eq!(account["google"]["subject"],"google-subject");
+    let public = state(&f.paths).unwrap();
+    assert_eq!(public["providers"][0]["kind"],"google_account");
+    assert_eq!(public["providers"][0]["hasCredential"],1);
+    assert_eq!(public["googleAccounts"][0]["email"],"google@example.test");
+    assert!(!public.to_string().contains("google-private"));
+    assert!(!query(&c,"SELECT oauth_ciphertext,local_key_ciphertext FROM service_google_accounts",&[]).unwrap()[0].to_string().contains("google-private"));
+    assert_eq!(public_catalog(&f.paths).unwrap()["providers"][0]["type"],"google-account");
+    let mut updated = tokens.clone();
+    updated["access_token"] = json!("rotated-google-access");
+    save_google_tokens(&f.paths,"old-google",&updated).unwrap();
+    update_google_metadata(&f.paths,"old-google",&json!({"status":"ready","plan":"test"})).unwrap();
+    migrate(&f.paths).unwrap();
+    assert_eq!(google_tokens(&c,"old-google").unwrap(),updated);
+    assert_eq!(query(&c,"SELECT * FROM providers",&[]).unwrap(),before);
+    assert!(service_provider::internal_session(&f.paths,"old-google","gemini-test","responses").is_ok());
+    sync_google_models(&f.paths,"old-google",&[json!({"id":"gemini-new","displayName":"Google 新模型","maxTokens":200000})]).unwrap();
+    assert_eq!(query(&c,"SELECT enabled FROM service_provider_models WHERE upstream_model_id='gemini-test'",&[]).unwrap()[0]["enabled"],0);
+    let model = query(&c,"SELECT id FROM service_provider_models WHERE upstream_model_id='gemini-new'",&[]).unwrap();
+    let directory = f.root.join("google-codex");
+    service_provider::activate(&f.paths,&json!([]),
+        &json!({"agentType":"codex","providerId":"old-google","modelId":model[0]["id"],"configPath":directory})).unwrap();
+    let catalog = std::fs::read_to_string(directory.join(".ai_manager_service_models.json")).unwrap();
+    assert!(catalog.contains("gemini-new") && !catalog.contains("gemini-test"));
+}
+
+#[test]
 fn defaults_resolve_draft_model_names_within_the_provider_save_transaction() {
     let f = Fixture::new();
     let result = save(
@@ -554,13 +718,34 @@ fn service_takeover_restores_original_and_detects_external_file_changes() {
         .unwrap();
     let directory = f.root.join("client");
     std::fs::create_dir_all(&directory).unwrap();
-    let original = "model = \"old\"\n[projects.\"D:/project\"]\ntrust_level = \"trusted\"\n";
+    let original = concat!(
+        "model_provider = \"custom\"\nmodel = \"old\"\nopenai_base_url = \"https://old.example.test\"\n",
+        "[model_providers.custom] # 旧模式配置 [保留在备份]\nname = \"custom\"\nbase_url = \"https://old.example.test\"\n",
+        "[model_providers.custom.http_headers]\nx-old = \"legacy\"\n",
+        "[model_providers.codex_local_access]\nbase_url = \"http://127.0.0.1:15721/v1\"\n",
+        "[model_providers.ai_manager_service]\nenv_key = \"OLD_ENV\"\n",
+        "[model_providers.ai_manager_service.http_headers]\nx-stale = \"stale\"\n",
+        "[model_providers.other]\nbase_url = \"https://other.example.test\"\n",
+        "[mcp_servers.demo]\ncommand = \"keep-mcp\"\n",
+        "[projects.\"D:/project\"]\ntrust_level = \"trusted\"\n",
+    );
     std::fs::write(directory.join("config.toml"), original).unwrap();
     let value =
         json!({"agentType":"codex","providerId":provider,"modelId":model,"configPath":directory});
     let instance = service_provider::activate(&f.paths, &json!([]), &value).unwrap();
     let applied = std::fs::read_to_string(directory.join("config.toml")).unwrap();
     assert!(applied.contains("supports_websockets = false"));
+    assert!(applied.contains("model_provider = \"ai_manager_service\""));
+    assert!(applied.contains("base_url = \"http://127.0.0.1:15724/v1\""));
+    assert!(applied.contains("requires_openai_auth = false"));
+    assert_eq!(applied.matches("[model_providers.ai_manager_service]").count(), 1);
+    assert!(!applied.contains("model_providers.custom"));
+    assert!(!applied.contains("model_providers.codex_local_access"));
+    assert!(!applied.contains("old.example.test"));
+    assert!(!applied.contains("OLD_ENV"));
+    assert!(!applied.contains("x-stale"));
+    assert!(applied.contains("[model_providers.other]"));
+    assert!(applied.contains("command = \"keep-mcp\""));
     assert!(applied.contains("trust_level = \"trusted\""));
     assert!(!applied.contains("test-secret"));
     std::fs::write(

@@ -1830,16 +1830,19 @@ fn should_mark_reauth(message: &str) -> bool {
     .any(|item| message.contains(item))
 }
 
-fn remove_toml_sections(content: &str, section_names: &[&str]) -> String {
+pub(crate) fn remove_toml_sections(content: &str, section_names: &[&str]) -> String {
     let mut next_lines = Vec::new();
     let mut skipping = false;
 
     for line in content.lines() {
         let text = line.trim();
 
-        if text.starts_with('[') && text.ends_with(']') {
-            let section = text.trim_start_matches('[').trim_end_matches(']');
-            skipping = section_names.contains(&section);
+        if text.starts_with('[') {
+            let header = text.find(']').map(|end| &text[..=end]).unwrap_or(text);
+            let section = header.trim_start_matches('[').trim_end_matches(']');
+            skipping = section_names.iter().any(|name| {
+                section == *name || section.strip_prefix(name).is_some_and(|tail| tail.starts_with('.'))
+            });
 
             if skipping {
                 continue;

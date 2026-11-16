@@ -270,6 +270,53 @@ async fn service_setup(fixture:&Fixture,url:&str,format:UpstreamFormat)->(String
 }
 
 #[test]
+fn service_google_account_routes_through_shared_gateway_and_keeps_usage() {
+    run(async {
+        use crate::core::{database, service_provider_store as store};
+        let fixture = Fixture::new();
+        store::initialize(&fixture.paths).unwrap();
+        let provider = store::save(&fixture.paths,&json!({"name":"Google 共享账号","kind":"google_account",
+            "models":["gemini-test"],"bindings":[{"agentType":"gateway","enabled":true}]})).unwrap()["id"].as_str().unwrap().to_owned();
+        let c = database::open(&fixture.paths).unwrap();
+        let port = std::net::TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+        store::save_google_credentials(&c,&provider,
+            &json!({"subject":"google-test","email":"fixture@example.test","port":port,"project":"test",
+                "models":[{"id":"gemini-test"}]}),
+            &json!({"access_token":"private-google-access","refresh_token":"private-google-refresh","expires_at":9999999999i64})).unwrap();
+        crate::api::service_provider::switch_backend(&fixture.paths,"service").unwrap();
+        let model: String = c.query_row("SELECT id FROM service_provider_models WHERE provider_id=?1",[&provider],|row|row.get(0)).unwrap();
+        let token = crate::api::service_provider::issue_token(&fixture.paths,&json!({"providerId":provider,"modelId":model})).unwrap()["token"].as_str().unwrap().to_owned();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}",listener.local_addr().unwrap());
+        let server = spawn_listener(listener,GatewayContext{paths:fixture.paths.clone(),cli_targets:json!([]),
+            store_lock:fixture.registry.store_lock.clone(),service_mode:true,legacy_request:None,_service_request:None});
+        let client = reqwest::Client::builder().no_proxy().build().unwrap();
+        // background 在本地 Google 适配器中拒绝，验证路由和失败记账，不访问外部接口。
+        let response = client.post(format!("{base}/v1/responses")).bearer_auth(&token)
+            .json(&json!({"model":"gemini-test","input":"本地校验","background":true,"stream":false}))
+            .send().await.unwrap();
+        let status = response.status();
+        let result: Value = response.json().await.unwrap();
+        assert_eq!(status,StatusCode::BAD_REQUEST,"{result}");
+        let usage = store::state(&fixture.paths).unwrap()["usage"].clone();
+        assert_eq!(usage["attempts"]["attemptCount"],1);
+        assert_eq!(usage["requests"]["failureCount"],1);
+        assert_eq!(usage["logs"][0]["providerId"],provider);
+        assert_eq!(usage["logs"][0]["credentialName"],"fixture@example.test");
+        let models = client.get(format!("http://127.0.0.1:{port}/v1/models"))
+            .bearer_auth(store::google_local_key(&c,&provider).unwrap()).send().await.unwrap();
+        assert_eq!(models.status(),StatusCode::OK);
+        assert_eq!(models.json::<Value>().await.unwrap()["data"][0]["id"],"gemini-test");
+        let denied = client.get(format!("http://127.0.0.1:{port}/v1/models"))
+            .bearer_auth("private-google-access").send().await.unwrap();
+        assert_eq!(denied.status(),StatusCode::UNAUTHORIZED);
+        assert!(!store::state(&fixture.paths).unwrap().to_string().contains("private-google"));
+        server.abort();
+        crate::api::google_gateway::stop(&fixture.paths,&provider).await;
+    });
+}
+
+#[test]
 fn service_desktop_model_rules_resolve_safe_aliases_and_reject_disabled_targets() {
     use crate::core::{database, service_provider_store as store};
     let fixture = Fixture::new();

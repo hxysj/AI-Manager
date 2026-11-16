@@ -48,7 +48,6 @@
     <AppSidebar
       v-if="!toolWorkspaceActive"
       :active-view="activeView"
-      :cli-targets="state.cliTargets"
       :collapsed="sidebarCollapsed"
       :nav-items="navItems"
       :theme-mode="themeMode"

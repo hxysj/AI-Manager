@@ -7,6 +7,8 @@ use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
 mod migration;
+mod google;
+pub(crate) use google::*;
 #[cfg(test)]
 mod tests;
 
@@ -101,12 +103,15 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
             |r| r.get(0),
         )
         .optional()?;
-    if version.as_deref().is_some_and(|v| !matches!(v, "1" | "2")) {
+    if version.as_deref().is_some_and(|v| !matches!(v, "1" | "2" | "3")) {
         return Err(fail("服务商配置数据库版本高于当前程序支持的版本"));
+    }
+    if version.as_deref() != Some("3") {
+        connection.pragma_update(None, "foreign_keys", "OFF")?;
     }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     transaction.execute_batch(SCHEMA)?;
-    if version.as_deref() != Some("2") {
+    if !matches!(version.as_deref(), Some("2" | "3")) {
         let columns = query(
             &transaction,
             "SELECT name FROM pragma_table_info('service_provider_configs')",
@@ -138,10 +143,31 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
                 [],
             )?;
         }
-        transaction.execute("INSERT INTO app_metadata(key,value) VALUES('service_provider:schema_version','2')
+    }
+    if version.as_deref() != Some("3") {
+        let definition: String = transaction.query_row(
+            "SELECT sql FROM sqlite_master WHERE type='table' AND name='service_provider_configs'",
+            [], |row| row.get(0))?;
+        if !definition.contains("google_account") {
+            // 只重建新模式配置表的类型约束，原 Provider、Usage 和所有关联 ID 保持原值。
+            let ddl = SCHEMA.split("CREATE TABLE IF NOT EXISTS service_provider_keys").next().unwrap()
+                .replace("service_provider_configs", "service_provider_configs_v3");
+            transaction.execute_batch(&ddl)?;
+            transaction.execute_batch("INSERT INTO service_provider_configs_v3
+                (id,name,icon,kind,upstream_protocol,base_url,proxy,headers_json,note,enabled,revision,deleted_at,created_at,updated_at)
+                SELECT id,name,icon,kind,upstream_protocol,base_url,proxy,headers_json,note,enabled,revision,deleted_at,created_at,updated_at
+                FROM service_provider_configs;
+                DROP TABLE service_provider_configs;
+                ALTER TABLE service_provider_configs_v3 RENAME TO service_provider_configs;")?;
+        }
+        if !query(&transaction, "SELECT * FROM pragma_foreign_key_check WHERE \"table\" LIKE 'service_%'", &[])?.is_empty() {
+            return Err(fail("服务商配置升级发现关联数据不完整，已回滚升级"));
+        }
+        transaction.execute("INSERT INTO app_metadata(key,value) VALUES('service_provider:schema_version','3')
             ON CONFLICT(key) DO UPDATE SET value=excluded.value", [])?;
     }
     transaction.commit()?;
+    connection.pragma_update(None, "foreign_keys", "ON")?;
     Ok(())
 }
 
@@ -221,9 +247,17 @@ pub fn query(
 pub fn state(paths: &AppPaths) -> Result<Value, ManagerError> {
     initialize(paths)?;
     let c = database::open(paths)?;
+    // 已在新模式中的用户升级后也能补齐旧 Google 账号，已复制项仍保持幂等。
+    if active(paths)? && table_exists(&c, "providers")? && c.query_row(
+        "SELECT EXISTS(SELECT 1 FROM providers p WHERE p.cli='codex' AND p.type='google-account'
+        AND NOT EXISTS(SELECT 1 FROM service_provider_migration_items m WHERE m.source_table='providers'
+        AND m.source_id=p.id AND m.status IN ('copied','unreadable')))", [], |row| row.get::<_, bool>(0))? {
+        migrate(paths)?;
+    }
     let providers = query(&c, "SELECT id,name,icon,kind,upstream_protocol AS upstreamProtocol,base_url AS baseUrl,proxy,
         note,enabled,revision,created_at AS createdAt,updated_at AS updatedAt,
         CASE WHEN kind='api' THEN EXISTS(SELECT 1 FROM service_provider_keys k WHERE k.provider_id=p.id AND k.is_active=1 AND k.status='active' AND k.secret_ciphertext<>'')
+        WHEN kind='google_account' THEN EXISTS(SELECT 1 FROM service_google_accounts g WHERE g.provider_id=p.id AND g.oauth_ciphertext<>'')
         ELSE EXISTS(SELECT 1 FROM service_provider_accounts a WHERE a.provider_id=p.id AND a.access_ciphertext<>'') END AS hasCredential
         FROM service_provider_configs p WHERE deleted_at IS NULL ORDER BY created_at,id", &[])?;
     let models = query(&c, "SELECT id,provider_id AS providerId,upstream_model_id AS upstreamModelId,display_name AS displayName,
@@ -246,13 +280,15 @@ pub fn state(paths: &AppPaths) -> Result<Value, ManagerError> {
         FROM service_compatibility_tests ORDER BY tested_at DESC LIMIT 100", &[])?;
     let routes=query(&c,"SELECT id,provider_id AS providerId,agent_type AS agentType,client_model_name AS clientModelName,model_id AS modelId,enabled FROM service_agent_model_routes",&[])?;
     let accounts=query(&c,"SELECT provider_id AS providerId,email,external_account_id AS accountId,expires_at AS expiresAt,quota_json AS quotaJson,refresh_status AS refreshStatus FROM service_provider_accounts",&[])?;
+    let google_accounts=query(&c,"SELECT provider_id AS providerId,email,external_subject AS subject,expires_at AS expiresAt,
+        metadata_json AS metadataJson FROM service_google_accounts",&[])?;
     let files=query(&c,"SELECT id,instance_id AS instanceId,file_path AS filePath,write_status AS writeStatus,restore_status AS restoreStatus,
         error_message AS errorMessage FROM service_managed_files WHERE restore_status<>'restored'",&[])?;
     Ok(
         json!({"backend": if active(paths)? {"service"} else {"legacy"}, "generation":generation(&c)?,
         "baseUrl":format!("http://127.0.0.1:{PORT}"), "providers":providers,"models":models,"bindings":bindings,
         "keys":keys,"instances":instances,"migrations":migrations,"migrationItems":migration_items,
-        "compatibility":compatibility,"routes":routes,"accounts":accounts,"managedFiles":files,"usage":usage(&c)?,
+        "compatibility":compatibility,"routes":routes,"accounts":accounts,"googleAccounts":google_accounts,"managedFiles":files,"usage":usage(&c)?,
         "desktopModelRoutes":crate::api::claude_desktop::ROUTES.iter().map(|(id,label,_)|json!({"id":id,"label":label})).collect::<Vec<_>>()}),
     )
 }
@@ -301,6 +337,7 @@ pub fn public_catalog(paths: &AppPaths) -> Result<Value, ManagerError> {
         a.external_account_id AS accountId,a.email,a.expires_at AS expiresAt,a.quota_json AS usageJson,
         CASE WHEN p.kind='api' THEN EXISTS(SELECT 1 FROM service_provider_keys k WHERE k.provider_id=p.id
             AND k.is_active=1 AND k.status='active' AND k.secret_ciphertext<>'')
+        WHEN p.kind='google_account' THEN EXISTS(SELECT 1 FROM service_google_accounts g WHERE g.provider_id=p.id AND g.oauth_ciphertext<>'')
         ELSE coalesce(a.access_ciphertext,'')<>'' END AS hasCredential
         FROM service_provider_configs p LEFT JOIN service_provider_agent_bindings b ON b.provider_id=p.id AND b.agent_type='codex'
         LEFT JOIN service_provider_accounts a ON a.provider_id=p.id WHERE p.deleted_at IS NULL ORDER BY p.created_at,p.id", &[])?;
@@ -314,8 +351,9 @@ pub fn public_catalog(paths: &AppPaths) -> Result<Value, ManagerError> {
             .map(|m| m["name"].clone())
             .collect::<Vec<_>>();
         let available = row["enabled"] == 1 && row["authorized"] == 1 && row["hasCredential"] == 1;
-        if row["kind"] == "api" {
+        if row["kind"] != "codex_account" {
             providers.push(json!({"id":row["id"],"name":row["name"],"icon":row["icon"],"cli":"codex","enabled":available,
+                "type":if row["kind"]=="google_account"{"google-account"}else{"openai"},
                 "runtimeConfig":{"mainModel":names.first(),"modelList":names},"serviceManaged":true}));
         } else {
             accounts.push(json!({"id":text(&row,"id").strip_prefix("account:").unwrap_or(text(&row,"id")),"serviceProviderId":row["id"],"type":"codex","email":row["email"],"accountId":row["accountId"],
@@ -367,9 +405,9 @@ pub fn save(paths: &AppPaths, value: &Value) -> Result<Value, ManagerError> {
     }
     let kind = value["kind"].as_str().unwrap_or("api");
     let protocol = value["upstreamProtocol"].as_str().unwrap_or("responses");
-    if !matches!(kind, "api" | "codex_account")
+    if !matches!(kind, "api" | "codex_account" | "google_account")
         || !matches!(protocol, "chat" | "responses")
-        || (kind == "codex_account" && protocol != "responses")
+        || (kind != "api" && protocol != "responses")
     {
         return Err(fail("服务商类型或上游协议无效"));
     }
@@ -405,6 +443,13 @@ pub fn save(paths: &AppPaths, value: &Value) -> Result<Value, ManagerError> {
         &[&provider_id],
     )?
     .pop();
+    if value["enabled"] == false && tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM service_gateway_requests r
+        JOIN service_agent_instances i ON i.id=r.instance_id
+        WHERE i.provider_id=?1 AND r.finished_at IS NULL)",
+        [&provider_id], |row| row.get::<_, bool>(0))? {
+        return Err(fail("服务商仍有请求进行中，请结束请求后再禁用"));
+    }
     if let Some(p) = &previous {
         if value["revision"].as_i64() != p["revision"].as_i64() {
             return Err(fail("配置已被修改，请刷新后重试"));
@@ -496,8 +541,28 @@ pub fn save(paths: &AppPaths, value: &Value) -> Result<Value, ManagerError> {
         tx.execute("UPDATE service_agent_instances SET sync_status='pending',last_error='服务商配置已更新，请解除接管后重新应用'
             WHERE provider_id=?1 AND status='active' AND EXISTS(SELECT 1 FROM service_managed_files f WHERE f.instance_id=service_agent_instances.id AND f.restore_status<>'restored')",[&provider_id])?;
     }
+    if value["enabled"] == false {
+        // 停用即撤销访问和启动状态；模型参数与文件备份保留用于恢复。
+        tx.execute("UPDATE service_provider_agent_bindings SET enabled=0,revision=revision+1,updated_at=?2
+            WHERE provider_id=?1", params![provider_id, now()])?;
+        tx.execute("UPDATE service_gateway_tokens SET status='revoked',revoked_at=?2
+            WHERE instance_id IN (SELECT id FROM service_agent_instances WHERE provider_id=?1)
+            AND status='active'", params![provider_id, now()])?;
+        tx.execute("UPDATE service_agent_instances SET status='error',sync_status='pending',
+            last_error='服务商已禁用，等待恢复客户端配置',updated_at=?2
+            WHERE provider_id=?1 AND status<>'detached'", params![provider_id, now()])?;
+    }
     tx.commit()?;
     Ok(json!({"id":provider_id}))
+}
+
+pub(crate) fn validate_credential(c: &Connection, provider: &str) -> Result<(), ManagerError> {
+    match text(&config(c, provider)?, "kind") {
+        "api" => { credential(c, provider)?; }
+        "google_account" => { google_tokens(c, provider)?; }
+        _ => { account(c, provider)?; }
+    }
+    Ok(())
 }
 
 // Agent 模型规则与公共目录在同一事务校验，避免跨服务商引用或应用已停用的模型。

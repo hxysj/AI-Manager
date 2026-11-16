@@ -138,9 +138,13 @@ async fn handle(
     id: &str,
     cancel: CancellationToken,
 ) -> Response<Body> {
-    let guard=match crate::core::service_provider_store::legacy_request(paths) {
-        Ok(guard)=>Arc::new(guard),
-        Err(error)=>return failure(StatusCode::SERVICE_UNAVAILABLE,&error.to_string()),
+    let guard = match crate::core::service_provider_store::active(paths) {
+        Ok(true) => None,
+        Ok(false) => match crate::core::service_provider_store::legacy_request(paths) {
+            Ok(guard) => Some(Arc::new(guard)),
+            Err(error) => return failure(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
+        },
+        Err(error) => return failure(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
     };
     let response=handle_legacy(request,paths,id,cancel,guard.clone()).await;
     response.map(|body|body.map_frame(move |frame|{let _=&guard;frame}).boxed_unsync())
@@ -151,13 +155,19 @@ async fn handle_legacy(
     paths: &AppPaths,
     id: &str,
     cancel: CancellationToken,
-    request_guard: Arc<crate::core::service_provider_store::LegacyRequest>,
+    request_guard: Option<Arc<crate::core::service_provider_store::LegacyRequest>>,
 ) -> Response<Body> {
     let provider = match google_account::find_account(paths, id) {
         Ok(provider) if provider["enabled"] != false => provider,
         _ => return failure(StatusCode::FORBIDDEN, "Google 账号已禁用或删除"),
     };
-    let key = match runtime_provider::get_provider_api_key(paths, id) {
+    let local_key = if crate::core::service_provider_store::active(paths).unwrap_or(false) {
+        crate::core::database::open(paths)
+            .and_then(|c| crate::core::service_provider_store::google_local_key(&c, id))
+    } else {
+        runtime_provider::get_provider_api_key(paths, id)
+    };
+    let key = match local_key {
         Ok(key) if !key.is_empty() => key,
         _ => return failure(StatusCode::UNAUTHORIZED, "本地转发凭据不存在，请重新登录"),
     };

@@ -1,5 +1,5 @@
 use crate::api::{google_gateway, proxy, runtime_provider};
-use crate::core::{database, error::ManagerError, paths::AppPaths, provider_store};
+use crate::core::{database, error::ManagerError, paths::AppPaths, provider_store, service_provider_store as store};
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine};
 use bytes::Bytes;
 use futures_util::FutureExt;
@@ -68,6 +68,11 @@ impl GoogleLogin {
         let proxy_url = payload["proxy"].as_str().unwrap_or("").trim().to_string();
         proxy::http_client(&proxy_url)?;
         let target = payload["providerId"].as_str().unwrap_or("").to_string();
+        let service_mode = store::active(paths)?;
+        let mode_generation = store::generation(&database::open(paths)?)?;
+        if service_mode && target.is_empty() {
+            return Err(error("请先新建 Google 账号配置"));
+        }
         if !target.is_empty() {
             find_account(paths, &target)?;
         }
@@ -110,7 +115,19 @@ impl GoogleLogin {
                     .map_err(|_| error("Google 账号信息接口连接失败"))?;
                 let info = json_response(response).await?;
                 let subject = info["id"].as_str().filter(|value| !value.is_empty()).ok_or_else(|| error("Google 未返回账号 ID"))?;
-                let old = provider_store::read_providers(&paths)?.into_iter().find(|item| item["type"] == "google-account" && item["google"]["subject"] == subject);
+                if store::active(&paths)? != service_mode || store::generation(&database::open(&paths)?)? != mode_generation {
+                    return Err(error("登录期间运行模式已变化，请重新登录"));
+                }
+                let old = if service_mode {
+                    let provider = find_account(&paths, &target)?;
+                    let existing_subject = provider["google"]["subject"].as_str().unwrap_or("");
+                    if !existing_subject.is_empty() && existing_subject != subject {
+                        return Err(error("登录账号与待更新的 Google 账号不一致"));
+                    }
+                    Some(provider)
+                } else {
+                    provider_store::read_providers(&paths)?.into_iter().find(|item| item["type"] == "google-account" && item["google"]["subject"] == subject)
+                };
                 let id = old.as_ref().and_then(|item| item["id"].as_str()).map(str::to_string)
                     .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
                 if !target.is_empty() && target != id { return Err(error("登录账号与待更新的 Google 账号不一致")); }
@@ -136,7 +153,7 @@ impl GoogleLogin {
                 provider["google"] = json!({"subject": subject, "email": info["email"], "name": info["name"], "picture": info["picture"],
                     "proxy": proxy_url, "port": port, "status": "ready", "models": [], "message": ""});
                 // 先持久化授权，再获取额度；额度接口失败不丢失刚获得的 refresh_token。
-                save_login(&paths, &provider, &tokens)?;
+                save_login(&paths, &provider, &tokens, mode_generation, service_mode)?;
                 let warning = refresh(&paths, &id).await.err().map(|error| error.to_string());
                 Ok::<_, ManagerError>(json!({"status": "success", "providerId": id,
                     "message": warning.unwrap_or_else(|| "Google 登录完成，已获取模型与额度".into())}))
@@ -204,6 +221,9 @@ async fn receive_code(
 }
 
 pub(crate) fn find_account(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> {
+    if store::active(paths)? {
+        return store::google_provider(&database::open(paths)?, id);
+    }
     let provider = runtime_provider::find_provider(paths, id)?;
     if provider["type"] != "google-account" {
         return Err(error("不是 Google 账号服务商"));
@@ -211,11 +231,25 @@ pub(crate) fn find_account(paths: &AppPaths, id: &str) -> Result<Value, ManagerE
     Ok(provider)
 }
 
-fn save_login(paths: &AppPaths, provider: &Value, tokens: &Value) -> Result<(), ManagerError> {
-    provider_store::initialize(paths)?;
+fn save_login(paths: &AppPaths, provider: &Value, tokens: &Value, generation: i64, service: bool) -> Result<(), ManagerError> {
+    if !service { provider_store::initialize(paths)?; }
     let id = provider["id"].as_str().unwrap();
     let mut connection = database::open(paths)?;
-    let transaction = connection.transaction()?;
+    let transaction = connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    if store::generation(&transaction)? != generation || store::active(paths)? != service {
+        return Err(error("登录期间运行模式已变化，请重新登录"));
+    }
+    if service {
+        let config = store::config(&transaction, id)?;
+        if config["kind"] != "google_account" || !config["deletedAt"].is_null() {
+            return Err(error("Google 账号已删除"));
+        }
+        store::save_google_credentials(&transaction, id, &provider["google"], tokens)?;
+        transaction.execute("UPDATE service_provider_configs SET revision=revision+1,updated_at=?2 WHERE id=?1",
+            params![id,store::now()])?;
+        transaction.commit()?;
+        return Ok(());
+    }
     provider_store::upsert_provider(&transaction, provider)?;
     let oauth = json!(runtime_provider::encrypt_provider_key(&tokens.to_string())?);
     provider_store::set_key(&transaction, &format!("google-oauth:{id}"), Some(&oauth))?;
@@ -235,6 +269,9 @@ fn save_login(paths: &AppPaths, provider: &Value, tokens: &Value) -> Result<(), 
 }
 
 fn read_tokens(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> {
+    if store::active(paths)? {
+        return store::google_tokens(&database::open(paths)?, id);
+    }
     let value = runtime_provider::get_provider_api_key(paths, &format!("google-oauth:{id}"))?;
     if value.is_empty() {
         return Err(error("Google 授权信息不存在，请重新登录"));
@@ -243,6 +280,9 @@ fn read_tokens(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> {
 }
 
 fn save_tokens(paths: &AppPaths, id: &str, tokens: &Value) -> Result<(), ManagerError> {
+    if store::active(paths)? {
+        return store::save_google_tokens(paths, id, tokens);
+    }
     let connection = database::open(paths)?;
     let count = connection.execute(
         "UPDATE providers SET oauth_credentials=?2 WHERE id=?1",
@@ -263,6 +303,8 @@ pub(crate) async fn access_token(
     force: bool,
 ) -> Result<String, ManagerError> {
     let _guard = TOKEN_LOCK.get_or_init(|| Mutex::new(())).lock().await;
+    let service_mode = store::active(paths)?;
+    let generation = store::generation(&database::open(paths)?)?;
     let provider = find_account(paths, id)?;
     if provider["enabled"] == false {
         return Err(error("Google 账号已禁用"));
@@ -291,7 +333,8 @@ pub(crate) async fn access_token(
             Ok(value) => value,
             Err(failure) => {
                 let message = failure.to_string();
-                if message.contains("invalid_grant") {
+                if message.contains("invalid_grant") && store::active(paths)? == service_mode
+                    && store::generation(&database::open(paths)?)? == generation {
                     update_metadata(
                         paths,
                         id,
@@ -301,6 +344,9 @@ pub(crate) async fn access_token(
                 return Err(failure);
             }
         };
+        if store::active(paths)? != service_mode || store::generation(&database::open(paths)?)? != generation {
+            return Err(error("刷新期间运行模式已变化，请重试"));
+        }
         tokens["access_token"] = refreshed["access_token"].clone();
         tokens["expires_at"] = json!(
             chrono::Utc::now().timestamp() + refreshed["expires_in"].as_i64().unwrap_or(3600)
@@ -365,6 +411,8 @@ pub(crate) async fn upstream(
 }
 
 pub async fn refresh(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> {
+    let service_mode = store::active(paths)?;
+    let generation = store::generation(&database::open(paths)?)?;
     let result = async {
         let assist = json_response(upstream(paths, id, "loadCodeAssist", &json!({"metadata": {"ideType": "ANTIGRAVITY"}})).await?).await?;
         let project = assist["cloudaicompanionProject"].as_str().or_else(|| assist["cloudaicompanionProject"]["id"].as_str()).unwrap_or("");
@@ -375,10 +423,17 @@ pub async fn refresh(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> 
             Err(failure) => (Value::Null, failure.to_string()),
         };
         let models = parse_models(&available, &summary)?;
+        if store::active(paths)? != service_mode || store::generation(&database::open(paths)?)? != generation {
+            return Err(error("刷新期间运行模式已变化，请重试"));
+        }
         update_metadata(paths, id, json!({"project": project, "plan": plan, "models": models,
             "quotaGroups": summary["groups"], "quotaWarning": warning, "deprecatedModelIds": available["deprecatedModelIds"],
             "updatedAt": chrono::Utc::now().timestamp_millis(), "status": if project.is_empty() { "setup_required" } else { "ready" },
             "message": if project.is_empty() { "Google 未返回 Cloud Code 项目，请先在对应 Google 服务中完成开通，再刷新" } else { "" }}))?;
+        if store::active(paths)? {
+            store::sync_google_models(paths, id, &models)?;
+            return find_account(paths, id);
+        }
         let mut provider = find_account(paths, id)?;
         if provider["runtimeConfig"]["mainModel"].as_str().unwrap_or("").is_empty() {
             provider["runtimeConfig"]["mainModel"] = json!(models.iter().find(|model| model["recommended"] == true).or_else(|| models.first()).map(|model| model["id"].as_str().unwrap()).unwrap_or(""));
@@ -398,6 +453,9 @@ pub async fn refresh(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> 
         Ok::<_, ManagerError>(provider)
     }.await;
     if let Err(failure) = &result {
+        if store::active(paths)? != service_mode || store::generation(&database::open(paths)?)? != generation {
+            return result;
+        }
         let account = find_account(paths, id)?;
         let status = if account["google"]["status"] == "reauth_required" {
             "reauth_required"
@@ -512,6 +570,9 @@ pub(crate) fn update_metadata(
     id: &str,
     patch: Value,
 ) -> Result<(), ManagerError> {
+    if store::active(paths)? {
+        return store::update_google_metadata(paths, id, &patch);
+    }
     let mut provider = find_account(paths, id)?;
     for (key, value) in patch.as_object().unwrap() {
         provider["google"][key] = value.clone();
@@ -596,6 +657,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn service_google_login_persists_only_new_tables_and_rejects_stale_mode() {
+        let root = std::env::temp_dir().join(format!("google-service-login-test-{}",uuid::Uuid::new_v4()));
+        let paths = crate::core::paths::resolve_app_paths(&root);
+        let result = store::save(&paths,&json!({"name":"Google","kind":"google_account"})).unwrap();
+        let id = store::text(&result,"id");
+        crate::api::service_provider::switch_backend(&paths,"service").unwrap();
+        let c = database::open(&paths).unwrap();
+        let generation = store::generation(&c).unwrap();
+        let provider = json!({"id":id,"google":{"subject":"service-subject","email":"test@example.test","port":34567}});
+        let tokens = json!({"access_token":"private-access","refresh_token":"private-refresh","expires_at":9999999999i64});
+        save_login(&paths,&provider,&tokens,generation,true).unwrap();
+        assert_eq!(read_tokens(&paths,id).unwrap(),tokens);
+        assert!(save_login(&paths,&provider,&tokens,generation-1,true).is_err());
+        assert_eq!(store::query(&c,"SELECT token_generation FROM service_google_accounts",&[]).unwrap()[0]["token_generation"],1);
+        assert!(!store::table_exists(&c,"providers").unwrap());
+        assert!(!store::table_exists(&c,"provider_keys").unwrap());
+        crate::api::service_provider::switch_backend(&paths,"legacy").unwrap();
+        assert!(save_login(&paths,&provider,&tokens,generation,true).is_err());
+        assert_eq!(store::google_tokens(&c,id).unwrap(),tokens);
+        drop(c);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
     fn disabled_google_account_settings_remain_editable_without_reactivation() {
         tauri::async_runtime::block_on(async {
             let root =
@@ -608,7 +693,7 @@ mod tests {
             });
             let tokens =
                 json!({ "access_token": "private-access", "refresh_token": "private-refresh" });
-            save_login(&paths, &provider, &tokens).unwrap();
+            save_login(&paths, &provider, &tokens, 0, false).unwrap();
             let original_keys = provider_store::read_keys(&paths).unwrap();
             let original_profiles = provider_store::read_profiles(&paths).unwrap();
             let saved = save_settings(&paths, &json!([]), &json!({
@@ -650,7 +735,7 @@ mod tests {
         let paths = crate::core::paths::resolve_app_paths(&root);
         let provider = json!({"id": "google-test", "type": "google-account", "cli": "codex", "google": {"email": "test@example.com"}});
         let tokens = json!({"access_token": "private-access", "refresh_token": "private-refresh"});
-        save_login(&paths, &provider, &tokens).unwrap();
+        save_login(&paths, &provider, &tokens, 0, false).unwrap();
         assert_eq!(read_tokens(&paths, "google-test").unwrap(), tokens);
         let public = runtime_provider::read_public_providers(&paths)
             .unwrap()

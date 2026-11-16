@@ -4,11 +4,11 @@
 
 ## 1. 实现目标和边界
 
-服务商配置成为共享资源。每个服务商维护一套上游地址、凭据、模型目录和价格，各 Agent 通过独立授权、默认模型和别名使用它。上游来源保留 OpenAI 兼容 API 与 Codex 官方账号两类；普通 API 明确区分 Responses 和 Chat Completions。
+服务商配置成为共享资源。每个服务商维护一套上游地址、凭据、模型目录和价格，各 Agent 通过独立授权、默认模型和别名使用它。上游来源支持 OpenAI 兼容 API、GPT / Codex 官方账号和 Google 官方账号三类；普通 API 明确区分 Responses 和 Chat Completions。
 
 旧 `providers`、`provider_keys` 表结构、记录和旧功能实现继续保留。新模式隐藏并拦截旧配置入口，停止旧网关服务；回滚后恢复旧入口。此次没有物理删除旧实现，因为它们是回滚所需的执行路径。旧数据不会因为新配置变更而被回写。
 
-新增 15 张 `service_` 表，运行模式、代际和 schema 版本存入既有 `app_metadata`。服务商模式下，配置、账号凭据、路由和请求账本均从新表读取；助手、翻译和图片选择器使用新表投影，兼容原有来源 ID。
+新增 16 张 `service_` 表，运行模式、代际和 schema 版本存入既有 `app_metadata`。服务商模式下，配置、账号凭据、路由和请求账本均从新表读取；助手、翻译和图片选择器使用新表投影，兼容原有来源 ID。
 
 ## 2. 架构和授权
 
@@ -19,6 +19,7 @@ flowchart LR
   B --> C[Agent 授权与模型路由]
   C --> D[OpenAI Responses / Chat 服务商]
   C --> E[Codex 官方账号适配]
+  C --> I[Google 官方账号适配]
   B --> F[请求与上游尝试账本]
   C --> G[新 service_ 配置表]
   H[旧 Provider 与旧 Key] -.单向复制.-> G
@@ -45,9 +46,9 @@ Token 只保存 SHA-256 哈希和可识别前缀；工具 Token 明文只在生�
 
 新增普通服务商时填写名称、API 基础地址、上游协议、API Key 和模型。支持代理、自定义请求头、备注与多个逻辑 Key；保存 API Key 留空表示保留原值。认证头、Host、Content-Length 和连接控制头不能放进自定义请求头。
 
-服务商图标沿用旧 Provider 的 `icon` 配置、现有 `AiIcon` 渲染组件及共享 `ProviderIconPicker`，支持内置图标搜索、图片上传与清空。首次迁移同步图标；已有新模式数据库自动从 schema 1 升级至 2，仅给 `service_provider_configs` 增加 `icon` 字段，并依据迁移映射补齐缺失图标。升级不改写旧表，不覆盖新模式已保存的非空图标；之后保存时省略 `icon` 会保留现有值，空字符串表示主动清空。
+服务商图标沿用旧 Provider 的 `icon` 配置、现有 `AiIcon` 渲染组件及共享 `ProviderIconPicker`，支持内置图标搜索、图片上传与清空。首次迁移同步图标；已有 schema 1 数据库先增加 `icon` 并依据迁移映射补齐缺失图标；schema 1/2 自动升级至 3，重建新模式配置表的类型约束以支持 `google_account`，保留所有 ID、修订号及关联记录，并检查外键完整性。升级不改写旧表，不覆盖新模式已保存的非空图标；之后保存时省略 `icon` 会保留现有值，空字符串表示主动清空。
 
-普通上游必须是完整 HTTP/HTTPS 地址，禁止 URL 用户名密码、查询参数、片段及共享网关自身地址。官方账号的上游固定使用项目现有 Codex 官方适配逻辑，其地址字段不用于任意转发。
+普通上游必须是完整 HTTP/HTTPS 地址，禁止 URL 用户名密码、查询参数、片段及共享网关自身地址。GPT 与 Google 官方账号分别复用项目现有官方适配逻辑，其地址字段不用于任意转发。
 
 服务商模型目录复用原模型列表编辑器，支持添加、批量编辑和获取上游模型。高级配置中的模型 JSON 也可填写名称数组；已有模型按名称重新保存时保留其价格和目录元数据。移除模型表示停用，历史记录继续保留。完整模型示例：
 
@@ -69,7 +70,13 @@ Token 只保存 SHA-256 哈希和可识别前缀；工具 Token 明文只在生�
 
 价格是“每百万 Token 的货币微单位”，2000000 表示 2.00 USD / 百万 Token。未知价格填写 null，不能用 0 代替。模型对象保存按提交字段更新；禁用已有模型用 enabled=false，从数组中省略模型不会删除历史模型。
 
-每个服务商分别勾选可用 Agent，勾选后在该 Agent 下方展开独立模型规则。新模型及 `defaultModelName` 可一次保存，后端在同一事务中解析为本服务商模型 ID；原有调用方仍可传 `defaultModelId`。关闭 Agent 授权时隐藏模型配置并保留参数，再次开启时可继续编辑。别名示例：
+顶部默认打开“Agent 列表”，仅展示检测到的 Codex、Claude Code、Claude Desktop。左侧导航底部不再重复展示 Detected CLI。Agent 页隐藏“查看禁用”和“添加”，这两个操作保留在“服务商”“官方账号”页。服务商名称后仅显示实际接管成功的 Agent，不再显示“可用 / 已停用”状态胶囊。禁用图标继续保留；禁用会撤销 Token、关闭授权并恢复客户端文件，恢复冲突会保留备份且停止访问。
+
+每个 Agent 的“配置”按钮打开独立弹框，选择使用的服务商或官方账号，并编辑本 Agent 的模型规则。来源下拉框只显示启用项；禁用项不展示，缺少凭据的启用项显示待配置提示且不可选择，空分类不展示。保存经 revision、凭据、模型归属及参数验证后，恢复此 Agent 原有全部外部客户端接管，再应用所选来源。同一 Agent 不能同时接管两个服务商，内部会话与测试实例不占用此客户端限制。选择“停止使用”恢复原配置；每个来源的模型参数仍保留。多协议工具授权在网关管理中单独配置，Token 仍按实例管理。
+
+官方额度在进入“官方账号”列表时查询，仅请求启用且已有凭据的账号。Agent 页、服务商页、来源下拉框和普通状态同步只读缓存；官方页刷新按钮可重新查询。批次和单账号请求去重，离开官方页后不再查询批次中的后续账号，已发出的请求可以完成。额度接口失败保留已有缓存并继续处理其他账号；历史 Usage 与本地网关统计不受影响。
+
+服务商编辑弹框只维护基础信息、公共模型目录和高级配置。添加入口可选择 API、GPT / Codex 官方账号、Google 账号；新建官方账号保存后直接登录，登录未完成仍可在详情中继续登录，GPT 还可导入 auth.json。官方目录不提供手工增删或同步开关；Google 的目录由官方刷新并自动供 Codex 引用，GPT 沿用客户端官方目录。Agent 配置保存保留 API Key、模型目录、别名和其他 Agent 参数；`defaultModelName` 由后端解析为本服务商模型 ID，原有调用方仍可传 `defaultModelId`。编辑服务商移除模型时同步清理对应的模型引用。别名示例：
 
 ```json
 [
@@ -109,7 +116,7 @@ Desktop 映射示例：
 
 Desktop 空档位按现有档位顺序继承首个已配置档位的模型与 1M 能力；显式设置的 `supports1m` 优先，显示名称也可单独覆盖。全部留空时使用应用时选择的默认模型。客户端 profile 使用安全档位名，网关通过同一映射函数转成真实上游名称。既有新模式配置未包含 `modelMappings` 时保留原模型目录行为，首次编辑保存后使用新规则。
 
-所有 Agent 共用服务商模型目录。API 服务商获取上游模型后，Codex 列表及其他 Agent 的模型下拉框立即使用同一份目录；Codex 区域只读展示目录并支持选择默认模型与切换同步，不提供添加、批量编辑、删除或获取按钮，目录维护统一在服务商模型目录完成。API 服务商的 Codex 开启同步时，将本服务商全部可用模型写入 `.ai_manager_service_models.json` 并写入 `model_catalog_json`。关闭同步时移除目录引用，不写新的目录文件。官方账号显示“使用官方模型列表”，隐藏模型列表编辑、获取和同步入口，应用时使用客户端官方目录，即使历史配置开启过同步也不写自定义目录。解除接管仍按原备份恢复。既有 API 新模式配置缺少 `syncModelList` 时保持此前默认同步的行为；旧 `options.modelList` 仅保留类型兼容，不参与同步筛选或模型引用校验，首次编辑保存会移除该字段，旧空数组不会阻止同步。未知字段、错误类型、跨服务商的生效模型引用以及启用 Agent 引用停用模型均明确拒绝。
+所有 Agent 共用服务商模型目录。API 服务商获取上游模型后，Codex 列表及其他 Agent 的模型下拉框立即使用同一份目录；Codex 区域只读展示目录并支持选择默认模型与切换同步，不提供添加、批量编辑、删除或获取按钮，目录维护统一在服务商模型目录完成。API 服务商的 Codex 开启同步时，将本服务商全部可用模型写入 `.ai_manager_service_models.json` 并写入 `model_catalog_json`。关闭同步时移除目录引用，不写新的目录文件。官方账号显示“使用官方模型列表”，隐藏模型列表编辑、获取和同步入口。GPT 账号沿用客户端官方目录；Google 将官方返回的可用模型自动写入目录供 Codex 引用，不使用 API 来源的同步开关。解除接管仍按原备份恢复。既有 API 新模式配置缺少 `syncModelList` 时保持此前默认同步的行为；旧 `options.modelList` 仅保留类型兼容，不参与同步筛选或模型引用校验，首次编辑保存会移除该字段，旧空数组不会阻止同步。未知字段、错误类型、跨服务商的生效模型引用以及启用 Agent 引用停用模型均明确拒绝。
 
 保存使用 provider.revision 比较更新，过期页面不能覆盖新修订。配置或模型目录更新后，已接管实例会进入 pending；需要解除接管、检查恢复结果后重新应用。外部工具 Token 不依赖客户端文件，每次请求仍重新校验服务商、Agent 和模型。
 
@@ -121,7 +128,7 @@ Desktop 空档位按现有档位顺序继承首个已配置档位的模型与 1M
 
 1. 初始化新表，先记录一次迁移运行。
 2. 在 IMMEDIATE 事务中直接读取受支持结构的旧表；不调用旧 Provider 初始化或保存接口。
-3. 仅复制旧 Codex API 服务商和 Codex 官方账号；其他 Agent 来源记为 skipped。
+3. 复制旧 Codex API 服务商、Codex 官方账号和 Google 账号；其他 Agent 来源记为 skipped。Google OAuth 重新加密写入独立新表，旧 OAuth 字段、Key 和 Usage 只读。已经处于新模式的用户也会自动补齐此前未迁入的 Google 账号。
 4. 复制名称、地址、代理、请求头、备注、启用状态、Key 版本、官方账号凭据及额度、模型目录、默认模型和 Codex 参数，包括 `syncModelList`。旧模型名称统一合入服务商模型目录，不再保存独立 Codex 子列表。已完成迁移的配置不回填覆盖，缺失字段按上述兼容规则处理。
 5. 迁移后默认仅 Codex 授权开启，Claude Code、Claude Desktop 关闭；工具授权需自行开启。
 6. 保留旧存储 ID。旧官方账号存储 ID 通常为 account:原ID，新表保留它；前端公开账号 ID 去掉一层前缀，并提供 serviceProviderId。后台同时接受历史公开 ID 和带前缀的存储 ID。
@@ -136,11 +143,11 @@ Desktop 空档位按现有档位顺序继承首个已配置档位的模型与 1M
 ### 5.1 操作顺序
 
 1. 打开“设置 → 系统设置”，开启“共享服务商模式”。
-2. 后端先同步尚未入库的旧会话用量，再启动共享网关并自动复制 Codex API 服务商与官方账号。有在途请求则拒绝切换；迁移失败时保持旧模式，关闭本次启动的新监听。
-3. 成功后自动进入服务商列表，沿用原 Provider 列表的紧凑卡片与图标操作。卡片显示服务商“可用 / 已停用”，可通过图标停用或恢复，不再使用单一当前 Agent 的“启用 / 取消使用”按钮。顶部按全部、服务商、官方账号筛选；停用项通过右上角显示按钮查看。迁移报告位于右上角“网关与 Agent 管理”中；重复启用不覆盖新表修改。
-4. 核对上游协议、Key、官方账号、模型与价格；补录不可读凭据，勾选所需 Agent。
-5. 打开“网关与 Agent 管理”，选择服务商，点击“应用 / 测试 Agent”，选择 Agent、模型、配置目录。可先做兼容测试，再应用到客户端；编辑中的授权决定允许哪些 Agent 使用该服务商。
-6. 外部工具使用 gateway 授权，生成独立 Token 并配置后端返回的地址。
+2. 后端先同步尚未入库的旧会话用量，再启动共享网关并自动复制 Codex API 服务商、GPT 官方账号和 Google 账号。有在途请求则拒绝切换；迁移失败时保持旧模式，关闭本次启动的新监听。
+3. 成功后显示新模式界面，默认进入 Agent 列表；服务商与官方账号各自维护来源，查看禁用项和添加按钮只在这两个标签显示。服务商名称旁展示已应用的 Agent，保留原 Provider 卡片与图标操作；迁移报告在右上角“网关与 Agent 管理”中。
+4. 在服务商 / 官方账号页核对协议、Key、账号、模型与价格；需要新增时选择 API、GPT 官方账号或 Google 账号。
+5. 在 Agent 列表点击对应客户端的“配置”，选择使用来源和本 Agent 模型规则，点击“保存并应用”。同一个 Agent 切换来源时先解除旧接管；高级目录管理、恢复冲突与兼容测试仍在网关管理中。
+6. 外部工具在“网关与 Agent 管理 → 配置多协议工具”中保存 gateway 授权，再生成独立 Token 并配置后端返回的地址。
 7. “用量”始终使用原 Usage 页面，原有筛选、图表、分页、模型费用配置和报表导出继续使用。历史记录与新网关记录统一查询；实例区保留 synced、pending、conflict 状态。
 
 仅启用新模式不会把所有客户端自动指向新网关；必须按实际使用的 Agent 应用。应用内助手与翻译统一经过网关，需要服务商的 Codex 授权及已配置模型。图片工作台继续使用独立图片链路和图片统计。
@@ -149,11 +156,11 @@ Desktop 空档位按现有档位顺序继承首个已配置档位的模型与 1M
 
 | Agent | 管理内容 |
 | --- | --- |
-| Codex | config.toml 的模型、目录引用、独立 model_providers.ai_manager_service 节点；同步开启且列表非空时另写 .ai_manager_service_models.json |
+| Codex | config.toml 的模型、目录引用、独立 model_providers.ai_manager_service 节点；API 开启同步或使用 Google 官方目录时另写 .ai_manager_service_models.json |
 | Claude Code | settings.json 的模型及相关 env；清除冲突的 ANTHROPIC_API_KEY，写入本地 AUTH_TOKEN、地址和模型 |
 | Claude Desktop | 现有路径解析得到的两份 claude_desktop_config.json、configLibrary 下专用 profile 和 _meta.json |
 
-Codex 不写 auth.json；独立 provider 节点使用本地 Bearer、requires_openai_auth=false、supports_websockets=false。保留已有 MCP、权限和其他业务配置。Fast、1M 窗口开关关闭时清除对应接管字段，避免遗留选项继续生效。
+Codex 不写 auth.json；独立 provider 节点使用本地 Bearer、requires_openai_auth=false、supports_websockets=false。顶层 model_provider 固定为 ai_manager_service，上游地址和真实密钥留在服务商新表，由共享网关转发。应用时清理旧模式生成的 model_providers.custom、model_providers.codex_local_access 及其子表，并重建当前 ai_manager_service 节点，避免旧认证字段或地址遗留；openai_base_url 同时移除。完整原文先保存至加密备份，解除接管可恢复原有节点。保留其他用户定义 Provider、MCP、权限和项目配置。Fast、1M 窗口开关关闭时清除对应接管字段，避免遗留选项继续生效。
 
 写入前把原文件存在性、完整内容和哈希，以及待写内容和哈希持久化至新表；内容复用项目现有凭据加密机制。该机制不是操作系统凭据库。先准备记录，再原子写文件，最后标记实例同步。写入前后检查外部变化和配置修订；失败执行恢复，无法自动恢复的文件保留 conflict。
 
@@ -217,7 +224,7 @@ Usage 兼容查询只读取并投影新账本，不删除、搬移或重新归�
 | 位置 | 职责 |
 | --- | --- |
 | src-tauri/src/core/service_provider_store.rs | 新存储、校验、Key/账号加密、目录投影和统计 |
-| src-tauri/src/core/service_provider_store/schema.sql | 15 张新表的唯一建表定义 |
+| src-tauri/src/core/service_provider_store/schema.sql | 16 张新表的唯一建表定义 |
 | src-tauri/src/core/service_provider_store/migration.rs | 旧表只读、单向幂等复制 |
 | src-tauri/src/api/service_provider.rs | 配置操作、接管、恢复和模式切换 |
 | src-tauri/src/api/multi_protocol_gateway/service.rs | 鉴权、路由、attempt、结算、模型获取和兼容测试 |
@@ -270,7 +277,7 @@ node scripts/test-service-providers.mjs
 | `id` | TEXT | 否 | 无 | 本表稳定主键；新建由应用生成，迁移服务商保留旧存储 ID | `PRIMARY KEY` |
 | `name` | TEXT | 否 | 无 | 界面显示名称 | `CHECK(length(trim(name))>0)` |
 | `icon` | TEXT | 否 | `''` | 沿用旧 Provider 的图标名称或自定义图片地址；空串使用默认展示 | — |
-| `kind` | TEXT | 否 | 无 | 来源类型：api 或 codex_account | `CHECK(kind IN ('api','codex_account'))` |
+| `kind` | TEXT | 否 | 无 | 来源类型：api、codex_account、google_account | `CHECK(kind IN ('api','codex_account','google_account'))` |
 | `upstream_protocol` | TEXT | 否 | 无 | 上游协议；普通 API 可为 responses/chat，官方账号固定 responses | `CHECK(upstream_protocol IN ('responses','chat'))` |
 | `base_url` | TEXT | 否 | `''` | 普通 API 的基础地址；官方账号不使用任意自定义上游 | — |
 | `proxy` | TEXT | 否 | `''` | 出站代理地址；空串按项目默认网络行为 | — |
@@ -285,7 +292,7 @@ node scripts/test-service-providers.mjs
 表级约束与索引：
 
 ```sql
-CHECK(kind<>'codex_account' OR upstream_protocol='responses')
+CHECK(kind='api' OR upstream_protocol='responses')
 ```
 
 ### 10.2 service_provider_keys
@@ -640,3 +647,24 @@ FOREIGN KEY(provider_id,model_id) REFERENCES service_provider_models(provider_id
 UNIQUE(migration_id,source_table,source_id)
 CREATE UNIQUE INDEX IF NOT EXISTS service_migration_source ON service_provider_migration_items(source_table,source_id) WHERE status IN ('copied','unreadable');
 ```
+
+### 10.16 service_google_accounts
+
+用途：Google 官方账号身份、加密 OAuth、本地转发认证及官方额度元数据。schema 版本为 3。该表凭据不进入业务备份、公开状态或 Usage；公开状态只返回邮箱、subject、到期时间与元数据。
+
+| 字段 | 类型 | 可空 | 默认值 | 含义及约束 |
+| --- | --- | --- | --- | --- |
+| `provider_id` | TEXT | 否 | 无 | 主键，引用 service_provider_configs(id)，删除 RESTRICT |
+| `external_subject` | TEXT | 否 | 无 | Google 官方稳定账号标识；唯一索引防止重复添加同一账号 |
+| `email` | TEXT | 否 | 空串 | 官方账号邮箱 |
+| `oauth_ciphertext` | TEXT | 否 | 无 | 加密 OAuth JSON：access_token、refresh_token、client_id、client_secret、expires_at |
+| `local_key_ciphertext` | TEXT | 否 | 无 | 独立加密的本地 Google 转发令牌，不向 Agent 下发 OAuth |
+| `expires_at` | INTEGER | 是 | NULL | OAuth 到期时间，Unix 秒 |
+| `gateway_port` | INTEGER | 否 | 无 | 本地 Google 适配器端口，1～65535；共享入口仍为 15724 |
+| `metadata_json` | TEXT | 否 | {} | 官方返回的 models、project、plan、quotaGroups、状态及提示等 JSON 对象 |
+| `token_generation` | INTEGER | 否 | 1 | OAuth 凭据代际，刷新 / 重登录递增；请求账本记录对应版本 |
+| `revision` | INTEGER | 否 | 1 | 账号数据修订号，更新递增 |
+| `created_at` | INTEGER | 否 | 无 | 创建时间，Unix 毫秒 |
+| `updated_at` | INTEGER | 否 | 无 | 最后更新时间，Unix 毫秒 |
+
+Google 登录回调校验启动时的模式和代际；账号删除、模式改变或身份不一致时拒绝写入。Google 请求仍经过共享网关的授权、模型路由和 service_gateway_requests / service_gateway_attempts 记账，再由现有 Google 适配器转发。官方目录刷新对不再返回的模型执行停用，保留其历史和价格。

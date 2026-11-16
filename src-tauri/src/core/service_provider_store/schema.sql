@@ -3,7 +3,7 @@ CREATE TABLE IF NOT EXISTS service_provider_configs (
   id TEXT PRIMARY KEY NOT NULL,
   name TEXT NOT NULL CHECK(length(trim(name))>0),
   icon TEXT NOT NULL DEFAULT '',
-  kind TEXT NOT NULL CHECK(kind IN ('api','codex_account')),
+  kind TEXT NOT NULL CHECK(kind IN ('api','codex_account','google_account')),
   upstream_protocol TEXT NOT NULL CHECK(upstream_protocol IN ('responses','chat')),
   base_url TEXT NOT NULL DEFAULT '',
   proxy TEXT NOT NULL DEFAULT '',
@@ -14,7 +14,7 @@ CREATE TABLE IF NOT EXISTS service_provider_configs (
   deleted_at INTEGER,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
-  CHECK(kind<>'codex_account' OR upstream_protocol='responses')
+  CHECK(kind='api' OR upstream_protocol='responses')
 ) STRICT;
 CREATE TABLE IF NOT EXISTS service_provider_keys (
   id TEXT PRIMARY KEY NOT NULL,
@@ -52,6 +52,22 @@ CREATE TABLE IF NOT EXISTS service_provider_accounts (
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 ) STRICT;
+-- Google OAuth 与本地转发令牌独立加密，公开状态只读取身份及额度元数据。
+CREATE TABLE IF NOT EXISTS service_google_accounts (
+  provider_id TEXT PRIMARY KEY NOT NULL REFERENCES service_provider_configs(id) ON DELETE RESTRICT,
+  external_subject TEXT NOT NULL,
+  email TEXT NOT NULL DEFAULT '',
+  oauth_ciphertext TEXT NOT NULL,
+  local_key_ciphertext TEXT NOT NULL,
+  expires_at INTEGER,
+  gateway_port INTEGER NOT NULL CHECK(gateway_port BETWEEN 1 AND 65535),
+  metadata_json TEXT NOT NULL DEFAULT '{}' CHECK(json_valid(metadata_json) AND json_type(metadata_json)='object'),
+  token_generation INTEGER NOT NULL DEFAULT 1 CHECK(token_generation>0),
+  revision INTEGER NOT NULL DEFAULT 1 CHECK(revision>0),
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+) STRICT;
+CREATE UNIQUE INDEX IF NOT EXISTS service_google_subject ON service_google_accounts(external_subject);
 CREATE TABLE IF NOT EXISTS service_provider_models (
   id TEXT PRIMARY KEY NOT NULL,
   provider_id TEXT NOT NULL REFERENCES service_provider_configs(id) ON DELETE RESTRICT,

@@ -1,7 +1,7 @@
 <template>
   <section class="service-center">
     <header class="provider-toolbar">
-      <div class="provider-tabs" aria-label="服务商类型">
+      <div class="provider-tabs" aria-label="Agent 与服务商">
         <button
           v-for="item in providerTabs"
           :key="item.id"
@@ -17,6 +17,7 @@
       </div>
       <div class="toolbar-actions">
         <button
+          v-if="providerTab !== 'agents'"
           class="toolbar-button"
           :class="{ 'toolbar-button-selected': showDisabledItems }"
           type="button"
@@ -51,22 +52,83 @@
           <Server :size="18" />
         </button>
         <button
+          v-if="providerTab !== 'agents'"
           class="toolbar-button toolbar-add"
           type="button"
           title="新增服务商"
           aria-label="新增服务商"
           :disabled="busy"
-          @click="editProvider()"
+          @click="showCreateOptions = true"
         >
           <Plus :size="22" />
         </button>
       </div>
     </header>
 
-    <div class="provider-list">
+    <div v-if="providerTab === 'agents'" class="agent-list">
+      <article
+        v-for="agent in detectedAgents"
+        :key="agent.id"
+        class="agent-card"
+      >
+        <span class="agent-avatar">
+          <AiIcon
+            v-if="agent.icon"
+            class="agent-icon"
+            :name="agent.icon"
+            :alt="agentLabel(agent.id)"
+          />
+          <Bot v-else :size="24" />
+        </span>
+        <div class="agent-main">
+          <div class="agent-heading">
+            <span class="agent-name" data-emphasis>{{
+              agentLabel(agent.id)
+            }}</span>
+            <span class="agent-version">{{ agent.version || "已检测" }}</span>
+          </div>
+          <span class="agent-source">
+            <span
+              v-if="currentAgentInstance(agent.id)"
+              class="agent-source-dot"
+            ></span>
+            {{ currentAgentSource(agent.id) }}
+          </span>
+          <span
+            v-if="agent.configPath"
+            class="agent-path"
+            :title="agent.configPath"
+          >
+            {{ agent.configPath }}
+          </span>
+        </div>
+        <button
+          class="agent-config-button"
+          type="button"
+          :aria-label="`配置 ${agentLabel(agent.id)}`"
+          :disabled="busy"
+          @click="openAgentConfig(agent)"
+        >
+          <Settings2 :size="16" />
+          配置
+          <ChevronRight :size="15" />
+        </button>
+      </article>
+      <div v-if="!detectedAgents.length" class="provider-empty">
+        尚未检测到 Codex、Claude Code 或 Claude Desktop，请安装后刷新。
+      </div>
+    </div>
+
+    <div v-else class="provider-list">
       <p v-if="loginState?.status === 'pending'" class="notice">
         官方登录进行中：{{ loginState.message }}
         <button class="btn" :disabled="busy" @click="perform('cancel-login')">
+          取消登录
+        </button>
+      </p>
+      <p v-if="googleLoginState?.status === 'pending'" class="notice">
+        Google 登录进行中：{{ googleLoginState.message }}
+        <button class="btn" :disabled="busy" @click="cancelGoogleLogin">
           取消登录
         </button>
       </p>
@@ -102,13 +164,24 @@
             >
               {{ providerDisplayName(provider) }}
             </span>
+            <span
+              v-for="agent in providerRunningAgents(provider.id)"
+              :key="agent"
+              class="running-agent-tag"
+              :title="`${agentLabel(agent)} 正在使用此服务商`"
+            >
+              <span class="running-agent-dot"></span>
+              {{ agentLabel(agent) }}
+            </span>
             <span class="provider-tag">
               {{
                 provider.kind === "codex_account"
-                  ? "官方账号"
-                  : provider.upstreamProtocol === "chat"
-                    ? "Chat"
-                    : "Responses"
+                  ? "GPT 官方账号"
+                  : provider.kind === "google_account"
+                    ? "Google 账号"
+                    : provider.upstreamProtocol === "chat"
+                      ? "Chat"
+                      : "Responses"
               }}
             </span>
             <span
@@ -125,8 +198,10 @@
           >
           <span class="provider-url" :title="provider.baseUrl">
             {{
-              provider.kind === "codex_account"
-                ? "Codex 官方账号"
+              provider.kind !== "api"
+                ? provider.kind === "google_account"
+                  ? "Google 官方账号"
+                  : "GPT / Codex 官方账号"
                 : provider.baseUrl
             }}
           </span>
@@ -160,40 +235,29 @@
               </div>
             </div>
           </div>
-          <span
-            class="provider-meta"
-            :title="
-              enabledAgents(provider.id) || '请在编辑中选择允许使用的 Agent'
-            "
-          >
-            {{ enabledAgents(provider.id) || "尚未授权 Agent" }} ·
+          <span class="provider-meta">
             {{
-              provider.kind === "codex_account"
+              provider.kind !== "api"
                 ? "使用官方模型列表"
                 : `${providerModels(provider.id).length} 个模型`
             }}
           </span>
         </div>
         <div class="provider-actions">
-          <div class="action-main">
-            <span
-              class="state-pill"
-              :class="{ 'state-pill-muted': !provider.enabled }"
-              title="服务商配置状态"
-            >
-              <span v-if="provider.enabled" class="state-dot"></span>
-              {{ provider.enabled ? "可用" : "已停用" }}
-            </span>
-          </div>
           <div class="icon-actions">
             <button
-              v-if="provider.kind === 'codex_account'"
+              v-if="provider.kind !== 'api'"
               class="icon-button"
               type="button"
               title="刷新额度"
               aria-label="刷新额度"
-              :disabled="busy"
-              @click="perform('refresh-quota', { providerId: provider.id })"
+              :disabled="
+                busy ||
+                !provider.enabled ||
+                !provider.hasCredential ||
+                refreshingQuotaIds.has(provider.id)
+              "
+              @click="refreshQuota(provider)"
             >
               <RefreshCw :size="16" />
             </button>
@@ -284,8 +348,10 @@
               <dt class="detail-label">服务商类型</dt>
               <dd class="detail-value">
                 {{
-                  detailProvider.kind === "codex_account"
-                    ? "Codex 官方账号"
+                  detailProvider.kind !== "api"
+                    ? detailProvider.kind === "google_account"
+                      ? "Google 官方账号"
+                      : "GPT / Codex 官方账号"
                     : "OpenAI 兼容服务商"
                 }}
               </dd>
@@ -295,9 +361,13 @@
               <dd class="detail-value">{{ detailProvider.baseUrl }}</dd>
             </div>
             <div class="detail-field">
-              <dt class="detail-label">允许使用</dt>
+              <dt class="detail-label">正在使用的 Agent</dt>
               <dd class="detail-value">
-                {{ enabledAgents(detailProvider.id) || "尚未授权 Agent" }}
+                {{
+                  providerRunningAgents(detailProvider.id)
+                    .map(agentLabel)
+                    .join("、") || "暂无 Agent 使用"
+                }}
               </dd>
             </div>
             <div class="detail-field">
@@ -337,10 +407,10 @@
               :disabled="busy"
               @click="editProvider(detailProvider)"
             >
-              编辑配置与 Agent 授权
+              编辑配置
             </button>
           </div>
-          <p v-if="detailProvider.kind === 'codex_account'" class="muted">
+          <p v-if="detailProvider.kind !== 'api'" class="muted">
             使用官方模型列表
           </p>
           <div v-else class="detail-models">
@@ -373,10 +443,13 @@
               </button>
               <button
                 class="btn"
-                :disabled="busy"
-                @click="
-                  perform('refresh-quota', { providerId: detailProvider.id })
+                :disabled="
+                  busy ||
+                  !detailProvider.enabled ||
+                  !detailProvider.hasCredential ||
+                  refreshingQuotaIds.has(detailProvider.id)
                 "
+                @click="refreshQuota(detailProvider)"
               >
                 刷新官方额度
               </button>
@@ -400,6 +473,36 @@
                 )
               }}</pre>
             </details>
+          </template>
+          <template v-if="detailProvider.kind === 'google_account'">
+            <h3 class="section-title">Google 官方账号</h3>
+            <div class="card-actions">
+              <button
+                class="btn"
+                :disabled="busy"
+                @click="startGoogleLogin(detailProvider)"
+              >
+                Google 登录
+              </button>
+              <button
+                class="btn"
+                :disabled="
+                  busy ||
+                  !detailProvider.enabled ||
+                  !detailProvider.hasCredential ||
+                  refreshingQuotaIds.has(detailProvider.id)
+                "
+                @click="refreshQuota(detailProvider)"
+              >
+                刷新官方额度
+              </button>
+            </div>
+            <p class="muted">
+              {{
+                googleAccount(detailProvider.id)?.metadata?.message ||
+                "使用官方模型列表"
+              }}
+            </p>
           </template>
         </template>
         <div v-else-if="detailTab === 'keys'" class="key-list">
@@ -521,10 +624,14 @@
           </button>
           <button
             class="btn"
-            :disabled="busy || !managerProvider"
-            @click="editProvider(managerProvider)"
+            :disabled="
+              busy ||
+              !managerProvider?.enabled ||
+              !managerProvider?.hasCredential
+            "
+            @click="openToolConfig(managerProvider)"
           >
-            编辑配置与授权
+            配置多协议工具
           </button>
         </div>
         <h3 class="section-title">Agent 实例与文件接管</h3>
@@ -726,9 +833,34 @@
     </BaseModal>
 
     <BaseModal
-      v-if="form"
+      v-if="showCreateOptions"
+      title="添加服务商或官方账号"
+      description="选择来源类型，账号授权成功后可在 Agent 列表中使用。"
+      @close="showCreateOptions = false"
+    >
+      <div class="create-options">
+        <button
+          v-for="source in createSources"
+          :key="source.kind"
+          class="create-option"
+          type="button"
+          :disabled="busy"
+          @click="createSource(source)"
+        >
+          <AiIcon :name="source.icon" :alt="source.label" class="create-icon" />
+          <span class="create-description">
+            <span class="create-label">{{ source.label }}</span>
+            <span class="create-hint">{{ source.hint }}</span>
+          </span>
+          <ChevronRight :size="18" />
+        </button>
+      </div>
+    </BaseModal>
+
+    <BaseModal
+      v-if="form && editorSection === 'provider'"
       :title="form.id ? '编辑服务商' : '新增服务商'"
-      description="配置上游服务与允许使用的 Agent。"
+      description="配置上游服务与公共模型目录。"
       @close="form = null"
     >
       <form class="provider-form" @submit.prevent="saveProvider">
@@ -745,6 +877,7 @@
             >
               <option value="api">OpenAI 兼容服务商</option>
               <option value="codex_account">Codex 官方账号</option>
+              <option value="google_account">Google 官方账号</option>
             </select></label
           >
           <template v-if="form.kind === 'api'">
@@ -802,29 +935,9 @@
           </p>
         </template>
         <p v-else class="muted">使用官方模型列表</p>
-        <fieldset class="agent-fields">
-          <legend>允许使用的 Agent</legend>
-          <div
-            v-for="(binding, index) in form.bindings"
-            :key="binding.agentType"
-            class="agent-binding"
-          >
-            <label class="check-field"
-              ><input v-model="binding.enabled" type="checkbox" />{{
-                agentLabel(binding.agentType)
-              }}</label
-            >
-            <ServiceAgentModelFields
-              v-if="binding.enabled"
-              v-model="form.bindings[index]"
-              :provider-kind="form.kind"
-              :models="draftModels.filter((item) => item.enabled)"
-              :schema="runtimeConfigSchemas[binding.agentType] || {}"
-              :desktop-routes="data.desktopModelRoutes || []"
-              :disabled="busy"
-            />
-          </div>
-        </fieldset>
+        <p v-if="!form.id" class="muted">
+          保存后，到“Agent 列表”中选择此服务商并配置模型。
+        </p>
         <details class="advanced-fields">
           <summary>
             {{
@@ -889,7 +1002,89 @@
             取消
           </button>
           <button class="btn btn-primary" type="submit" :disabled="busy">
-            保存配置
+            {{ !form.id && form.kind !== "api" ? "保存并登录" : "保存配置" }}
+          </button>
+        </div>
+      </form>
+    </BaseModal>
+
+    <BaseModal
+      v-if="agentConfig"
+      :title="`配置 ${agentLabel(agentConfig.id)}`"
+      :description="
+        agentConfig.id === 'gateway'
+          ? '保存此服务商的工具授权后，可在网关管理中生成独立调用 Token。'
+          : '选择当前使用的服务商或官方账号，保存后应用到此 Agent。'
+      "
+      @close="closeAgentConfig"
+    >
+      <form class="provider-form" @submit.prevent="saveAgentConfig">
+        <label class="form-field">
+          使用来源
+          <select
+            v-model="agentProviderId"
+            class="input"
+            :disabled="busy"
+            @change="selectAgentProvider"
+          >
+            <option value="" :disabled="agentConfig.id === 'gateway'">
+              {{
+                agentConfig.id === "gateway"
+                  ? "选择服务商"
+                  : "停止使用，恢复原有配置"
+              }}
+            </option>
+            <optgroup
+              v-for="group in sourceGroups"
+              :key="group.kind"
+              :label="group.label"
+            >
+              <option
+                v-for="provider in group.providers"
+                :key="provider.id"
+                :value="provider.id"
+                :disabled="!provider.hasCredential"
+              >
+                {{ providerDisplayName(provider)
+                }}{{ !provider.hasCredential ? "（待登录或配置凭据）" : "" }}
+              </option>
+            </optgroup>
+          </select>
+        </label>
+        <p v-if="!agentProviderId" class="muted">
+          选择服务商或官方账号后，可配置该 Agent 的模型规则。
+        </p>
+        <p v-else-if="form && form.kind !== 'api'" class="muted">
+          使用官方模型列表
+        </p>
+        <ServiceAgentModelFields
+          v-if="form && agentBindingIndex >= 0"
+          v-model="form.bindings[agentBindingIndex]"
+          :provider-kind="form.kind"
+          :models="draftModels.filter((item) => item.enabled)"
+          :schema="runtimeConfigSchemas[agentConfig.id] || {}"
+          :desktop-routes="data.desktopModelRoutes || []"
+          :disabled="busy"
+        />
+        <div class="form-footer">
+          <button
+            class="btn"
+            type="button"
+            :disabled="busy"
+            @click="closeAgentConfig"
+          >
+            取消
+          </button>
+          <button
+            class="btn btn-primary"
+            type="submit"
+            :disabled="
+              busy ||
+              Boolean(agentProviderId && !form) ||
+              (agentConfig.id === 'gateway' && !agentProviderId)
+            "
+          >
+            {{ agentConfig.id === "gateway" ? "保存授权" : "保存并应用" }}
           </button>
         </div>
       </form>
@@ -1064,16 +1259,18 @@
 </template>
 
 <script setup>
-import { computed, onMounted, ref, watch } from "vue"
+import { computed, onMounted, onUnmounted, ref, watch } from "vue"
 import {
   Ban,
+  Bot,
+  ChevronRight,
   Eye,
   EyeOff,
   KeyRound,
-  Layers,
   Plus,
   RefreshCw,
   Server,
+  Settings2,
   ShieldCheck,
   SquarePen,
   Trash2
@@ -1103,7 +1300,35 @@ const data = ref({
   ...props.initialState
 })
 const busy = ref(false)
-const providerTab = ref("all")
+const providerTab = ref("agents")
+const showCreateOptions = ref(false)
+const googleLoginState = ref(null)
+const refreshingQuotaIds = ref(new Set())
+let googleLoginTimer
+let googleLoginRequest = 0
+let officialQuotaTask
+let disposed = false
+let savedProviderId = ""
+const createSources = [
+  {
+    kind: "api",
+    label: "API 服务商",
+    icon: "codex.svg",
+    hint: "配置 OpenAI 兼容地址与 API Key"
+  },
+  {
+    kind: "codex_account",
+    label: "GPT / Codex 官方账号",
+    icon: "codex.svg",
+    hint: "官方登录，也支持导入 auth.json"
+  },
+  {
+    kind: "google_account",
+    label: "Google 账号",
+    icon: "google.svg",
+    hint: "Google 授权登录，使用官方模型与额度"
+  }
+]
 const showDisabledItems = ref(false)
 const showGatewayManager = ref(false)
 const managerProviderId = ref("")
@@ -1113,14 +1338,14 @@ const managerProvider = computed(() =>
 const detailProviderId = ref("")
 const detailTab = ref("overview")
 const providerTabs = [
-  { id: "all", label: "全部", icon: Layers },
+  { id: "agents", label: "Agent 列表", icon: Bot },
   { id: "api", label: "服务商", icon: Server },
   { id: "codex_account", label: "官方账号", icon: ShieldCheck }
 ]
-// 列表按配置类型展示，Agent 授权保留在编辑中，避免重新按 Agent 拆分配置。
+// Agent 管理使用来源，服务商与官方账号各自维护连接和凭据。
 const scopedProviders = computed(() =>
-  data.value.providers.filter(
-    (item) => providerTab.value === "all" || item.kind === providerTab.value
+  data.value.providers.filter((item) =>
+    providerTab.value === "api" ? item.kind === "api" : item.kind !== "api"
   )
 )
 const disabledProviderCount = computed(
@@ -1142,6 +1367,35 @@ const detailTabs = computed(() => [
   { id: "instances", label: "关联 Agent" }
 ])
 const form = ref(null)
+const editorSection = ref("provider")
+const agentConfig = ref(null)
+const agentProviderId = ref("")
+const sourceGroups = computed(() =>
+  [
+    { kind: "api", label: "服务商" },
+    { kind: "codex_account", label: "GPT / Codex 官方账号" },
+    { kind: "google_account", label: "Google 账号" }
+  ]
+    .map((group) => ({
+      ...group,
+      providers: data.value.providers.filter(
+        (item) => item.enabled && item.kind === group.kind
+      )
+    }))
+    .filter((group) => group.providers.length)
+)
+const detectedAgents = computed(() =>
+  props.cliTargets.filter(
+    (item) =>
+      item.installed && ["codex", "claude", "claude-desktop"].includes(item.id)
+  )
+)
+const agentBindingIndex = computed(
+  () =>
+    form.value?.bindings.findIndex(
+      (item) => item.agentType === agentConfig.value?.id
+    ) ?? -1
+)
 // 简单模型列表与高级详情共用一份草稿，避免编辑名称时丢失价格和目录扩展。
 const draftModels = computed(() => {
   try {
@@ -1218,7 +1472,24 @@ watch(
   },
   { deep: true }
 )
-onMounted(refresh)
+// 进入官方账号列表才查询额度，普通状态刷新和 Agent 配置只读已有缓存。
+watch(providerTab, (tab) => {
+  if (tab === "codex_account") refreshOfficialQuotas()
+})
+onMounted(async () => {
+  await refresh()
+  if (disposed) return
+  try {
+    const request = googleLoginRequest
+    const result = await serviceProviderApi.invoke("google-login-state")
+    if (disposed || request !== googleLoginRequest) return
+    googleLoginState.value = result
+    if (googleLoginState.value?.status === "pending")
+      googleLoginTimer = setTimeout(() => pollGoogleLogin(request), 1500)
+  } catch (error) {
+    createMessage.error(error?.message || String(error))
+  }
+})
 const agentLabel = (id) =>
   agents.find((item) => item.id === id)?.label || id || "未鉴权"
 const agentVersion = (id) =>
@@ -1227,6 +1498,8 @@ const providerName = (id) =>
   data.value.providers.find((item) => item.id === id)?.name || id
 const providerAccount = (id) =>
   data.value.accounts?.find((item) => item.providerId === id)
+const googleAccount = (id) =>
+  data.value.googleAccounts?.find((item) => item.providerId === id)
 const providerDisplayName = (provider) =>
   provider.kind === "codex_account" &&
   (!provider.name || provider.name === provider.id)
@@ -1238,11 +1511,40 @@ const providerInstances = (id) =>
   visibleInstances.value.filter(
     (item) => item.providerId === id && item.status === "active"
   )
-const enabledAgents = (id) =>
-  data.value.bindings
-    .filter((item) => item.providerId === id && item.enabled)
-    .map((item) => agentLabel(item.agentType))
-    .join("、")
+// 启动标识只取客户端真实接管结果，授权和内置会话不代表客户端已启用。
+const currentAgentInstance = (agent) =>
+  visibleInstances.value.find(
+    (item) =>
+      item.agentType === agent &&
+      item.status === "active" &&
+      data.value.providers.some(
+        (provider) => provider.id === item.providerId && provider.enabled
+      )
+  )
+const currentAgentSource = (agent) => {
+  const instance = currentAgentInstance(agent)
+  if (!instance) return "尚未选择使用来源"
+  const provider = data.value.providers.find(
+    (item) => item.id === instance.providerId
+  )
+  return `${providerDisplayName(provider)}${instance.syncStatus === "synced" ? "" : " · 待同步"}`
+}
+const providerRunningAgents = (id) => [
+  ...new Set(
+    visibleInstances.value
+      .filter(
+        (item) =>
+          item.providerId === id &&
+          ["codex", "claude", "claude-desktop"].includes(item.agentType) &&
+          item.status === "active" &&
+          item.syncStatus === "synced" &&
+          data.value.providers.some(
+            (provider) => provider.id === id && provider.enabled
+          )
+      )
+      .map((item) => item.agentType)
+  )
+]
 const formatTime = (value) =>
   value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "—"
 
@@ -1292,7 +1594,7 @@ async function toggleProviderEnabled(provider) {
   } finally {
     busy.value = false
   }
-  // 只更新配置启用状态；模型、授权和 Key 由后端保留，使用详情中的最新修订号。
+  // 后端停用时撤销访问并恢复客户端文件，模型规则和凭据继续保留。
   return perform("save", {
     ...provider,
     ...detail,
@@ -1301,7 +1603,61 @@ async function toggleProviderEnabled(provider) {
 }
 
 async function refresh() {
-  return perform("state", undefined, false)
+  const success = await perform(
+    providerTab.value === "agents" ? "refresh-agents" : "state",
+    undefined,
+    false
+  )
+  if (success) await refreshOfficialQuotas()
+  return success
+}
+
+async function refreshOfficialQuotas() {
+  if (disposed || providerTab.value !== "codex_account") return
+  if (officialQuotaTask) return officialQuotaTask
+  officialQuotaTask = (async () => {
+    for (const source of data.value.providers.filter(
+      (item) => item.kind !== "api" && item.enabled && item.hasCredential
+    )) {
+      if (disposed || providerTab.value !== "codex_account") break
+      const provider = data.value.providers.find(
+        (item) => item.id === source.id
+      )
+      if (provider) await refreshQuota(provider, false)
+    }
+  })()
+  try {
+    await officialQuotaTask
+  } finally {
+    officialQuotaTask = null
+  }
+}
+
+async function refreshQuota(provider, notify = true) {
+  if (
+    disposed ||
+    !provider.enabled ||
+    !provider.hasCredential ||
+    refreshingQuotaIds.value.has(provider.id)
+  )
+    return false
+  refreshingQuotaIds.value.add(provider.id)
+  try {
+    await serviceProviderApi.invoke("refresh-quota", {
+      providerId: provider.id
+    })
+    if (!disposed) data.value = await serviceProviderApi.invoke("state")
+    if (!disposed && notify) createMessage.success("官方额度已刷新")
+    return true
+  } catch (error) {
+    if (!disposed)
+      createMessage.error(
+        `${providerDisplayName(provider)}：${error?.message || String(error)}`
+      )
+    return false
+  } finally {
+    refreshingQuotaIds.value.delete(provider.id)
+  }
 }
 
 async function perform(action, payload, notify = true) {
@@ -1309,6 +1665,7 @@ async function perform(action, payload, notify = true) {
   busy.value = true
   try {
     const result = await serviceProviderApi.invoke(action, payload)
+    if (action === "save") savedProviderId = result.id || ""
     if (action === "issue-token") createdToken.value = result
     data.value = await serviceProviderApi.invoke("state")
     if (notify) createMessage.success("操作已完成")
@@ -1326,8 +1683,78 @@ async function perform(action, payload, notify = true) {
   }
 }
 
-async function editProvider(provider = {}) {
+async function createSource(source) {
+  showCreateOptions.value = false
+  await editProvider({
+    kind: source.kind,
+    name: source.kind === "api" ? "" : source.label,
+    icon: source.icon
+  })
+}
+
+// 登录流程沿用已有 OAuth 实现，新模式通过独立入口存取新表。
+async function startGoogleLogin(provider) {
   if (busy.value) return
+  busy.value = true
+  const request = ++googleLoginRequest
+  clearTimeout(googleLoginTimer)
+  try {
+    const result = await serviceProviderApi.invoke("google-login", {
+      providerId: provider.id,
+      proxy: provider.proxy
+    })
+    if (disposed || request !== googleLoginRequest) return
+    googleLoginState.value = result
+    if (result?.status === "pending")
+      googleLoginTimer = setTimeout(() => pollGoogleLogin(request), 1500)
+  } catch (error) {
+    createMessage.error(error?.message || String(error))
+  } finally {
+    busy.value = false
+  }
+}
+
+async function pollGoogleLogin(request = googleLoginRequest) {
+  if (disposed || request !== googleLoginRequest) return
+  try {
+    const result = await serviceProviderApi.invoke("google-login-state")
+    if (disposed || request !== googleLoginRequest) return
+    googleLoginState.value = result
+    if (result.status === "pending") {
+      googleLoginTimer = setTimeout(() => pollGoogleLogin(request), 1500)
+      return
+    }
+    clearTimeout(googleLoginTimer)
+    if (result.status === "success") {
+      await refresh()
+      createMessage.success(result.message || "Google 登录完成")
+    } else if (result.status === "failed") {
+      createMessage.error(result.message || "Google 登录失败")
+    }
+  } catch (error) {
+    clearTimeout(googleLoginTimer)
+    createMessage.error(error?.message || String(error))
+  }
+}
+
+async function cancelGoogleLogin() {
+  if (await perform("google-cancel-login")) {
+    googleLoginRequest += 1
+    clearTimeout(googleLoginTimer)
+    googleLoginState.value = null
+  }
+}
+
+onUnmounted(() => {
+  disposed = true
+  googleLoginRequest += 1
+  clearTimeout(googleLoginTimer)
+})
+
+async function editProvider(provider = {}, section = "provider") {
+  if (busy.value) return
+  if (section === "provider") agentConfig.value = null
+  if (section !== "provider" && !provider.enabled) return
   busy.value = true
   try {
     const detail = provider.id
@@ -1401,12 +1828,70 @@ async function editProvider(provider = {}) {
         }
       })
     }
+    // 两个弹框复用草稿加载，各自展示和保存对应配置。
+    editorSection.value = section
     detailProviderId.value = ""
     showGatewayManager.value = false
   } catch (error) {
     createMessage.error(error?.message || String(error))
   } finally {
     busy.value = false
+  }
+}
+
+async function openAgentConfig(agent) {
+  if (busy.value || !agent.installed) return
+  agentConfig.value = agent
+  agentProviderId.value = currentAgentInstance(agent.id)?.providerId || ""
+  await selectAgentProvider()
+}
+
+async function openToolConfig(provider) {
+  if (busy.value || !provider?.enabled || !provider.hasCredential) return
+  agentConfig.value = { id: "gateway" }
+  agentProviderId.value = provider.id
+  await selectAgentProvider()
+}
+
+async function selectAgentProvider() {
+  form.value = null
+  if (!agentProviderId.value) return
+  const provider = data.value.providers.find(
+    (item) => item.id === agentProviderId.value
+  )
+  if (!provider?.enabled || !provider.hasCredential) return
+  await editProvider(provider, "agent")
+  if (form.value) {
+    const binding = form.value.bindings[agentBindingIndex.value]
+    binding.enabled = true
+    binding.defaultModelName ||=
+      draftModels.value.find((item) => item.enabled)?.upstreamModelId || ""
+  }
+}
+
+function closeAgentConfig() {
+  if (busy.value) return
+  agentConfig.value = null
+  agentProviderId.value = ""
+  form.value = null
+}
+
+async function saveAgentConfig() {
+  const binding = form.value?.bindings[agentBindingIndex.value]
+  if (agentProviderId.value && (!binding || !binding.defaultModelName))
+    return createMessage.error("请先选择可用模型")
+  const tool = agentConfig.value.id === "gateway"
+  if (
+    await perform("configure-agent", {
+      agentType: agentConfig.value.id,
+      providerId: agentProviderId.value,
+      revision: form.value?.revision,
+      defaultModelName: binding?.defaultModelName,
+      options: binding ? JSON.parse(JSON.stringify(binding.options)) : {}
+    })
+  ) {
+    closeAgentConfig()
+    if (tool) showGatewayManager.value = true
   }
 }
 
@@ -1531,6 +2016,8 @@ async function fetchEditorModels() {
 
 async function saveProvider() {
   try {
+    const startLogin = !form.value.id && form.value.kind !== "api"
+    const kind = form.value.kind
     const models = parseDraftModels()
     for (const binding of form.value.bindings) {
       if (
@@ -1546,15 +2033,18 @@ async function saveProvider() {
         )
     }
     const value = {
-      ...form.value,
-      apiKey: form.value.kind === "api" ? form.value.apiKey : "",
+      id: form.value.id,
+      revision: form.value.revision,
+      name: form.value.name,
+      icon: form.value.icon,
+      kind: form.value.kind,
+      baseUrl: form.value.baseUrl,
+      proxy: form.value.proxy,
+      note: form.value.note,
+      enabled: form.value.enabled,
       upstreamProtocol:
-        form.value.kind === "codex_account"
-          ? "responses"
-          : form.value.upstreamProtocol,
-      models,
+        form.value.kind !== "api" ? "responses" : form.value.upstreamProtocol,
       headers: JSON.parse(form.value.headersJson),
-      routes: JSON.parse(form.value.routesJson),
       bindings: form.value.bindings.map((item) => ({
         agentType: item.agentType,
         enabled: item.enabled,
@@ -1562,9 +2052,34 @@ async function saveProvider() {
         options: JSON.parse(JSON.stringify(item.options))
       }))
     }
-    if (!Array.isArray(value.models) || !Array.isArray(value.routes))
-      throw new Error("模型和别名必须为 JSON 数组")
-    if (await perform("save", value)) form.value = null
+    // Agent 配置省略目录、别名与密钥字段，由后端保留原值。
+    if (editorSection.value === "provider") {
+      Object.assign(value, {
+        apiKey: form.value.kind === "api" ? form.value.apiKey : "",
+        keyLogicalId: form.value.keyLogicalId,
+        keyName: form.value.keyName,
+        models,
+        routes: JSON.parse(form.value.routesJson)
+      })
+      if (!Array.isArray(value.routes))
+        throw new Error("模型和别名必须为 JSON 数组")
+    }
+    if (await perform("save", value)) {
+      form.value = null
+      providerTab.value = kind === "api" ? "api" : "codex_account"
+      if (startLogin && savedProviderId) {
+        detailProviderId.value = savedProviderId
+        detailTab.value = "overview"
+        if (kind === "google_account")
+          await startGoogleLogin({ id: savedProviderId, proxy: value.proxy })
+        else
+          await perform(
+            "login",
+            { accountId: savedProviderId, proxy: value.proxy },
+            false
+          )
+      }
+    }
   } catch (error) {
     createMessage.error(error?.message || String(error))
   }
@@ -1581,7 +2096,7 @@ function openApply(provider) {
         binding.enabled
     )
   )
-  if (!agent) return createMessage.error("请先编辑服务商并授权 Agent")
+  if (!agent) return createMessage.error("请先点击 Agent 配置并授权 Agent")
   detailProviderId.value = ""
   managerProviderId.value = provider.id
   showGatewayManager.value = false
@@ -1798,6 +2313,147 @@ async function showBackup(id) {
     color: var(--color-text-muted);
     font-size: 13px;
   }
+  .agent-list {
+    display: flex;
+    flex: 1;
+    min-height: 0;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px;
+    overflow-y: auto;
+    .agent-card {
+      display: flex;
+      flex: none;
+      align-items: center;
+      gap: 16px;
+      padding: 20px;
+      border: 1px solid var(--color-line);
+      border-radius: 12px;
+      background: var(--color-panel);
+      box-shadow: 0 3px 12px rgba(15, 23, 42, 0.04);
+      .agent-avatar {
+        display: grid;
+        flex: none;
+        width: 44px;
+        height: 44px;
+        border: 1px solid var(--color-line);
+        border-radius: 12px;
+        background: var(--color-panel-soft);
+        color: var(--color-text);
+        place-items: center;
+        .agent-icon {
+          width: 28px;
+          height: 28px;
+        }
+      }
+      .agent-main {
+        display: flex;
+        flex: 1;
+        min-width: 0;
+        flex-direction: column;
+        gap: 7px;
+        .agent-heading {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          .agent-name {
+            color: var(--color-text);
+            font-size: var(--font-size-lg);
+          }
+          .agent-version {
+            color: var(--color-text-soft);
+            font-size: var(--font-size-xs);
+          }
+        }
+        .agent-source {
+          display: flex;
+          align-items: center;
+          gap: 6px;
+          color: var(--color-text-muted);
+          font-size: var(--font-size-base);
+          .agent-source-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--color-success);
+          }
+        }
+        .agent-path {
+          overflow: hidden;
+          color: var(--color-text-soft);
+          font-size: var(--font-size-xs);
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+      }
+      .agent-config-button {
+        display: inline-flex;
+        flex: none;
+        align-items: center;
+        gap: 8px;
+        min-height: 36px;
+        padding: 0 12px;
+        border: 1px solid var(--color-line);
+        border-radius: 9px;
+        background: var(--color-panel-soft);
+        color: var(--color-text);
+        font: inherit;
+        cursor: pointer;
+        transition:
+          border-color 0.18s ease,
+          background 0.18s ease;
+        &:hover {
+          border-color: var(--color-info-line);
+          background: var(--color-primary-soft);
+          color: var(--color-primary);
+        }
+        &:disabled {
+          opacity: 0.5;
+          cursor: default;
+        }
+      }
+    }
+  }
+  .create-options {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 4px 0;
+    .create-option {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 16px;
+      border: 1px solid var(--color-line);
+      border-radius: 10px;
+      background: var(--color-panel);
+      color: var(--color-text-muted);
+      font: inherit;
+      text-align: left;
+      cursor: pointer;
+      &:hover {
+        border-color: var(--color-info-line);
+        background: var(--color-panel-soft);
+      }
+      .create-icon {
+        width: 28px;
+        height: 28px;
+      }
+      .create-description {
+        display: flex;
+        flex: 1;
+        flex-direction: column;
+        gap: 5px;
+        .create-label {
+          color: var(--color-text);
+        }
+        .create-hint {
+          color: var(--color-text-soft);
+          font-size: var(--font-size-xs);
+        }
+      }
+    }
+  }
   .provider-list {
     display: flex;
     flex: 1;
@@ -1880,6 +2536,23 @@ async function showBackup(id) {
               color: var(--color-warning);
             }
           }
+          .running-agent-tag {
+            display: inline-flex;
+            flex: none;
+            align-items: center;
+            gap: 5px;
+            padding: 2px 7px;
+            border-radius: 5px;
+            background: var(--color-success-soft);
+            color: var(--color-success);
+            font-size: var(--font-size-xs);
+            .running-agent-dot {
+              width: 5px;
+              height: 5px;
+              border-radius: 50%;
+              background: currentColor;
+            }
+          }
         }
         .provider-note,
         .provider-url,
@@ -1930,38 +2603,9 @@ async function showBackup(id) {
       .provider-actions {
         display: flex;
         flex: none;
-        width: 200px;
         flex-direction: column;
         align-items: flex-end;
         gap: 12px;
-        .action-main {
-          display: flex;
-          align-items: center;
-          justify-content: flex-end;
-          gap: 8px;
-          min-height: 36px;
-          .state-pill {
-            display: inline-flex;
-            align-items: center;
-            gap: 6px;
-            height: 24px;
-            padding: 0 10px;
-            border-radius: 999px;
-            background: var(--color-success-soft);
-            color: var(--color-success);
-            font-size: var(--font-size-sm);
-            &.state-pill-muted {
-              background: var(--color-panel-soft);
-              color: var(--color-text-muted);
-            }
-            .state-dot {
-              width: 6px;
-              height: 6px;
-              border-radius: 999px;
-              background: var(--color-success);
-            }
-          }
-        }
         .icon-actions {
           display: flex;
           align-items: center;
@@ -1997,17 +2641,17 @@ async function showBackup(id) {
         }
       }
     }
-    .provider-empty {
-      display: flex;
-      min-height: 220px;
-      align-items: center;
-      justify-content: center;
-      padding: 20px;
-      border: 1px dashed var(--color-line);
-      border-radius: 14px;
-      color: var(--color-text-muted);
-      text-align: center;
-    }
+  }
+  .provider-empty {
+    display: flex;
+    min-height: 220px;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+    border: 1px dashed var(--color-line);
+    border-radius: 14px;
+    color: var(--color-text-muted);
+    text-align: center;
   }
   .gateway-manager,
   .provider-detail {
@@ -2233,24 +2877,6 @@ async function showBackup(id) {
       align-items: center;
       gap: 8px;
       margin-right: 16px;
-    }
-    .agent-fields {
-      margin: 0;
-      border: 1px solid var(--color-line);
-      border-radius: 8px;
-      padding: 12px;
-
-      .agent-binding {
-        display: flex;
-        flex-direction: column;
-        align-items: stretch;
-        gap: 12px;
-        padding: 10px 0;
-
-        .check-field {
-          min-width: 150px;
-        }
-      }
     }
     .advanced-fields {
       padding: 14px;

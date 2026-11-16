@@ -22,7 +22,22 @@ pub async fn dispatch(
             store::migrate(paths)?;
         }
         "save" => {
-            return store::save(paths, &value);
+            let result = store::save(paths, &value)?;
+            if value["enabled"] == false {
+                let c = database::open(paths)?;
+                let mut failures = Vec::new();
+                for instance in store::query(&c,
+                    "SELECT id FROM service_agent_instances WHERE provider_id=?1 AND status<>'detached'",
+                    &[&store::text(&result, "id")])? {
+                    if let Err(error) = detach(paths, store::text(&instance, "id")) {
+                        failures.push(error.to_string());
+                    }
+                }
+                if !failures.is_empty() {
+                    return Err(store::fail(format!("服务商已禁用，部分客户端配置需要手动恢复：{}", failures.join("；"))));
+                }
+            }
+            return Ok(result);
         }
         "delete" => {
             store::remove(
@@ -81,8 +96,12 @@ pub async fn dispatch(
         }
         "activate" => return activate(paths, targets, &value),
         "quick-switch" => return quick_switch(paths, targets, &value),
+        "configure-agent" => return configure_agent(paths, targets, &value),
         "issue-token" => return issue_token(paths, &value),
         "refresh-quota" => {
+            if store::config(&database::open(paths)?, store::text(&value, "providerId"))?["kind"] == "google_account" {
+                return crate::api::google_account::refresh(paths, store::text(&value, "providerId")).await;
+            }
             return codex_account::refresh_service_quota(paths, store::text(&value, "providerId"))
                 .await
         }
@@ -102,7 +121,7 @@ pub async fn dispatch(
     store::state(paths)
 }
 
-// 托盘只切换默认目录；多个独立目录继续由配置中心逐个管理。
+// Agent 的使用来源只有一个，切换前恢复此前接管的全部客户端目录。
 pub(crate) fn quick_switch(
     paths: &AppPaths,
     targets: &Value,
@@ -127,11 +146,7 @@ pub(crate) fn quick_switch(
     )?
     .pop()
     .ok_or_else(|| store::fail("服务商未授权此 Agent 或没有可用模型"))?;
-    if store::config(&c, provider)?["kind"] == "api" {
-        store::credential(&c, provider)?;
-    } else {
-        store::account(&c, provider)?;
-    }
+    store::validate_credential(&c, provider)?;
     let directory = targets
         .as_array()
         .into_iter()
@@ -139,16 +154,14 @@ pub(crate) fn quick_switch(
         .find(|v| v["id"] == agent)
         .map(|v| store::text(v, "configPath"))
         .unwrap_or("");
-    let path = if agent == "claude-desktop" {
-        String::new()
-    } else {
-        normalized(Path::new(directory))?
-    };
+    if agent != "claude-desktop" {
+        normalized(Path::new(directory))?;
+    }
     for instance in store::query(
         &c,
         "SELECT id FROM service_agent_instances WHERE agent_type=?1 AND status<>'detached'
-        AND (config_path=?2 OR ?1='claude-desktop')",
-        &[&agent, &path],
+        AND config_path NOT LIKE 'internal:%' AND config_path NOT LIKE 'test:%'",
+        &[&agent],
     )? {
         detach(paths, store::text(&instance, "id"))?;
     }
@@ -157,6 +170,69 @@ pub(crate) fn quick_switch(
         targets,
         &json!({"agentType":agent,"providerId":provider,"modelId":model["id"],"configPath":directory}),
     )
+}
+
+pub(crate) fn configure_agent(
+    paths: &AppPaths,
+    targets: &Value,
+    value: &Value,
+) -> Result<Value, ManagerError> {
+    if !store::active(paths)? {
+        return Err(store::fail("请先启用服务商配置中心"));
+    }
+    let agent = store::text(value, "agentType");
+    let target = targets.as_array().into_iter().flatten()
+        .find(|item| item["id"] == agent && item["installed"] == true
+            && ["codex", "claude", "claude-desktop"].contains(&agent));
+    if agent != "gateway" && target.is_none() {
+        return Err(store::fail("未检测到此 Agent，请刷新检测结果"));
+    }
+    let provider = store::text(value, "providerId");
+    let c = database::open(paths)?;
+    if c.query_row("SELECT EXISTS(SELECT 1 FROM service_gateway_requests r
+        JOIN service_agent_instances i ON i.id=r.instance_id WHERE i.agent_type=?1
+        AND i.config_path NOT LIKE 'internal:%' AND i.config_path NOT LIKE 'test:%'
+        AND r.finished_at IS NULL)", [agent], |row| row.get::<_, bool>(0))? {
+        return Err(store::fail("此 Agent 仍有请求进行中，请结束请求后重试"));
+    }
+    if provider.is_empty() {
+        if agent == "gateway" {
+            return Err(store::fail("请选择多协议工具使用的服务商"));
+        }
+        for instance in store::query(&c,
+            "SELECT id FROM service_agent_instances WHERE agent_type=?1 AND status<>'detached'
+            AND config_path NOT LIKE 'internal:%' AND config_path NOT LIKE 'test:%'", &[&agent])? {
+            detach(paths, store::text(&instance, "id"))?;
+        }
+        return store::state(paths);
+    }
+    let mut config = store::config(&c, provider)?;
+    if config["enabled"] != 1 || !config["deletedAt"].is_null() {
+        return Err(store::fail("服务商已禁用或删除"));
+    }
+    if config["revision"] != value["revision"] {
+        return Err(store::fail("配置已被修改，请重新打开 Agent 配置"));
+    }
+    let model = store::text(value, "defaultModelName");
+    if !c.query_row("SELECT EXISTS(SELECT 1 FROM service_provider_models
+        WHERE provider_id=?1 AND upstream_model_id=?2 AND enabled=1)",
+        params![provider, model], |row| row.get::<_, bool>(0))? {
+        return Err(store::fail("请选择服务商可用的模型"));
+    }
+    store::validate_agent_options(&c, provider, agent, true, &value["options"])?;
+    store::validate_credential(&c, provider)?;
+    if let Some(target) = target.filter(|_| agent != "claude-desktop") {
+        normalized(Path::new(store::text(target, "configPath")))?;
+    }
+    // 先验证新来源，再保存此 Agent 的规则，目录、密钥及其他 Agent 参数均沿用。
+    config["enabled"] = json!(true);
+    config["bindings"] = json!([{"agentType":agent,"enabled":true,
+        "defaultModelName":model,"options":value["options"]}]);
+    store::save(paths, &config)?;
+    if agent == "gateway" {
+        return store::state(paths);
+    }
+    quick_switch(paths, targets, &json!({"agentType":agent,"providerId":provider}))
 }
 
 pub(crate) fn issue_token(paths: &AppPaths, value: &Value) -> Result<Value, ManagerError> {
@@ -267,11 +343,7 @@ pub(crate) fn activate(
         .iter()
         .find(|m| store::text(m, "id") == model_id)
         .ok_or_else(|| store::fail("请选择已启用的模型"))?;
-    if config["kind"] == "api" {
-        store::credential(&c, provider)?;
-    } else {
-        store::account(&c, provider)?;
-    }
+    store::validate_credential(&c, provider)?;
     let default_path = targets
         .as_array()
         .into_iter()
@@ -297,14 +369,23 @@ pub(crate) fn activate(
     if agent == "codex" {
         let file = directory.join("config.toml");
         let before = read_file(&file)?;
-        let mut content = before.clone().unwrap_or_default();
+        // 原文另存加密备份，应用文件只保留当前网关节点，清理旧模式生成的节点及子表。
+        let mut content = codex_account::remove_toml_sections(
+            before.as_deref().unwrap_or(""),
+            &[
+                "model_providers.custom",
+                "model_providers.codex_local_access",
+                "model_providers.ai_manager_service",
+            ],
+        );
+        content = runtime_provider::remove_toml_root_line(&content, "openai_base_url");
         originals.insert(file.clone(), before);
         let catalog_path = directory.join(".ai_manager_service_models.json");
         let sync = binding["options"]["syncModelList"].as_bool()
             .or_else(|| binding["options"]["syncModelList"].as_i64().map(|n| n == 1))
             .unwrap_or(true);
-        // API 服务商同步全部可用模型，官方账号沿用客户端官方目录。
-        let catalog = if sync && config["kind"] == "api" {
+        // API 按开关引用服务商目录；Google 自动使用官方返回的目录，GPT 沿用客户端目录。
+        let catalog = if (sync && config["kind"] == "api") || config["kind"] == "google_account" {
             let entries = models.iter().map(|item| {
                 let mut entry = item["catalog"].clone();
                 entry["slug"] = item["upstreamModelId"].clone();
@@ -519,6 +600,12 @@ pub(crate) fn activate(
         || store::config(&tx, provider)?["revision"] != config["revision"]
     {
         return Err(store::fail("运行模式或服务商配置已变化，请重新应用"));
+    }
+    if tx.query_row("SELECT EXISTS(SELECT 1 FROM service_agent_instances
+        WHERE agent_type=?1 AND provider_id<>?2 AND status<>'detached'
+        AND config_path NOT LIKE 'internal:%' AND config_path NOT LIKE 'test:%')",
+        params![agent, provider], |row| row.get::<_, bool>(0))? {
+        return Err(store::fail("此 Agent 正在使用其他服务商，请先切换或解除接管"));
     }
     tx.execute("INSERT INTO service_agent_instances(id,agent_type,name,config_path,agent_version,client_protocol,provider_id,model_id,status,created_at,updated_at)
         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'error',?9,?9) ON CONFLICT(id) DO UPDATE SET provider_id=excluded.provider_id,
