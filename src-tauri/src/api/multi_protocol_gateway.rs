@@ -23,6 +23,7 @@ use tokio::net::TcpListener;
 use tokio::sync::Mutex;
 
 mod stream;
+pub(crate) mod service;
 type GatewayBody = UnsyncBoxBody<Bytes, Infallible>;
 
 const DEFAULT_HOST: &str = "127.0.0.1";
@@ -78,6 +79,9 @@ impl GatewayServerRegistry {
             paths: paths.clone(),
             cli_targets: cli_targets.clone(),
             store_lock: self.store_lock.clone(),
+            service_mode: false,
+            legacy_request: None,
+            _service_request: None,
         };
         if let Some((_, task)) = guard.take() {
             task.abort();
@@ -100,6 +104,9 @@ struct GatewayContext {
     paths: AppPaths,
     cli_targets: Value,
     store_lock: Arc<Mutex<()>>,
+    service_mode: bool,
+    legacy_request: Option<Arc<crate::core::service_provider_store::LegacyRequest>>,
+    _service_request: Option<Arc<service::RequestLease>>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -167,6 +174,7 @@ struct ModelResponse {
     cache_read_tokens: u64,
     cache_input_tokens: u64,
     usage_known: bool,
+    observed_usage: Value,
     upstream_model: String,
     native: Option<Value>,
 }
@@ -461,9 +469,16 @@ fn spawn_listener(listener: TcpListener, context: GatewayContext) -> tokio::task
 
 async fn handle_request(
     request: Request<Incoming>,
-    context: GatewayContext,
+    mut context: GatewayContext,
     peer: SocketAddr,
 ) -> Response<GatewayBody> {
+    if context.service_mode {
+        return service::handle_request(request, context, peer).await;
+    }
+    context.legacy_request=match crate::core::service_provider_store::legacy_request(&context.paths) {
+        Ok(guard)=>Some(Arc::new(guard)),
+        Err(error)=>return error_response(StatusCode::SERVICE_UNAVAILABLE,&error.to_string()),
+    };
     let path = request.uri().path().to_string();
     if request.method() == Method::GET && path == "/health" {
         return json_response(
@@ -606,6 +621,22 @@ async fn finish_usage(
         record["cacheInputTokens"] = json!(response.cache_input_tokens);
         record["usageKnown"] = json!(response.usage_known);
         record["upstreamModel"] = json!(response.upstream_model);
+        if context.service_mode {
+            record["upstreamResponseId"] = response.native.as_ref().map(|v| v["id"].clone()).unwrap_or(Value::Null);
+            let usage=&response.observed_usage;
+            let chat=record["upstreamProtocol"]=="chat";
+            record["measuredInput"]=usage[if chat{"prompt_tokens"}else{"input_tokens"}].clone();
+            record["measuredOutput"]=usage[if chat{"completion_tokens"}else{"output_tokens"}].clone();
+            record["measuredCache"]=usage[if chat{"prompt_tokens_details"}else{"input_tokens_details"}]["cached_tokens"].clone();
+            record["measuredReasoning"]=usage[if chat{"completion_tokens_details"}else{"output_tokens_details"}]["reasoning_tokens"].clone();
+            record["serviceTier"]=response.native.as_ref().map(|v|v["service_tier"].clone()).unwrap_or(Value::Null);
+        }
+    }
+    if context.service_mode {
+        if let Err(error) = service::settle(&context.paths, &record) {
+            eprintln!("共享网关用量保存失败：{error}");
+        }
+        return;
     }
     if let Err(error) = update_usage(context, record).await {
         eprintln!("统一网关用量保存失败：{error}");
@@ -925,13 +956,19 @@ async fn send_to_target(
 ) -> Result<Response<GatewayBody>, GatewayFailure> {
     let auth = target_auth(context, target).await?;
     let client = target_client(target)?;
-    let (url, body, headers, format, mut tracking) =
+    let (mut url, mut body, headers, format, mut tracking) =
         build_upstream_request(context, target, &auth, physical_model, request).map_err(
             |error| GatewayFailure {
                 status: StatusCode::BAD_REQUEST,
                 message: error.to_string(),
             },
         )?;
+    if context.service_mode && record["serviceCompact"]==true {
+        url=format!("{url}/compact");
+        body=request.original.clone();
+        body["model"]=json!(physical_model);
+        body.as_object_mut().unwrap().remove("stream");
+    }
     record["upstreamProtocol"] = json!(match format {
         UpstreamFormat::OpenAiChat => "chat",
         UpstreamFormat::OpenAiResponses => "responses",
@@ -939,7 +976,11 @@ async fn send_to_target(
         UpstreamFormat::Gemini => "gemini",
     });
     record["upstreamPath"] = json!(url::Url::parse(&url).ok().map(|url| url.path().to_string()));
-    log_body(record, "upstreamRequestBody", body.to_string().as_bytes());
+    if context.service_mode {
+        service::start_attempt(&context.paths, target, &auth, record)?;
+    } else {
+        log_body(record, "upstreamRequestBody", body.to_string().as_bytes());
+    }
     if let Some(tracking) = &mut tracking {
         tracking.start();
     }
@@ -954,12 +995,16 @@ async fn send_to_target(
             message: "无法连接上游，请检查目标地址、网络与代理配置".into(),
         })?;
     let status = upstream.status();
+    if context.service_mode {
+        record["upstreamRequestId"] = json!(upstream.headers().get("x-request-id").and_then(|v|v.to_str().ok()).unwrap_or(""));
+    }
     record["upstreamStatusCode"] = json!(status.as_u16());
     let is_sse = upstream
         .headers()
         .get("content-type")
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.contains("text/event-stream"));
+    if context.service_mode { service::response_started(&context.paths,record,is_sse)?; }
     if let Some(tracking) = &mut tracking {
         tracking.response(status.as_u16(), is_sse);
     }
@@ -971,6 +1016,7 @@ async fn send_to_target(
         let mut body = LogBody::default();
         let mut chunks = upstream.bytes_stream();
         while let Some(Ok(chunk)) = chunks.next().await {
+            if body.bytes.len()+chunk.len()>MAX_BODY_SIZE { break; }
             body.push(&chunk);
         }
         body.save(record, "upstreamResponseBody");
@@ -992,6 +1038,9 @@ async fn send_to_target(
         tokio::spawn(async move {
             let mut parser = stream::Parser::new(format);
             let mut encoder = stream::Encoder::new(request.protocol, &model);
+            if context.service_mode && request.protocol == Protocol::Claude {
+                encoder.set_message_id(service::client_message_id(&record));
+            }
             let result = stream::consume(
                 upstream,
                 is_sse,
@@ -1073,7 +1122,7 @@ async fn send_to_target(
     if let Some(tracking) = &mut tracking {
         tracking.finish();
     }
-    let body =
+    let mut body =
         if native_protocol(request.protocol, format) {
             parser.response.native.clone().unwrap_or_else(|| {
                 response_value(request.protocol, &parser.response, physical_model)
@@ -1081,6 +1130,9 @@ async fn send_to_target(
         } else {
             response_value(request.protocol, &parser.response, physical_model)
         };
+    if context.service_mode && request.protocol == Protocol::Claude {
+        body["id"] = json!(service::client_message_id(record));
+    }
     log_body(record, "responseBody", body.to_string().as_bytes());
     finish_usage(
         context,
@@ -1113,7 +1165,10 @@ enum UpstreamFormat {
 }
 
 fn upstream_format(target: &GatewayTarget) -> UpstreamFormat {
-    if target.kind != TargetKind::Provider || target.cli == "codex" {
+    if target.provider_type == "service-chat" {
+        return UpstreamFormat::OpenAiChat;
+    }
+    if target.provider_type == "service-responses" || target.kind != TargetKind::Provider || target.cli == "codex" {
         return UpstreamFormat::OpenAiResponses;
     }
     match target.provider_type.as_str() {
@@ -1394,7 +1449,7 @@ fn build_upstream_request(
             }
         },
     };
-    let tracking = if target.kind == TargetKind::Provider {
+    let tracking = if target.kind == TargetKind::Provider && !context.service_mode {
         Some(KeyRequest::new(
             &context.paths,
             &target.id,
@@ -1411,6 +1466,9 @@ async fn target_auth(
     context: &GatewayContext,
     target: &GatewayTarget,
 ) -> Result<TargetAuth, ManagerError> {
+    if context.service_mode {
+        return service::target_auth(&context.paths, target).await;
+    }
     match target.kind {
         TargetKind::CodexAccount => {
             let cli_target = runtime_provider::find_cli_target(&context.cli_targets, "codex")?;
@@ -1786,6 +1844,7 @@ fn parse_upstream_response(
             let message = &choice["message"];
             Ok(ModelResponse {
                 native: Some(value.clone()),
+                observed_usage: value["usage"].clone(),
                 usage_known: value["usage"].is_object(),
                 upstream_model: string_value(value.get("model")),
                 text: content_text(message.get("content")),
@@ -1829,6 +1888,7 @@ fn parse_upstream_response(
             }
             Ok(ModelResponse {
                 native: Some(value.clone()),
+                observed_usage: value["usage"].clone(),
                 usage_known: value["usage"].is_object(),
                 upstream_model: string_value(value.get("model")),
                 text,
@@ -1868,6 +1928,7 @@ fn parse_upstream_response(
             }
             Ok(ModelResponse {
                 native: Some(value.clone()),
+                observed_usage: value["usage"].clone(),
                 usage_known: value["usage"].is_object(),
                 upstream_model: string_value(value.get("model")),
                 text,
@@ -1921,6 +1982,7 @@ fn parse_upstream_response(
             }
             Ok(ModelResponse {
                 native: Some(value.clone()),
+                observed_usage: value["usageMetadata"].clone(),
                 usage_known: value["usageMetadata"].is_object(),
                 upstream_model: string_value(value.get("modelVersion")),
                 text,

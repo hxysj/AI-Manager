@@ -97,6 +97,9 @@ impl CodexLoginCache {
 }
 
 pub fn read_public_accounts(paths: &AppPaths) -> Result<Value, ManagerError> {
+    if crate::core::service_provider_store::active(paths)? {
+        return Ok(crate::core::service_provider_store::public_catalog(paths)?["codexAccounts"].clone());
+    }
     let accounts = provider_store::read_codex_accounts(paths)?;
     let active_account_id = read_active_account_id(paths)?;
 
@@ -120,7 +123,14 @@ pub async fn start_login(
     }
 
     let target_account_id = string_value(payload.get("accountId"));
-    if !target_account_id.is_empty()
+    let service_mode = crate::core::service_provider_store::active(paths)?;
+    if service_mode {
+        let config = crate::core::service_provider_store::config(&crate::core::database::open(paths)?, &target_account_id)?;
+        if config["kind"] != "codex_account" || !config["deletedAt"].is_null() {
+            return Err(ManagerError::System("请选择配置中心中的官方账号服务商".into()));
+        }
+    }
+    if !service_mode && !target_account_id.is_empty()
         && !provider_store::read_codex_accounts(paths)?
             .iter()
             .any(|account| string_value(account.get("id")) == target_account_id)
@@ -144,6 +154,8 @@ pub async fn start_login(
       "redirectUri": OAUTH_REDIRECT_URI,
       "proxy": proxy,
       "targetAccountId": target_account_id,
+      "serviceMode": service_mode,
+      "modeGeneration": crate::core::service_provider_store::generation(&crate::core::database::open(paths)?)?,
       "authUrl": auth_url
     });
 
@@ -421,6 +433,10 @@ pub async fn get_proxy_auth(
     account_id: &str,
     cli_target: &Value,
 ) -> Result<Value, ManagerError> {
+    if crate::core::service_provider_store::active(paths)? {
+        let provider=crate::core::service_provider_store::source_provider_id(&crate::core::database::open(paths)?,account_id)?;
+        return service_proxy_auth(paths,&provider).await;
+    }
     let account = prepare_account_for_switch(paths, account_id, cli_target).await?;
     let access_token = account_access_token(&account);
 
@@ -443,6 +459,72 @@ pub async fn get_proxy_auth(
         &string_value(account.get("id"))
       )
     }))
+}
+
+// 共享网关只管理新账号凭据，不读取客户端 auth.json，也不激活旧账号。
+pub(crate) async fn service_proxy_auth(paths: &AppPaths, provider_id: &str) -> Result<Value, ManagerError> {
+    use crate::core::{database, service_provider_store as store};
+    static REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    let _guard = REFRESH_LOCK.lock().await;
+    let (mut account, proxy) = {
+        let connection = database::open(paths)?;
+        let config=store::config(&connection,provider_id)?;
+        if config["kind"]!="codex_account" || config["enabled"]!=1 || !config["deletedAt"].is_null() {
+            return Err(store::fail("官方账号已禁用或删除"));
+        }
+        (store::account(&connection, provider_id)?, store::text(&config,"proxy").to_string())
+    };
+    let expires = account["expires_at"].as_i64().or_else(|| {
+        decode_jwt_payload(store::text(&account, "accessToken")).ok()
+            .and_then(|claims| claims["exp"].as_i64()).map(|seconds| seconds * 1000)
+    });
+    if expires.is_some_and(|expires| expires <= store::now() + 60000) {
+        let refresh = store::text(&account, "refreshToken");
+        if refresh.is_empty() {
+            return Err(ManagerError::System("官方账号凭据已过期且缺少 refresh_token，请重新导入或登录".into()));
+        }
+        let tokens = refresh_token(refresh, &proxy).await?;
+        if tokens.access_token.is_empty() {
+            return Err(ManagerError::System("官方账号刷新响应缺少 access_token".into()));
+        }
+        let value = json!({"account_id":account["external_account_id"],"email":account["email"],
+            "access_token":tokens.access_token,
+            "refresh_token":if tokens.refresh_token.is_empty(){store::text(&account,"refreshToken")}else{&tokens.refresh_token},
+            "id_token":if tokens.id_token.is_empty(){store::text(&account,"idToken")}else{&tokens.id_token},
+            "expires_at":tokens.expires_at});
+        let mut connection = database::open(paths)?;
+        let transaction=connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let latest=store::account(&transaction,provider_id)?;
+        if latest["revision"]!=account["revision"] {return Err(store::fail("官方账号凭据已更新，请重试"));}
+        store::save_account(&transaction, provider_id, &value)?;
+        transaction.commit()?;
+        account = store::account(&connection, provider_id)?;
+    }
+    Ok(json!({"id":account["id"],"accessToken":account["accessToken"],"accountId":account["external_account_id"],
+        "tokenGeneration":account["token_generation"]}))
+}
+
+pub(crate) fn import_service_account(paths:&AppPaths,provider:&str,content:&str)->Result<(),ManagerError>{
+    let data:Value=serde_json::from_str(content)?;
+    let (tokens,claims)=create_tokens_from_auth_data(&data)?;
+    let identity=extract_account_id(&claims);
+    let identity=if identity.is_empty(){data["tokens"]["account_id"].as_str().or(data["account_id"].as_str()).unwrap_or("").to_string()}else{identity};
+    crate::core::service_provider_store::save_account(&crate::core::database::open(paths)?,provider,&json!({
+        "account_id":identity,"email":extract_email(&claims),"access_token":tokens.access_token,
+        "refresh_token":tokens.refresh_token,"id_token":tokens.id_token,"expires_at":tokens.expires_at}))
+}
+
+pub(crate) async fn refresh_service_quota(paths:&AppPaths,provider:&str)->Result<Value,ManagerError>{
+    use crate::core::{database,service_provider_store as store};
+    let auth=service_proxy_auth(paths,provider).await?;
+    let config=store::config(&database::open(paths)?,provider)?;
+    let usage=fetch_usage_info(store::text(&auth,"accessToken"),&json!({"account_id":auth["accountId"]}),store::text(&config,"proxy")).await?;
+    // 查询期间可能重新导入账号，只更新发起查询时使用的同一凭据代际。
+    let changed=database::open(paths)?.execute("UPDATE service_provider_accounts SET quota_json=?2,updated_at=?3
+        WHERE provider_id=?1 AND id=?4 AND token_generation=?5",
+        rusqlite::params![provider,usage.to_string(),store::now(),store::text(&auth,"id"),auth["tokenGeneration"].as_i64()])?;
+    if changed!=1{return Err(store::fail("查询额度期间账号已更新，请重新刷新"));}
+    Ok(usage)
 }
 
 pub async fn fetch_models(
@@ -505,6 +587,10 @@ pub async fn state_patch(
     paths: &AppPaths,
     login_cache: &CodexLoginCache,
 ) -> Result<Value, ManagerError> {
+    if crate::core::service_provider_store::active(paths)? {
+        return Ok(json!({"serviceProviders":crate::core::service_provider_store::state(paths)?,
+            "codexLoginState":public_login_state(login_cache.state().await),"refreshedAt":now_millis()}));
+    }
     Ok(json!({
       "codexAccounts": read_public_accounts(paths)?,
       "codexLoginState": public_login_state(login_cache.state().await),
@@ -592,7 +678,7 @@ async fn complete_login(
         ));
     };
 
-    if string_value(login_state.get("state")) != state {
+    if string_value(login_state.get("state")) != state || login_state["status"]!="pending" {
         return Err(ManagerError::System(
             "Codex 登录 state 校验失败".to_string(),
         ));
@@ -605,6 +691,33 @@ async fn complete_login(
         "",
     ))?;
     let account_id = extract_account_id(&claims);
+    if login_state["serviceMode"]==true {
+        let provider=string_value(login_state.get("targetAccountId"));
+        let latest=context.cache.state().await;
+        if latest.as_ref().is_none_or(|v|v["status"]!="pending" || v["state"]!=login_state["state"]) {
+            return Err(ManagerError::System("登录已取消".into()));
+        }
+        {
+            let mut connection=crate::core::database::open(&context.paths)?;
+            let tx=connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let mode:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM app_metadata WHERE key=?1 AND value='service')",
+                [crate::core::service_provider_store::MODE_KEY],|r|r.get(0))?;
+            if !mode || Some(crate::core::service_provider_store::generation(&tx)?)!=login_state["modeGeneration"].as_i64(){
+                return Err(ManagerError::System("运行模式已变化，请重新登录".into()));
+            }
+            let config=crate::core::service_provider_store::config(&tx,&provider)?;
+            if config["kind"]!="codex_account" || !config["deletedAt"].is_null(){return Err(ManagerError::System("账号配置已删除".into()));}
+            crate::core::service_provider_store::save_account(&tx,&provider,&json!({"account_id":account_id,
+                "email":extract_email(&claims),"access_token":tokens.access_token,"refresh_token":tokens.refresh_token,
+                "id_token":tokens.id_token,"expires_at":tokens.expires_at}))?;
+            tx.commit()?;
+        }
+        context.cache.set_state(Some(merge_object(login_state,json!({"status":"success","message":"官方账号已保存到服务商配置中心"})))).await;
+        context.cache.finish_listener().await;
+        context.app.emit("state:changed",state_patch(&context.paths,&context.cache).await?)
+            .map_err(|e|ManagerError::System(e.to_string()))?;
+        return Ok("Codex 登录已完成，可以返回 Monkey Thief。".into());
+    }
     let accounts = provider_store::read_codex_accounts(&context.paths)?;
     let target_account_id = string_value(login_state.get("targetAccountId"));
     let target_account = if target_account_id.is_empty() {

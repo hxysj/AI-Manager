@@ -1633,8 +1633,10 @@ fn migrate_input_metadata(connection: &Connection, table: &str) -> Result<(), Ma
 }
 
 fn open(paths: &AppPaths) -> Result<Connection, ManagerError> {
-    let connection = database::open(paths)?;
-    let transaction = connection.unchecked_transaction()?;
+    let mut connection = database::open(paths)?;
+    // 结构检查包含写入，先获取写事务，避免快照读取和任务更新并发时升级读锁失败。
+    let transaction =
+        connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     // 旧版本的兼容视图可能引用已经删除的 image_assets，先移除，避免 SQLite 在重建任务表时解析失败。
     for name in ["image_inputs", "image_outputs"] {
         let object_type: Option<String> = transaction

@@ -19,6 +19,7 @@
       standalone
       :tool-request="toolRequest"
       :cli-targets="state.cliTargets"
+      :service-providers="state.serviceProviders"
       :providers="state.providers"
       :codex-accounts="state.codexAccounts"
       :repos="state.repos"
@@ -111,51 +112,65 @@
           @refresh="refreshSessions"
         />
 
-        <ProvidersView
-          v-else-if="activeView === 'providers'"
+        <ServiceProviderCenter
+          v-else-if="
+            activeView === 'providers' &&
+            state.serviceProviders?.backend === 'service'
+          "
+          :initial-state="state.serviceProviders"
           :cli-targets="state.cliTargets"
-          :pending="pending"
-          :codex-accounts="state.codexAccounts"
-          :codex-login-state="state.codexLoginState"
-          :claude-proxy-state="state.claudeProxyState"
-          :codex-proxy-state="state.codexProxyState"
-          :providers="state.providers"
-          :usage="state.usage"
-          :runtime-config-schemas="state.runtimeConfigSchemas"
-          :runtime-models="state.runtimeModels"
-          :runtime-provider-state="state.runtimeProviderState"
-          :runtime-profiles="state.runtimeProfiles"
-          @clear-runtime="clearRuntime"
-          @claude-proxy-enable="enableClaudeProxy"
-          @claude-proxy-disable="disableClaudeProxy"
-          @claude-proxy-provider-add="addClaudeProxyProvider"
-          @claude-proxy-provider-remove="removeClaudeProxyProvider"
-          @claude-proxy-provider-activate="activateClaudeProxyProvider"
-          @claude-provider-instance-launch="launchClaudeProviderInstance"
-          @codex-official-login="startCodexOfficialLogin"
-          @codex-auth-json-import="importCodexAuthJson"
-          @codex-account-enable="enableCodexAccount"
-          @codex-account-clear="clearCodexAccount"
-          @codex-account-delete="deleteCodexAccount"
-          @codex-account-refresh="refreshCodexAccount"
-          @codex-account-disable="disableCodexAccount"
-          @codex-account-restore="restoreCodexAccount"
-          @codex-accounts-refresh="refreshCodexAccounts"
-          @codex-account-proxy-save="updateCodexAccountProxy"
-          @codex-proxy-enable="enableCodexProxy"
-          @codex-proxy-disable="disableCodexProxy"
-          @codex-proxy-provider-add="addCodexProxyProvider"
-          @codex-proxy-provider-remove="removeCodexProxyProvider"
-          @codex-proxy-provider-activate="activateCodexProxyProvider"
-          @codex-proxy-account-model-save="saveCodexProxyAccountModel"
-          @codex-provider-instance-launch="launchCodexProviderInstance"
-          @cancel-codex-official-login="cancelCodexOfficialLogin"
-          @delete-provider="deleteProvider"
-          @save-model="saveRuntimeModel"
-          @save-provider="saveProvider"
-          @resolve-runtime-drift="resolveRuntimeDrift"
-          @switch-runtime="switchRuntime"
+          :login-state="state.codexLoginState"
         />
+
+        <section
+          v-else-if="activeView === 'providers'"
+          class="legacy-providers"
+        >
+          <ProvidersView
+            :cli-targets="state.cliTargets"
+            :pending="pending"
+            :codex-accounts="state.codexAccounts"
+            :codex-login-state="state.codexLoginState"
+            :claude-proxy-state="state.claudeProxyState"
+            :codex-proxy-state="state.codexProxyState"
+            :providers="state.providers"
+            :usage="state.usage"
+            :runtime-config-schemas="state.runtimeConfigSchemas"
+            :runtime-models="state.runtimeModels"
+            :runtime-provider-state="state.runtimeProviderState"
+            :runtime-profiles="state.runtimeProfiles"
+            @clear-runtime="clearRuntime"
+            @claude-proxy-enable="enableClaudeProxy"
+            @claude-proxy-disable="disableClaudeProxy"
+            @claude-proxy-provider-add="addClaudeProxyProvider"
+            @claude-proxy-provider-remove="removeClaudeProxyProvider"
+            @claude-proxy-provider-activate="activateClaudeProxyProvider"
+            @claude-provider-instance-launch="launchClaudeProviderInstance"
+            @codex-official-login="startCodexOfficialLogin"
+            @codex-auth-json-import="importCodexAuthJson"
+            @codex-account-enable="enableCodexAccount"
+            @codex-account-clear="clearCodexAccount"
+            @codex-account-delete="deleteCodexAccount"
+            @codex-account-refresh="refreshCodexAccount"
+            @codex-account-disable="disableCodexAccount"
+            @codex-account-restore="restoreCodexAccount"
+            @codex-accounts-refresh="refreshCodexAccounts"
+            @codex-account-proxy-save="updateCodexAccountProxy"
+            @codex-proxy-enable="enableCodexProxy"
+            @codex-proxy-disable="disableCodexProxy"
+            @codex-proxy-provider-add="addCodexProxyProvider"
+            @codex-proxy-provider-remove="removeCodexProxyProvider"
+            @codex-proxy-provider-activate="activateCodexProxyProvider"
+            @codex-proxy-account-model-save="saveCodexProxyAccountModel"
+            @codex-provider-instance-launch="launchCodexProviderInstance"
+            @cancel-codex-official-login="cancelCodexOfficialLogin"
+            @delete-provider="deleteProvider"
+            @save-model="saveRuntimeModel"
+            @save-provider="saveProvider"
+            @resolve-runtime-drift="resolveRuntimeDrift"
+            @switch-runtime="switchRuntime"
+          />
+        </section>
 
         <UsageView v-else-if="activeView === 'usage'" :usage="state.usage" />
 
@@ -178,6 +193,7 @@
           v-else-if="activeView === 'tools'"
           :tool-request="toolRequest"
           :cli-targets="state.cliTargets"
+          :service-providers="state.serviceProviders"
           :providers="state.providers"
           :codex-accounts="state.codexAccounts"
           :repos="state.repos"
@@ -208,6 +224,8 @@
           :local-backups="localBackups"
           :pending="pending"
           :save-settings="saveSettings"
+          :service-providers="state.serviceProviders"
+          :switch-provider-backend="switchProviderBackend"
           :assistant-request="assistantSettingsRequest"
           @export-data="exportDataBackup"
           @local-backup-now="createLocalBackup"
@@ -493,6 +511,7 @@ import {
 } from "@/api"
 import { useGlobalLoading } from "@/utils/global-loading"
 import { createMessage } from "@/utils/message"
+import { serviceProviderApi } from "@/api/modules/service-providers"
 
 const AppAnnouncementModal = defineAsyncComponent(
   () => import("@/components/AppAnnouncementModal.vue")
@@ -502,6 +521,9 @@ const LanShareGlobalPairModal = defineAsyncComponent(
 )
 const ProvidersView = defineAsyncComponent(
   () => import("@/features/providers/index.vue")
+)
+const ServiceProviderCenter = defineAsyncComponent(
+  () => import("@/features/providers/components/ServiceProviderCenter.vue")
 )
 const ToolsView = defineAsyncComponent(
   () => import("@/features/tools/index.vue")
@@ -606,6 +628,7 @@ const state = reactive({
   repos: [],
   sessions: [],
   usage: {},
+  serviceProviders: {},
   codexAccounts: [],
   codexLoginState: null,
   claudeProxyState: {
@@ -903,6 +926,10 @@ async function openMainFromTool(toolId) {
 }
 
 function updateState(nextState) {
+  // 配置中心状态也由后端事件同步，主窗口和独立工具窗口保持一致。
+  if ("serviceProviders" in nextState) {
+    state.serviceProviders = nextState.serviceProviders || {}
+  }
   if ("cliTargets" in nextState) {
     state.cliTargets = nextState.cliTargets || []
   }
@@ -1178,6 +1205,26 @@ function applyUpdateStatus(status = {}) {
 
 async function refreshState() {
   await runAction(() => appApi.refresh())
+}
+
+// 设置中的模式切换完成后刷新所有配置投影，页面只按已保存的模式渲染。
+async function switchProviderBackend(backend) {
+  const success = await runAction(async () => {
+    try {
+      await serviceProviderApi.invoke("switch-backend", { backend })
+    } finally {
+      updateState(await appApi.refresh())
+    }
+  })
+  if (success) {
+    showSuccessMessage(
+      backend === "service"
+        ? "已启用新模式，Codex 配置同步结果可在配置页查看"
+        : "已恢复旧模式"
+    )
+    if (backend === "service") activeView.value = "providers"
+  }
+  return success
 }
 
 async function refreshSessions() {
@@ -1963,6 +2010,7 @@ async function refreshCodexAccount(payload) {
 }
 
 async function refreshCodexAccounts() {
+  if (state.serviceProviders?.backend === "service") return
   if (!state.codexAccounts.length) {
     return
   }

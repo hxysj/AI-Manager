@@ -550,6 +550,8 @@
         :cli-targets="cliTargets"
         :pending="pending"
         :save-settings="saveSettings"
+        :service-providers="serviceProviders"
+        :switch-provider-backend="switchProviderBackend"
         @quit-app="$emit('quit-app')"
         @uninstall-without-trace="$emit('uninstall-without-trace')"
       />
@@ -624,6 +626,8 @@ const props = defineProps({
   providers: { type: Array, default: () => [] },
   codexAccounts: { type: Array, default: () => [] },
   runtimeModels: { type: Array, default: () => [] },
+  serviceProviders: { type: Object, default: () => ({}) },
+  switchProviderBackend: { type: Function, required: true },
   cliTargets: {
     type: Array,
     required: true

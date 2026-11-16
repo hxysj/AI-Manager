@@ -86,14 +86,17 @@ const modelGroups = computed(() =>
       targetId: `account:${account.id}`,
       label: `Codex 官方 · ${account.email || account.accountId || account.id}`,
       disabled: account.disabled === true,
-      names: props.runtimeModels
-        .filter((model) =>
-          props.providers.some(
-            (provider) =>
-              provider.id === model.providerId && provider.cli === "codex"
+      // 新账号只展示自身模型，旧账号沿用原有目录。
+      names:
+        account.modelNames ||
+        props.runtimeModels
+          .filter((model) =>
+            props.providers.some(
+              (provider) =>
+                provider.id === model.providerId && provider.cli === "codex"
+            )
           )
-        )
-        .map((model) => model.name || model.id)
+          .map((model) => model.name || model.id)
     }))
   ].map((group) => ({
     ...group,

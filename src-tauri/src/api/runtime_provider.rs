@@ -1275,6 +1275,7 @@ pub async fn launch_claude_provider_instance(
 }
 
 pub async fn refresh_drift(paths: &AppPaths, cli_targets: &Value) -> Result<(), ManagerError> {
+    if crate::core::service_provider_store::active(paths)? { return Ok(()); }
     let providers = provider_store::read_providers(paths)?;
     let profiles = provider_store::read_profiles(paths)?;
     let mut runtime_state = provider_store::read_runtime_state(paths)?;
@@ -2069,10 +2070,10 @@ fn merge_codex_config_toml(existing_content: &str, managed_content: &str) -> Str
     format!("{}\n", content.trim_end())
 }
 
-fn set_toml_root_line(content: &str, key: &str, next_line: &str) -> String {
+pub(crate) fn set_toml_root_line(content: &str, key: &str, next_line: &str) -> String {
     let mut lines = content.lines().map(str::to_string).collect::<Vec<_>>();
 
-    if let Some(index) = lines.iter().position(|line| {
+    if let Some(index) = lines.iter().take_while(|line| !line.trim().starts_with('[')).position(|line| {
         let text = line.trim();
 
         !text.is_empty()
@@ -2093,7 +2094,7 @@ fn set_toml_root_line(content: &str, key: &str, next_line: &str) -> String {
     lines.join("\n")
 }
 
-fn remove_toml_root_line(content: &str, key: &str) -> String {
+pub(crate) fn remove_toml_root_line(content: &str, key: &str) -> String {
     let mut next_lines = Vec::new();
     let mut in_section = false;
 
@@ -2119,7 +2120,7 @@ fn remove_toml_root_line(content: &str, key: &str) -> String {
     next_lines.join("\n")
 }
 
-fn set_toml_section_line(content: &str, section_name: &str, key: &str, next_line: &str) -> String {
+pub(crate) fn set_toml_section_line(content: &str, section_name: &str, key: &str, next_line: &str) -> String {
     let mut lines = content.lines().map(str::to_string).collect::<Vec<_>>();
     let section_header = format!("[{}]", section_name);
     let Some(section_index) = lines.iter().position(|line| line.trim() == section_header) else {
@@ -2300,6 +2301,7 @@ pub fn read_provider_key_usage(paths: &AppPaths, payload: &Value) -> Result<Valu
 }
 
 pub fn capture_key_bindings(paths: &AppPaths) -> Result<(), ManagerError> {
+    if crate::core::service_provider_store::active(paths)? { return Ok(()); }
     let keys = provider_store::read_keys(paths)?;
     let mut bindings = Map::new();
     for (provider_id, value) in &keys {

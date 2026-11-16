@@ -1,7 +1,7 @@
 use crate::api::{
     app, app_logs, assistant, claude_desktop, codex_account, data, git_tool, google_account, image_workbench,
     lan_share, local_models, multi_protocol_gateway, network_quality, proxy, repos, rules,
-    runtime_provider, screenshot, sessions, settings, skills, system, tools, translation, usage,
+    runtime_provider, service_provider, screenshot, sessions, settings, skills, system, tools, translation, usage,
 };
 use crate::core::error::ManagerError;
 use crate::core::paths::{
@@ -27,6 +27,7 @@ pub struct ManagerState {
     google_login: google_account::GoogleLogin,
     proxy_server_registry: proxy::ProxyServerRegistry,
     gateway_server_registry: multi_protocol_gateway::GatewayServerRegistry,
+    service_gateway_registry: multi_protocol_gateway::GatewayServerRegistry,
     desktop_manager: claude_desktop::DesktopManager,
     lan_share_registry: lan_share::LanShareServerRegistry,
     state: Value,
@@ -192,6 +193,9 @@ impl AppState {
         // Google 额度刷新释放应用锁，外部接口较慢时不阻塞其他页面。
         if channel == "google-account:refresh" {
             let paths = self.manager.lock().await.paths.clone();
+            if crate::core::service_provider_store::active(&paths)? {
+                return Err(ManagerError::System("共享网关模式已停用旧 Google 来源".into()));
+            }
             let payload = payload.unwrap_or_else(|| json!({}));
             let result =
                 google_account::refresh(&paths, payload["providerId"].as_str().unwrap_or("")).await;
@@ -487,6 +491,9 @@ impl AppState {
     pub async fn start_enabled_proxy_servers(&self) -> Result<(), ManagerError> {
         let manager = self.manager.lock().await;
 
+        if crate::core::service_provider_store::active(&manager.paths)? {
+            return multi_protocol_gateway::service::start(&manager.service_gateway_registry, &manager.paths).await;
+        }
         let google_result = google_account::start_enabled(&manager.paths).await;
         let desktop_result = manager.desktop_manager.start_enabled(&manager.paths).await;
         let gateway_result = multi_protocol_gateway::start_enabled(
@@ -560,6 +567,7 @@ impl ManagerState {
         crate::core::translation_store::initialize(&paths)?;
         crate::core::image_prompt_store::initialize(&paths)?;
         crate::core::image_store::initialize(&paths)?;
+        service_provider::recover(&paths)?;
         let state = create_initial_state(&paths, &app_settings)?;
         let workspace_root = translation::workspace_root_from_current_dir()?;
         let resource_dir = app
@@ -582,6 +590,7 @@ impl ManagerState {
             google_login: google_account::GoogleLogin::default(),
             proxy_server_registry: proxy::ProxyServerRegistry::new(),
             gateway_server_registry: multi_protocol_gateway::GatewayServerRegistry::new(),
+            service_gateway_registry: multi_protocol_gateway::GatewayServerRegistry::new(),
             desktop_manager: claude_desktop::DesktopManager::new(),
             lan_share_registry: lan_share::LanShareServerRegistry::new(),
             state,
@@ -602,6 +611,66 @@ impl ManagerState {
         channel: &str,
         payload: Option<Value>,
     ) -> Result<Value, ManagerError> {
+        if let Some(action) = channel.strip_prefix("service-provider:") {
+            let payload = payload.unwrap_or_else(|| json!({}));
+            if action == "login" {
+                return codex_account::start_login(&app, &self.paths, &self.codex_login_cache,
+                    &self.state["cliTargets"], payload).await;
+            }
+            if action == "cancel-login" {
+                return codex_account::cancel_login(&self.paths, &self.codex_login_cache).await;
+            }
+            if action == "switch-backend" {
+                if self.codex_login_cache.state().await.is_some_and(|v|v["status"]=="pending") {
+                    return Err(ManagerError::System("官方登录尚未结束，请完成或取消登录后切换模式".into()));
+                }
+                let backend = payload["backend"].as_str().unwrap_or("");
+                if backend == "service" && !crate::core::service_provider_store::active(&self.paths)? {
+                    self.preserve_pending_usage_provider_bindings().await?;
+                }
+                let result = async {
+                if backend == "service" {
+                    multi_protocol_gateway::service::start(&self.service_gateway_registry, &self.paths).await?;
+                }
+                service_provider::switch_backend(&self.paths, backend)?;
+                if backend == "service" {
+                    self.gateway_server_registry.stop().await;
+                    self.proxy_server_registry.stop("codex").await;
+                    self.proxy_server_registry.stop("claude").await;
+                    self.proxy_server_registry.stop_provider_instances().await;
+                    self.desktop_manager.stop().await;
+                    for provider in self.state["providers"].as_array().into_iter().flatten().filter(|p|p["type"]=="google-account") {
+                        crate::api::google_gateway::stop(&self.paths,provider["id"].as_str().unwrap_or("")).await;
+                    }
+                } else {
+                    self.service_gateway_registry.stop().await;
+                    google_account::start_enabled(&self.paths).await?;
+                    multi_protocol_gateway::start_enabled(&self.gateway_server_registry,&self.paths,&self.state["cliTargets"]).await?;
+                    proxy::start_enabled_servers(&self.proxy_server_registry,&self.paths,&self.state["cliTargets"]).await?;
+                    self.desktop_manager.start_enabled(&self.paths).await?;
+                }
+                Ok::<_, ManagerError>(())
+                }.await;
+                if result.is_err() && backend == "service" && !crate::core::service_provider_store::active(&self.paths)? {
+                    self.service_gateway_registry.stop().await;
+                }
+                self.refresh_state().await?;
+                self.emit_state_changed(&app)?;
+                return result.map(|_| self.state["serviceProviders"].clone());
+            } else {
+                let result = service_provider::dispatch(&self.paths,&self.state["cliTargets"],action,payload).await;
+                if matches!(action,"state"|"detail"|"file-backup"|"period-usage") { return result; }
+                self.refresh_state().await?;
+                self.emit_state_changed(&app)?;
+                return result;
+            }
+        }
+        if crate::core::service_provider_store::active(&self.paths)?
+            && ["provider:","runtime:","codex-account:","codex-models:","claude-models:","google-account:",
+                "claude-proxy:","codex-proxy:","claude-desktop:","gateway:","multi-protocol-gateway:"]
+                .iter().any(|prefix|channel.starts_with(prefix)) {
+            return Err(ManagerError::System("当前已启用服务商配置中心，请使用新配置入口；旧入口保留供回滚".into()));
+        }
         if let Some(action) = channel.strip_prefix("claude-desktop:") {
             if matches!(
                 action,
@@ -686,6 +755,10 @@ impl ManagerState {
                 let payload = payload.unwrap_or_else(|| json!({}));
                 let directories_changed =
                     payload.get("dataPath").is_some() || payload.get("cliConfigPaths").is_some();
+                if directories_changed && crate::core::service_provider_store::active(&self.paths)?
+                    && crate::core::database::open(&self.paths)?.query_row("SELECT EXISTS(SELECT 1 FROM service_agent_instances WHERE status<>'detached')",[],|r|r.get::<_,bool>(0))? {
+                    return Err(ManagerError::System("请先解除共享网关实例接管，再修改数据或客户端配置目录".into()));
+                }
                 let system = &payload["system"];
                 let translation_changed = payload
                     .get("agents")
@@ -2390,6 +2463,7 @@ impl ManagerState {
     }
 
     async fn preserve_pending_usage_provider_bindings(&self) -> Result<(), ManagerError> {
+        if crate::core::service_provider_store::active(&self.paths)? { return Ok(()); }
         // Provider 变化前固化待处理请求，避免首次同步时按新 Provider 回填历史记录。
         usage::sync_pending_usage(&self.paths, &self.state).await?;
         Ok(())
@@ -2405,6 +2479,19 @@ impl ManagerState {
         app: AppHandle,
         item_id: &str,
     ) -> Result<Value, ManagerError> {
+        if let Some(action)=item_id.strip_prefix("tray:service:") {
+            let result=if let Some(instance)=action.strip_prefix("detach:"){
+                service_provider::detach(&self.paths,instance).map(|_|json!({}))
+            }else if let Some((agent,provider))=action.strip_prefix("switch:").and_then(|v|v.split_once(':')){
+                service_provider::quick_switch(&self.paths,&self.state["cliTargets"],&json!({"agentType":agent,"providerId":provider}))
+            }else{return Err(ManagerError::UnknownChannel(item_id.into()));};
+            self.refresh_state().await?;
+            self.emit_state_changed(&app)?;
+            return result;
+        }
+        if crate::core::service_provider_store::active(&self.paths)? && (item_id.starts_with("tray:runtime:") || item_id.starts_with("tray:codex:")) {
+            return Err(ManagerError::System("请在服务商配置中心管理 Agent 实例".into()));
+        }
         let parts = item_id.split(':').collect::<Vec<_>>();
 
         if matches!(
@@ -2849,6 +2936,7 @@ mod tests {
                 google_login: google_account::GoogleLogin::default(),
                 proxy_server_registry: proxy::ProxyServerRegistry::new(),
                 gateway_server_registry: multi_protocol_gateway::GatewayServerRegistry::new(),
+            service_gateway_registry: multi_protocol_gateway::GatewayServerRegistry::new(),
                 desktop_manager: claude_desktop::DesktopManager::new(),
                 lan_share_registry: lan_share::LanShareServerRegistry::new(),
                 state: json!({ "ready": true })

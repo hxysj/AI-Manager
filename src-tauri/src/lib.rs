@@ -475,6 +475,27 @@ fn append_quick_switch_tray_items(
     menu: &Submenu<tauri::Wry>,
     state: &Value,
 ) -> tauri::Result<()> {
+    if state["serviceProviders"]["backend"]=="service" {
+        let service=&state["serviceProviders"];
+        // 新配置中心独立授权 Agent，Desktop 不依赖旧 Provider 的 CLI 配置模板。
+        for cli in state_array(state, "cliTargets").into_iter().filter(|v|matches!(v["id"].as_str(),Some("codex"|"claude"|"claude-desktop"))) {
+            let agent=cli["id"].as_str().unwrap_or("");
+            let cli_menu=Submenu::new(app,string_value(cli.get("name")),true)?;
+            for instance in state_array(service,"instances").into_iter().filter(|v|v["agentType"]==agent && v["status"]!="detached"
+                && !v["configPath"].as_str().unwrap_or("").starts_with("internal:") && !v["configPath"].as_str().unwrap_or("").starts_with("test:")) {
+                cli_menu.append(&MenuItem::with_id(app,format!("tray:service:detach:{}",string_value(instance.get("id"))),
+                    format!("解除接管：{}",string_value(instance.get("name"))),true,None::<&str>)?)?;
+            }
+            for provider in state_array(service,"providers").into_iter().filter(|p|p["enabled"]==1 && p["hasCredential"]==1
+                && state_array(service,"bindings").iter().any(|b|b["providerId"]==p["id"] && b["agentType"]==agent && b["enabled"]==1)) {
+                let usable=state_array(service,"models").iter().any(|m|m["providerId"]==provider["id"] && m["enabled"]==1);
+                cli_menu.append(&MenuItem::with_id(app,format!("tray:service:switch:{agent}:{}",string_value(provider.get("id"))),
+                    format!("切换默认实例：{}",string_value(provider.get("name"))),usable,None::<&str>)?)?;
+            }
+            menu.append(&cli_menu)?;
+        }
+        return Ok(());
+    }
     let cli_targets = visible_cli_targets(state);
 
     if cli_targets.is_empty() {

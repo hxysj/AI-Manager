@@ -145,6 +145,9 @@ async fn mock(
                             ));
                         }
                         if !streaming {
+                            if let Some(gate) = &gate {
+                                gate.notified().await;
+                            }
                             return Ok(json_response(status, reply(format)));
                         }
                         let text = sse_reply(format);
@@ -245,6 +248,238 @@ fn input(protocol: Protocol, stream: bool) -> (&'static str, Value) {
             json!({"contents":[{"role":"user","parts":[{"text":"你好"}]}],"tools":[{"functionDeclarations":[{"name":"lookup","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}]}]}),
         ),
     }
+}
+
+async fn service_setup(fixture:&Fixture,url:&str,format:UpstreamFormat)->(String,String,String,tokio::task::JoinHandle<()>){
+    use crate::core::{database,service_provider_store as store};
+    store::initialize(&fixture.paths).unwrap();
+    let provider=store::save(&fixture.paths,&json!({"name":"共享测试","baseUrl":url,"apiKey":"private-upstream-key",
+        "upstreamProtocol":if format==UpstreamFormat::OpenAiChat{"chat"}else{"responses"},
+        "models":["real-model","alias"],"bindings":[{"agentType":"gateway","enabled":true}]})).unwrap()["id"].as_str().unwrap().to_string();
+    let c=database::open(&fixture.paths).unwrap();
+    let model:String=c.query_row("SELECT id FROM service_provider_models WHERE provider_id=?1 AND upstream_model_id='real-model'",[&provider],|r|r.get(0)).unwrap();
+    c.execute("INSERT INTO service_agent_model_routes(id,provider_id,agent_type,client_model_name,model_id)
+        VALUES('alias',?1,'gateway','alias',?2)",rusqlite::params![provider,model]).unwrap();
+    crate::api::service_provider::switch_backend(&fixture.paths,"service").unwrap();
+    let token=crate::api::service_provider::issue_token(&fixture.paths,&json!({"providerId":provider,"modelId":model})).unwrap()["token"].as_str().unwrap().to_string();
+    let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base=format!("http://{}",listener.local_addr().unwrap());
+    let server=spawn_listener(listener,GatewayContext{paths:fixture.paths.clone(),cli_targets:json!([]),
+        store_lock:fixture.registry.store_lock.clone(),service_mode:true,legacy_request:None,_service_request:None});
+    (base,token,provider,server)
+}
+
+#[test]
+fn service_model_fetch_preserves_local_prices_and_rejects_stale_configuration() {
+    run(async {
+        use crate::core::{database, service_provider_store as store};
+        let fixture=Fixture::new();
+        let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url=format!("http://{}/v1",listener.local_addr().unwrap());
+        let saved=store::save(&fixture.paths,&json!({"name":"模型目录测试","baseUrl":url,"apiKey":"model-test-key",
+            "models":[{"upstreamModelId":"real-model","enabled":false,"inputPriceMicros":2000000,"catalog":{"local":true}}]})).unwrap();
+        let provider=store::text(&saved,"id").to_string();
+        let (sent,mut received)=mpsc::unbounded_channel();
+        let gate=Arc::new(tokio::sync::Notify::new());
+        let release=gate.clone();
+        let server=tokio::spawn(async move {
+            loop {
+                let (socket,_)=listener.accept().await.unwrap();
+                let sent=sent.clone();
+                let gate=gate.clone();
+                tokio::spawn(async move {
+                    let _=http1::Builder::new().serve_connection(TokioIo::new(socket),service_fn(move |request:Request<Incoming>| {
+                        let sent=sent.clone();
+                        let gate=gate.clone();
+                        async move {
+                            assert_eq!(request.uri().path(),"/v1/models");
+                            assert_eq!(request.headers()["authorization"],"Bearer model-test-key");
+                            sent.send(()).unwrap();
+                            gate.notified().await;
+                            Ok::<_,Infallible>(json_response(StatusCode::OK,json!({"data":[{"id":"real-model","context_window":32000}]})))
+                        }
+                    })).await;
+                });
+            }
+        });
+        for stale in [true,false] {
+            let paths=fixture.paths.clone();
+            let fetch_provider=provider.clone();
+            let fetch=tokio::spawn(async move {service::fetch_models(&paths,&json!({"providerId":fetch_provider})).await});
+            received.recv().await.unwrap();
+            if stale {
+                let c=database::open(&fixture.paths).unwrap();
+                let mut config=store::config(&c,&provider).unwrap();
+                config["name"]=json!("查询期间编辑");
+                store::save(&fixture.paths,&config).unwrap();
+            }
+            release.notify_one();
+            let result=fetch.await.unwrap();
+            let c=database::open(&fixture.paths).unwrap();
+            let model=store::query(&c,"SELECT enabled,input_price_micros,context_window FROM service_provider_models WHERE provider_id=?1",&[&provider]).unwrap().remove(0);
+            assert_eq!(model["enabled"],0);
+            assert_eq!(model["input_price_micros"],2000000);
+            if stale {
+                assert!(result.unwrap_err().to_string().contains("已发生变化"));
+                assert!(model["context_window"].is_null());
+            } else {
+                result.unwrap();
+                assert_eq!(model["context_window"],32000);
+            }
+        }
+        server.abort();
+    });
+}
+
+#[test]
+fn service_gateway_matrix_routes_only_new_sources_and_records_usage(){
+    run(async{
+        use crate::core::{database,service_provider_store as store};
+        for format in [UpstreamFormat::OpenAiChat,UpstreamFormat::OpenAiResponses]{
+            let fixture=Fixture::new();
+            let (url,mut captures,upstream)=mock(format,StatusCode::OK,false,false,None).await;
+            let (base,token,provider,server)=service_setup(&fixture,&url,format).await;
+            let c=database::open(&fixture.paths).unwrap();
+            // 用旧表写保护证明转发、结算和 Token 撤销都不会写回旧来源。
+            for table in ["providers","provider_keys"]{
+                for event in ["INSERT","UPDATE","DELETE"]{
+                    c.execute_batch(&format!("CREATE TRIGGER readonly_{table}_{event} BEFORE {event} ON {table} BEGIN SELECT RAISE(ABORT,'禁止写旧表'); END;")).unwrap();
+                }
+            }
+            let client=Client::builder().no_proxy().build().unwrap();
+            for protocol in [Protocol::Chat,Protocol::Responses,Protocol::Claude,Protocol::Gemini]{
+                for streaming in [false,true]{
+                    let (path,body)=input(protocol,streaming);
+                    let request=client.post(format!("{base}{path}"));
+                    let request=match protocol {
+                        Protocol::Claude=>request.header("x-api-key",&token),
+                        Protocol::Gemini=>request.header("x-goog-api-key",&token),
+                        _=>request.bearer_auth(&token),
+                    };
+                    let response=request.json(&body).send().await.unwrap();
+                    let status=response.status();
+                    let text=response.text().await.unwrap();
+                    assert_eq!(status,200,"{text}");
+                    assert!(text.contains("中文🙂"),"{text}");
+                    assert!(text.contains("lookup"),"{text}");
+                    assert!(!text.contains("gateway_error"),"{text}");
+                    let (path,headers,body)=captures.recv().await.unwrap();
+                    assert!(path.ends_with(if format==UpstreamFormat::OpenAiChat{"/chat/completions"}else{"/responses"}));
+                    assert_eq!(headers["authorization"],"Bearer private-upstream-key");
+                    assert_eq!(body["model"],"real-model");
+                }
+            }
+            let blocked=client.post(format!("{base}/v1/responses")).bearer_auth(&token)
+                .json(&json!({"model":"other-provider-model","input":"test"})).send().await.unwrap();
+            assert_eq!(blocked.status(),400);
+            let rejected=client.post(format!("{base}/v1/responses")).bearer_auth("wrong-token")
+                .json(&json!({"model":"alias","input":"test"})).send().await.unwrap();
+            assert_eq!(rejected.status(),401);
+            let usage=store::usage(&c).unwrap();
+            assert_eq!(usage["requests"]["requestCount"],10);
+            assert_eq!(usage["requests"]["successCount"],8);
+            assert_eq!(usage["attempts"]["attemptCount"],8);
+            assert_eq!(usage["attempts"]["inputTokens"],96);
+            assert_eq!(usage["attempts"]["outputTokens"],48);
+            assert_eq!(usage["byProvider"][0]["groupKey"],provider);
+            assert!(usage["logs"].as_array().unwrap().iter().all(|r|!r.to_string().contains("private-upstream-key")));
+            // 显式别名优先于同名物理模型；目标禁用后不能绕过别名转发。
+            c.execute("UPDATE service_provider_models SET enabled=0 WHERE provider_id=?1 AND upstream_model_id='real-model'",[&provider]).unwrap();
+            assert_eq!(client.post(format!("{base}/v1/responses")).bearer_auth(&token)
+                .json(&json!({"model":"alias","input":"test"})).send().await.unwrap().status(),400);
+            c.execute("UPDATE service_provider_agent_bindings SET enabled=0 WHERE provider_id=?1",[provider]).unwrap();
+            assert_eq!(client.get(format!("{base}/v1/models")).bearer_auth(token).send().await.unwrap().status(),401);
+            server.abort();upstream.abort();
+        }
+    });
+}
+
+#[test]
+fn service_gateway_cancelled_wait_does_not_block_backend_switch() {
+    run(async {
+        use crate::core::{database, service_provider_store as store};
+        let fixture = Fixture::new();
+        let gate = Arc::new(tokio::sync::Notify::new());
+        let (url, mut captures, upstream) = mock(
+            UpstreamFormat::OpenAiResponses,
+            StatusCode::OK,
+            false,
+            false,
+            Some(gate.clone()),
+        ).await;
+        let (base, token, _, server) =
+            service_setup(&fixture, &url, UpstreamFormat::OpenAiResponses).await;
+        let request = tokio::spawn(async move {
+            Client::new().post(format!("{base}/v1/responses")).bearer_auth(token)
+                .json(&json!({"model":"alias","input":"test"})).send().await
+        });
+        captures.recv().await.unwrap();
+        request.abort();
+        let _ = request.await;
+        // 客户端在上游响应头到达前取消，账本仍应关闭在途记录并保留未知用量。
+        let c = database::open(&fixture.paths).unwrap();
+        let mut finished = false;
+        for _ in 0..100 {
+            finished = c.query_row(
+                "SELECT NOT EXISTS(SELECT 1 FROM service_gateway_requests WHERE finished_at IS NULL)",
+                [], |row| row.get(0),
+            ).unwrap();
+            if finished { break; }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        gate.notify_waiters();
+        server.abort();
+        upstream.abort();
+        assert!(finished, "客户端取消后遗留在途账本，会阻止模式切换");
+        let attempt = store::query(
+            &c, "SELECT state,input_tokens,output_tokens FROM service_gateway_attempts", &[],
+        ).unwrap().remove(0);
+        assert_eq!(attempt["state"], "unknown");
+        assert!(attempt["input_tokens"].is_null());
+        assert!(attempt["output_tokens"].is_null());
+        crate::api::service_provider::switch_backend(&fixture.paths, "legacy").unwrap();
+    });
+}
+
+#[test]
+fn service_gateway_compact_is_native_only_and_ledger_survives_http_failure(){
+    run(async{
+        use crate::core::{database,service_provider_store as store};
+        for format in [UpstreamFormat::OpenAiChat,UpstreamFormat::OpenAiResponses]{
+            let fixture=Fixture::new();
+            let (url,mut captures,upstream)=mock(format,StatusCode::OK,false,false,None).await;
+            let (base,token,_,server)=service_setup(&fixture,&url,format).await;
+            let streaming=Client::new().post(format!("{base}/v1/responses/compact")).bearer_auth(&token)
+                .json(&json!({"model":"alias","input":"test","stream":true})).send().await.unwrap();
+            assert_eq!(streaming.status(),400);
+            let response=Client::new().post(format!("{base}/v1/responses/compact")).bearer_auth(token)
+                .json(&json!({"model":"alias","input":[{"type":"compaction","encrypted_content":"opaque"}]})).send().await.unwrap();
+            if format==UpstreamFormat::OpenAiChat{
+                assert_eq!(response.status(),422);
+            }else{
+                assert_eq!(response.status(),200);
+                let _=response.bytes().await.unwrap();
+                let (path,_,body)=captures.recv().await.unwrap();
+                assert!(path.ends_with("/responses/compact"));
+                assert_eq!(body["input"][0]["encrypted_content"],"opaque");
+                assert!(body.get("stream").is_none());
+            }
+            server.abort();upstream.abort();
+        }
+        let fixture=Fixture::new();
+        let (url,_captures,upstream)=mock(UpstreamFormat::OpenAiResponses,StatusCode::TOO_MANY_REQUESTS,false,false,None).await;
+        let (base,token,_,server)=service_setup(&fixture,&url,UpstreamFormat::OpenAiResponses).await;
+        let response=Client::new().post(format!("{base}/v1/responses")).bearer_auth(token)
+            .json(&json!({"model":"alias","input":"test"})).send().await.unwrap();
+        assert_eq!(response.status(),429);
+        let _=response.bytes().await.unwrap();
+        let c=database::open(&fixture.paths).unwrap();
+        let attempt=store::query(&c,"SELECT state,input_tokens,status_code FROM service_gateway_attempts",&[]).unwrap().remove(0);
+        assert_eq!(attempt["state"],"failed");
+        assert_eq!(attempt["status_code"],429);
+        assert!(attempt["input_tokens"].is_null());
+        server.abort();upstream.abort();
+    });
 }
 
 #[test]
@@ -809,6 +1044,9 @@ fn concurrent_usage_does_not_overwrite_token_management() {
             paths: fixture.paths.clone(),
             cli_targets: json!({}),
             store_lock: fixture.registry.store_lock.clone(),
+            service_mode: false,
+            legacy_request: None,
+            _service_request: None,
         };
         let mut tasks = tokio::task::JoinSet::new();
         for _ in 0..20 {

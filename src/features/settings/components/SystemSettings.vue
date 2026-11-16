@@ -1,5 +1,38 @@
 <template>
   <section class="system-settings" aria-label="系统设置">
+    <article class="system-settings-card">
+      <div class="system-settings-card-row">
+        <div class="system-settings-copy">
+          <div class="system-settings-icon"><Network :size="24" /></div>
+          <div class="system-settings-text">
+            <h3 class="system-settings-title">共享服务商模式</h3>
+            <p class="system-settings-description">
+              {{ providerModePending
+                ? (serviceMode ? "正在恢复接管文件并切回旧模式…" : "正在同步 Codex 配置并启用新模式…")
+                : (serviceMode
+                  ? "已启用 · 各 Agent 共用服务商配置，通过本地网关转换协议。关闭后恢复旧模式；历史用量继续保留。"
+                  : "启用时自动同步旧 Codex 服务商与官方账号，并切换到新配置界面。Usage 页面和历史用量继续使用。")
+              }}
+            </p>
+          </div>
+        </div>
+        <div class="system-settings-controls">
+          <button
+            class="system-settings-switch"
+            :class="{ 'system-settings-switch--active': serviceMode }"
+            type="button"
+            role="switch"
+            aria-label="共享服务商模式"
+            :aria-checked="serviceMode"
+            :aria-busy="providerModePending"
+            :disabled="pending || providerModePending"
+            @click="toggleProviderMode"
+          >
+            <span class="system-settings-switch-thumb"></span>
+          </button>
+        </div>
+      </div>
+    </article>
     <template v-for="item in settingItems" :key="item.key">
       <article
         v-if="item.kind !== 'tools' || draft.quickSwitchVisible"
@@ -122,6 +155,7 @@ import {
 import {
   FileText,
   Monitor,
+  Network,
   PanelTopClose,
   Power,
   RefreshCw,
@@ -135,10 +169,26 @@ const props = defineProps({
   settings: { type: Object, default: () => ({}) },
   cliTargets: { type: Array, default: () => [] },
   pending: { type: Boolean, default: false },
+  serviceProviders: { type: Object, default: () => ({}) },
+  switchProviderBackend: { type: Function, required: true },
   saveSettings: { type: Function, required: true }
 })
 
 defineEmits(["quit-app", "uninstall-without-trace"])
+
+const serviceMode = computed(() => props.serviceProviders.backend === "service")
+const providerModePending = ref(false)
+
+// 模式保存在独立存储中；切换成功前保持显示后端的实际状态。
+async function toggleProviderMode() {
+  if (props.pending || providerModePending.value) return
+  providerModePending.value = true
+  try {
+    return await props.switchProviderBackend(serviceMode.value ? "legacy" : "service")
+  } finally {
+    providerModePending.value = false
+  }
+}
 
 const settingItems = [
   {

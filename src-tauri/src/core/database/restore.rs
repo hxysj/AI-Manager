@@ -1,5 +1,5 @@
 use super::*;
-use rusqlite::params_from_iter;
+use rusqlite::{params_from_iter, OptionalExtension};
 use rusqlite::types::Value as SqlValue;
 use serde_json::{json, Map, Value};
 
@@ -69,6 +69,15 @@ fn existing_row<'a>(
     row: &Map<String, Value>,
 ) -> Option<(&'a String, &'a Map<String, Value>)> {
     current.get_key_value(row_key).or_else(|| {
+        let fields: &[&str]=match table {
+            "service_provider_models"=>&["provider_id","upstream_model_id"],
+            "service_provider_agent_bindings"=>&["provider_id","agent_type"],
+            "service_agent_model_routes"=>&["provider_id","agent_type","client_model_name"],
+            _=>&[]
+        };
+        if !fields.is_empty(){
+            return current.iter().find(|(_,candidate)|fields.iter().all(|field|candidate.get(*field)==row.get(*field)));
+        }
         if table != "providers" || row.get("type") != Some(&json!("codex-account")) {
             return None;
         }
@@ -165,6 +174,10 @@ fn comparable_row(
 ) -> Result<Value, ManagerError> {
     let mut value = row.clone();
     value.remove("sort_order");
+    if table.starts_with("service_"){
+        for field in ["created_at","updated_at","revision"]{value.remove(field);}
+        if ["service_provider_configs","service_provider_agent_bindings"].contains(&table){value.remove("enabled");}
+    }
     if table == "providers" {
         if value.get("type") == Some(&json!("codex-account")) {
             // 同一官方账号在不同设备上的本地主键不属于业务差异。
@@ -268,6 +281,28 @@ pub(super) fn merge_table(
         }
         // 关联历史和本机激活态继续使用本机主键，备份只更新业务字段。
         row.insert(key_column.clone(), json!(target_key));
+        if ["service_provider_configs","service_provider_agent_bindings"].contains(&table) {
+            row.insert("enabled".into(),existing.and_then(|old|old.get("enabled")).cloned().unwrap_or(json!(0)));
+            row.insert("revision".into(),json!(existing.and_then(|old|old["revision"].as_i64()).unwrap_or(0)+1));
+            if table=="service_provider_configs" {
+                if existing.is_some_and(|old|old.get("kind")!=row.get("kind")){
+                    return Err(ManagerError::System("备份不能改变已有服务商的凭据类型".into()));
+                }
+                if let Some(deleted)=existing.and_then(|old|old.get("deleted_at")).filter(|v|!v.is_null()){
+                    row.insert("deleted_at".into(),deleted.clone());
+                }
+            }
+        }
+        if ["service_provider_agent_bindings","service_agent_model_routes"].contains(&table){
+            let field=if table=="service_provider_agent_bindings"{"default_model_id"}else{"model_id"};
+            if let Some(source_id)=row.get(field).and_then(Value::as_str){
+                let mapped:Option<String>=transaction.query_row("SELECT m.id FROM main.service_provider_models m
+                    JOIN restore_source.service_provider_models s ON s.provider_id=m.provider_id AND s.upstream_model_id=m.upstream_model_id
+                    WHERE s.id=?1 AND m.provider_id=?2",params![source_id,row.get("provider_id").and_then(Value::as_str).unwrap_or("")],|r|r.get(0))
+                    .optional()?;
+                if let Some(mapped)=mapped{row.insert(field.into(),json!(mapped));}
+            }
+        }
         if table == "providers" {
             // 在写入前恢复本机状态，防止备份中的激活记录触发唯一约束。
             let same_scope = existing.is_some_and(|old| {

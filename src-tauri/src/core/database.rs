@@ -16,7 +16,7 @@ mod restore;
 pub use restore::{preview_rows, row_choice_key, RestoreRowDifference};
 
 // 仅跨设备恢复的业务数据进入备份，其他表只保留结构。
-const BACKUP_INCLUDED_TABLES: [&str; 7] = [
+const BACKUP_INCLUDED_TABLES: [&str; 11] = [
     "providers",
     "skills",
     "skill_groups",
@@ -24,6 +24,10 @@ const BACKUP_INCLUDED_TABLES: [&str; 7] = [
     "rules",
     "app_metadata",
     "usage_pricing_items",
+    "service_provider_configs",
+    "service_provider_models",
+    "service_provider_agent_bindings",
+    "service_agent_model_routes",
 ];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -88,7 +92,10 @@ pub fn backup(paths: &AppPaths) -> Result<Vec<u8>, ManagerError> {
     crate::core::skill_store::initialize(paths)?;
     crate::core::usage_store::initialize(paths)?;
     crate::core::rule_store::initialize(paths)?;
-    crate::core::provider_store::initialize(paths)?;
+    if !crate::core::service_provider_store::active(paths)? {
+        crate::core::provider_store::initialize(paths)?;
+    }
+    crate::core::service_provider_store::initialize(paths)?;
     std::fs::create_dir_all(&paths.temp_dir)?;
     cleanup_backup_snapshots(Path::new(&paths.temp_dir))?;
     let snapshot_path = Path::new(&paths.temp_dir).join(format!(
@@ -204,10 +211,14 @@ fn create_filtered_backup(paths: &AppPaths, snapshot_path: &Path) -> Result<(), 
     }
 
     // 本机启用态、安装态和用量不随业务数据跨设备恢复。
+    transaction.execute_batch("UPDATE service_provider_configs SET enabled=0;
+        UPDATE service_provider_agent_bindings SET enabled=0;")?;
+    if !read_table_columns(&transaction,"main","providers")?.is_empty(){
     transaction.execute_batch("UPDATE providers SET enabled=0,is_active=0,oauth_credentials='',
       profile_id='',selected_model=NULL,profile_base_url=NULL,profile_proxy=NULL,profile_env=NULL,profile_updated_at=NULL,
       synced_hash='',synced_at=0,runtime_path='',sync_status='NO_ACTIVE',
       instance_profile_dir='',instance_sessions_path='',instance_updated_at=0,quota=NULL;")?;
+    }
     transaction.execute_batch(
         "UPDATE skills SET disabled=1, installed_targets='', status='disabled',
          source_path='', entry_path='', repo_name='', is_deleted=0, deleted_at=0, trash_id='', trash_path='';"
@@ -295,6 +306,7 @@ fn restore_tables(
             .filter(|table| selected_tables.contains(table))
             .collect::<Vec<_>>();
         let transaction = connection.transaction()?;
+        transaction.execute_batch("PRAGMA defer_foreign_keys=ON;")?;
         transaction.execute_batch(
             "CREATE TEMP TABLE restore_choices(choice_key TEXT PRIMARY KEY);
             CREATE TEMP TABLE restore_applied(table_name TEXT NOT NULL, row_key TEXT NOT NULL);",
@@ -335,7 +347,14 @@ fn with_restore_snapshot<T>(
     crate::core::skill_store::initialize(paths)?;
     crate::core::usage_store::initialize(paths)?;
     crate::core::rule_store::initialize(paths)?;
-    crate::core::provider_store::initialize(paths)?;
+    let service_mode = crate::core::service_provider_store::active(paths)?;
+    if !service_mode {
+        crate::core::provider_store::initialize(paths)?;
+    }
+    crate::core::service_provider_store::initialize(paths)?;
+    if service_mode && open(paths)?.query_row("SELECT EXISTS(SELECT 1 FROM service_agent_instances WHERE status<>'detached')",[],|r|r.get::<_,bool>(0))? {
+        return Err(ManagerError::System("请先在配置中心解除所有实例接管，再恢复业务备份".into()));
+    }
     std::fs::create_dir_all(&paths.temp_dir)?;
     let snapshot_path = Path::new(&paths.temp_dir).join(format!(
         "ai-manager-restore-{}-{}.db",
@@ -350,6 +369,7 @@ fn with_restore_snapshot<T>(
         crate::core::usage_store::migrate_connection(&mut source)?;
         crate::core::rule_store::migrate_connection(&mut source)?;
         crate::core::provider_store::migrate_connection(&mut source)?;
+        source.execute_batch(crate::core::service_provider_store::SCHEMA)?;
         drop(source);
         action(&snapshot_path)
     })();
@@ -405,12 +425,17 @@ fn read_restorable_tables(connection: &Connection) -> Result<Vec<String>, Manage
         .into_iter()
         .collect::<HashSet<_>>();
 
-    Ok(read_table_names(connection, "main")?
+    let service_mode:bool=connection.query_row("SELECT EXISTS(SELECT 1 FROM app_metadata WHERE key=?1 AND value='service')",
+        [crate::core::service_provider_store::MODE_KEY],|r|r.get(0))?;
+    let mut tables=read_table_names(connection, "main")?
         .into_iter()
         .filter(|table| {
             source_tables.contains(table) && BACKUP_INCLUDED_TABLES.contains(&table.as_str())
+                && !(service_mode && table=="providers")
         })
-        .collect())
+        .collect::<Vec<_>>();
+    tables.sort_by_key(|table|BACKUP_INCLUDED_TABLES.iter().position(|v|v==table).unwrap_or(usize::MAX));
+    Ok(tables)
 }
 
 fn read_table_names(connection: &Connection, schema: &str) -> Result<Vec<String>, ManagerError> {
@@ -706,6 +731,15 @@ mod tests {
             std::fs::remove_dir_all(&root).unwrap();
         }
         let paths = resolve_app_paths(Path::new(&root));
+        let service=crate::core::service_provider_store::save(&paths,&json!({
+            "name":"服务商备份夹具","baseUrl":"https://example.test/v1","models":["service-model"],
+            "bindings":[{"agentType":"codex","enabled":true}]
+        })).unwrap();
+        let service_connection=open(&paths).unwrap();
+        service_connection.execute("INSERT INTO service_agent_model_routes(id,provider_id,agent_type,client_model_name,model_id)
+            SELECT 'service-route',provider_id,'codex','alias',id FROM service_provider_models WHERE provider_id=?1",
+            [service["id"].as_str().unwrap()]).unwrap();
+        drop(service_connection);
         provider_store::write_provider_bundle(
             &paths,
             &[json!({"id": "provider-a", "enabled": true})],

@@ -12,6 +12,8 @@ use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::{Arc, Mutex, OnceLock};
 
+mod service;
+
 const DEFAULT_EXCHANGE_RATE: f64 = 7.2;
 const CODEX_USAGE_PARSER_VERSION: u64 = 2;
 const DESKTOP_USAGE_PARSER_VERSION: u64 = 2;
@@ -30,6 +32,7 @@ struct Summary {
     actual_tokens: u64,
     total_cost_usd: f64,
     last_used_at: u64,
+    unknown_fields: HashMap<String, u64>,
 }
 
 #[derive(Clone)]
@@ -64,6 +67,7 @@ struct SkillReference {
 struct UsageLogCache {
     path: String,
     revision: u64,
+    service_revision: String,
     logs: Arc<Vec<Value>>,
 }
 
@@ -109,21 +113,11 @@ pub fn get_codex_quota_stage_stats(
 
     let pricing_config = read_pricing(paths)?;
     let pricing_index = create_pricing_index(&pricing_config);
-    let logs = usage_store::query_logs(
-        paths,
-        &UsageLogQuery {
-            app_type: "codex".to_string(),
-            provider_id: "all".to_string(),
-            provider_ids: vec![
-                format!("codex-account:{account_id}"),
-                format!("account:{account_id}"),
-            ],
-            model: "all".to_string(),
-            request_source: "all".to_string(),
-            start_at: 0,
-            end_at: 0,
-        },
-    )?
+    let logs = query_usage_logs(paths, &json!({
+        "appType":"codex", "providerId":"all",
+        "providerIds":[format!("codex-account:{account_id}"),format!("account:{account_id}")],
+        "model":"all", "requestSource":"all"
+    }))?
     .into_iter()
     .map(|log| enrich_usage_log(&log, &pricing_config, &pricing_index))
     .collect::<Vec<_>>();
@@ -466,7 +460,7 @@ fn get_stats_data(paths: &AppPaths, input: Value) -> Result<Value, ManagerError>
     let log_page = number_value(input.get("logPage"), 1).max(1) as usize;
     let log_page_size = number_value(input.get("logPageSize"), 20).max(1) as usize;
     let include_all_logs = input.get("includeAllLogs").and_then(Value::as_bool) == Some(true);
-    let selected_logs = usage_store::query_logs(paths, &create_usage_log_query(&filters))?;
+    let selected_logs = query_usage_logs(paths, &filters)?;
     let option_filters = json!({
       "appType": filters["appType"],
       "providerId": "all",
@@ -486,7 +480,7 @@ fn get_stats_data(paths: &AppPaths, input: Value) -> Result<Value, ManagerError>
     {
         selected_logs.clone()
     } else {
-        usage_store::query_logs(paths, &create_usage_log_query(&option_filters))?
+        query_usage_logs(paths, &option_filters)?
     };
     let logs = selected_logs
         .iter()
@@ -547,7 +541,8 @@ fn get_stats_data(paths: &AppPaths, input: Value) -> Result<Value, ManagerError>
       "logs": response_logs,
       "logTotalCount": log_total_count,
       "filters": {
-        "appTypes": usage_store::read_app_types(paths)?,
+        "appTypes": unique_strings(usage_store::read_app_types(paths)?.into_iter()
+            .chain(read_usage_logs(paths)?.iter().map(|log| string_value(log.get("appType")))).collect()),
         "providers": create_provider_filter_options(&option_logs),
         "models": unique_strings(option_logs.iter().map(|item| string_value(item.get("model"))).filter(|item| !item.is_empty()).collect()),
         "requestSources": unique_strings(option_logs.iter().map(|item| non_empty_text(item.get("requestSource"), "session")).collect())
@@ -828,7 +823,9 @@ async fn refresh_usage(paths: &AppPaths, state: &Value) -> Result<Vec<Value>, Ma
 
     usage_store::replace_sessions(paths, &updates)?;
     usage_store::write_session_skills(paths, &skill_updates)?;
-    usage_store::bind_key_usage(paths)?;
+    if !crate::core::service_provider_store::active(paths)? {
+        usage_store::bind_key_usage(paths)?;
+    }
     Ok(diagnostics)
 }
 
@@ -916,6 +913,7 @@ async fn parse_usage_session(
 }
 
 fn bind_desktop_providers(paths: &AppPaths, logs: &mut [Value]) -> Result<(), ManagerError> {
+    service::mark_desktop_logs(paths, logs)?;
     let request_ids = logs
         .iter()
         .flat_map(|log| string_array(log.get("desktopResponseIds")))
@@ -1537,6 +1535,9 @@ fn enrich_usage_log(
     pricing_config: &Value,
     pricing_index: &HashMap<String, Value>,
 ) -> Value {
+    if log["dataSource"] == "service-gateway" {
+        return service::enrich(log, pricing_config, pricing_index);
+    }
     let mut source_log = log.clone();
     let app_type = string_value(source_log.get("appType"));
 
@@ -1618,7 +1619,8 @@ fn lock_existing_usage_costs(paths: &AppPaths, pricing_config: &Value) -> Result
         .filter(|log| number_value(log.get("costLockedAt"), 0) > 0)
         .collect::<Vec<_>>();
 
-    usage_store::write_usage_cost_snapshots(paths, &logs)
+    usage_store::write_usage_cost_snapshots(paths, &logs)?;
+    service::lock_costs(paths, pricing_config, &pricing_index)
 }
 
 fn calculate_cost_usd(
@@ -1687,6 +1689,15 @@ fn append_usage_summary(summary: &mut Summary, log: &Value) {
     summary.cache_creation_tokens += to_number(log.get("cacheCreationTokens"));
     summary.actual_tokens += to_actual_tokens(log);
     summary.total_cost_usd += price_number(log.get("totalCostUsd"), 0.0);
+    if log["dataSource"] == "service-gateway" {
+        for field in ["inputTokens", "outputTokens", "cacheReadTokens", "actualTokens", "totalCostUsd"] {
+            let unknown = log[field].is_null()
+                || (field == "inputTokens" && log["cacheReadTokens"].is_null());
+            if unknown {
+                *summary.unknown_fields.entry(field.to_string()).or_default() += 1;
+            }
+        }
+    }
     summary.last_used_at = summary
         .last_used_at
         .max(number_value(log.get("createdAt"), 0));
@@ -1698,19 +1709,7 @@ fn append_priced_usage_summary(
     pricing_config: &Value,
     pricing_index: &HashMap<String, Value>,
 ) {
-    summary.request_count += 1;
-    summary.input_tokens += normalize_billable_input(log);
-    summary.output_tokens += to_number(log.get("outputTokens"));
-    summary.cache_read_tokens += to_number(log.get("cacheReadTokens"));
-    summary.cache_creation_tokens += to_number(log.get("cacheCreationTokens"));
-    summary.actual_tokens += to_actual_tokens(log);
-    summary.total_cost_usd += price_number(
-        enrich_usage_log(log, pricing_config, pricing_index).get("totalCostUsd"),
-        0.0,
-    );
-    summary.last_used_at = summary
-        .last_used_at
-        .max(number_value(log.get("createdAt"), 0));
+    append_usage_summary(summary, &enrich_usage_log(log, pricing_config, pricing_index));
 }
 
 fn append_skill_log_summary(summary: &mut Summary, log: &Value) {
@@ -1739,7 +1738,7 @@ fn finalize_summary(summary: Summary) -> Value {
         0.0
     };
 
-    json!({
+    let mut result = json!({
       "requestCount": summary.request_count,
       "inputTokens": summary.input_tokens,
       "outputTokens": summary.output_tokens,
@@ -1749,7 +1748,18 @@ fn finalize_summary(summary: Summary) -> Value {
       "cacheHitRate": cache_hit_rate,
       "totalCostUsd": round_to(summary.total_cost_usd, 8),
       "lastUsedAt": summary.last_used_at
-    })
+    });
+    // 汇总保留已知小计；全部未知时返回 NULL，并附缺失数量供原界面解释统计口径。
+    for (field, count) in &summary.unknown_fields {
+        if *count == summary.request_count {
+            result[field] = Value::Null;
+        }
+    }
+    if summary.unknown_fields.contains_key("inputTokens") || summary.unknown_fields.contains_key("cacheReadTokens") {
+        result["cacheHitRate"] = Value::Null;
+    }
+    result["unknownFields"] = json!(summary.unknown_fields);
+    result
 }
 
 fn finalize_skill_summary(mut summary: Summary) -> Value {
@@ -3572,6 +3582,9 @@ fn get_usage_value(usage: &Value, keys: &[&str]) -> u64 {
 }
 
 fn normalize_billable_input(log: &Value) -> u64 {
+    if log["dataSource"] == "service-gateway" && log["cacheReadTokens"].is_null() {
+        return 0;
+    }
     let app_type = string_value(log.get("appType"));
     let input_tokens = to_number(log.get("inputTokens"));
     let cache_read_tokens = to_number(log.get("cacheReadTokens"));
@@ -3584,6 +3597,9 @@ fn normalize_billable_input(log: &Value) -> u64 {
 }
 
 fn to_actual_tokens(log: &Value) -> u64 {
+    if log["dataSource"] == "service-gateway" {
+        return to_number(log.get("actualTokens"));
+    }
     normalize_billable_input(log)
         + to_number(log.get("outputTokens"))
         + to_number(log.get("cacheReadTokens"))
@@ -3643,6 +3659,7 @@ fn create_empty_summary() -> Summary {
         actual_tokens: 0,
         total_cost_usd: 0.0,
         last_used_at: 0,
+        unknown_fields: HashMap::new(),
     }
 }
 
@@ -3870,6 +3887,9 @@ fn usage_log_cache_id(log: &Value) -> String {
 }
 
 fn usage_log_cache_signature(log: &Value) -> String {
+    if log["dataSource"] == "service-gateway" {
+        return create_hash_id(&[log.to_string()]);
+    }
     create_hash_id(&[
         string_value(log.get("createdAt")),
         string_value(log.get("appType")),
@@ -4995,6 +5015,7 @@ mod tests {
 
 fn read_usage_logs(paths: &AppPaths) -> Result<Arc<Vec<Value>>, ManagerError> {
     let revision = usage_store::revision(paths)?;
+    let service = service::read(paths)?;
     let path = &paths.storage_files.database;
     let cache = USAGE_LOG_CACHE.get_or_init(|| Mutex::new(None));
     let mut cache = cache
@@ -5002,19 +5023,25 @@ fn read_usage_logs(paths: &AppPaths) -> Result<Arc<Vec<Value>>, ManagerError> {
         .map_err(|error| ManagerError::System(error.to_string()))?;
 
     if let Some(cache) = cache.as_ref() {
-        if cache.path == *path && cache.revision == revision {
+        if cache.path == *path && cache.revision == revision && cache.service_revision == service.revision {
             return Ok(cache.logs.clone());
         }
     }
 
-    let logs = Arc::new(usage_store::read_all_logs(paths)?);
+    let service_revision = service.revision.clone();
+    let logs = Arc::new(service.merge(usage_store::read_all_logs(paths)?));
 
     *cache = Some(UsageLogCache {
         path: path.clone(),
         revision,
+        service_revision,
         logs: logs.clone(),
     });
     Ok(logs)
+}
+
+fn query_usage_logs(paths: &AppPaths, filters: &Value) -> Result<Vec<Value>, ManagerError> {
+    Ok(read_usage_logs(paths)?.iter().filter(|log| in_range(log, filters)).cloned().collect())
 }
 
 fn round_to(value: f64, digits: i32) -> f64 {

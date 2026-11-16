@@ -80,6 +80,8 @@ impl Parser {
             return;
         }
         self.response.usage_known = true;
+        if !self.response.observed_usage.is_object() { self.response.observed_usage=json!({}); }
+        self.response.observed_usage.as_object_mut().unwrap().extend(usage.as_object().unwrap().clone());
         if let Some(value) = usage[input].as_u64() {
             self.response.input_tokens = value;
         }
@@ -625,6 +627,10 @@ pub(super) struct Encoder {
 }
 
 impl Encoder {
+    pub fn set_message_id(&mut self, id: String) {
+        self.message_id = id;
+    }
+
     pub fn new(protocol: Protocol, model: &str) -> Self {
         Self {
             protocol,

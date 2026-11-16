@@ -393,7 +393,7 @@ fn config_files(desktop: &DesktopPaths) -> Result<Value, ManagerError> {
         }).collect::<Result<Vec<_>, ManagerError>>().map(|files| json!({"files": files}))
 }
 
-fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), ManagerError> {
+pub(crate) fn atomic_write(path: &Path, bytes: &[u8]) -> Result<(), ManagerError> {
     let parent = path.parent().ok_or_else(|| error("配置路径没有父目录"))?;
     std::fs::create_dir_all(parent)?;
     let temporary = parent.join(format!(".ai-manager-{}.tmp", uuid::Uuid::new_v4()));
@@ -484,6 +484,37 @@ fn apply_configuration(
         };
     }
     Ok(())
+}
+
+// 新配置中心复用 Desktop 的路径规则，只生成待接管内容，由统一文件账本负责备份和恢复。
+pub(crate) fn service_configuration(base_url: &str, token: &str, models: &[Value]) -> Result<Vec<(PathBuf, Option<String>, Value)>, ManagerError> {
+    let paths = DesktopPaths::current()?.ok_or_else(|| error("当前平台不支持 Claude Desktop"))?;
+    let normal_before=read_optional(&paths.normal)?;
+    let threep_before=read_optional(&paths.threep)?;
+    let meta_before=read_optional(&paths.meta)?;
+    let profile_before=read_optional(&paths.profile)?;
+    let mut normal = read_object(normal_before.as_deref())?;
+    let mut threep = read_object(threep_before.as_deref())?;
+    let mut meta = read_object(meta_before.as_deref())?;
+    normal["deploymentMode"] = json!("3p");
+    threep["deploymentMode"] = json!("3p");
+    if meta.get("entries").is_some_and(|v| !v.is_array()) { return Err(error("Desktop 配置索引不是数组")); }
+    let mut entries = meta["entries"].as_array().cloned().unwrap_or_default();
+    entries.retain(|v| text(v,"id")!=PROFILE_ID);
+    entries.push(json!({"id":PROFILE_ID,"name":"AI Manager"}));
+    meta["entries"] = json!(entries);
+    meta["appliedId"] = json!(PROFILE_ID);
+    meta.as_object_mut().unwrap().remove("hybridPointer");
+    let profile = json!({"coworkEgressAllowedHosts":["*"],"disableDeploymentModeChooser":true,
+        "inferenceProvider":"gateway","inferenceGatewayAuthScheme":"bearer","inferenceGatewayBaseUrl":base_url,
+        "inferenceGatewayApiKey":token,"inferenceModels":models});
+    vec![(paths.normal,normal_before,normal),(paths.threep,threep_before,threep),
+        (paths.profile,profile_before,profile),(paths.meta,meta_before,meta)]
+        .into_iter().map(|(path,before,value)| {
+            let before=before.map(String::from_utf8).transpose()
+                .map_err(|_| error("Desktop 配置文件不是有效 UTF-8"))?;
+            Ok((path,before,value))
+        }).collect()
 }
 
 struct DesktopData {
@@ -764,7 +795,7 @@ impl DesktopManager {
         self.server.lock().await.is_some()
     }
 
-    async fn stop(&self) {
+    pub(crate) async fn stop(&self) {
         if let Some(server) = self.server.lock().await.take() {
             server.abort();
         }
@@ -1193,6 +1224,10 @@ async fn handle_gateway(
     request: Request<Incoming>,
     paths: AppPaths,
 ) -> Result<Response<GatewayBody>, Infallible> {
+    let request_guard=match crate::core::service_provider_store::legacy_request(&paths) {
+        Ok(guard)=>guard,
+        Err(error)=>return Ok(gateway_error(StatusCode::SERVICE_UNAVAILABLE,&error.to_string())),
+    };
     let started = std::time::Instant::now();
     let mut log = json!({"method": request.method().as_str(), "endpoint": request.uri().path(),
         "requestUrl": request.uri().path(), "requestSource": "proxy-managed", "targetType": "provider"});
@@ -1227,7 +1262,7 @@ async fn handle_gateway(
     {
         eprintln!("Desktop 请求记录写入失败，请检查数据目录权限");
     }
-    Ok(response)
+    Ok(response.map(|body|body.map_frame(move |frame|{let _=&request_guard;frame}).boxed_unsync()))
 }
 
 fn track_gateway_key(

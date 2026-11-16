@@ -138,7 +138,7 @@
           <span class="quick-switch-usage-item">
             <span class="quick-switch-usage-label">今日 Token</span>
             <span class="quick-switch-usage-value">{{
-              usageSummary ? tokenCount.compact : "—"
+              usageSummary?.actualTokens != null ? tokenCount.compact : "—"
             }}</span>
           </span>
           <span class="quick-switch-usage-item">
@@ -530,17 +530,22 @@ const activeProfile = computed(() =>
   )
 )
 const activeProxy = computed(() =>
-  activeCli.value?.id === "claude"
-    ? props.state.claudeProxyState
-    : activeCli.value?.id === "codex"
-      ? props.state.codexProxyState
-      : null
+  props.state.serviceProviders?.backend === "service"
+    ? null
+    : activeCli.value?.id === "claude"
+      ? props.state.claudeProxyState
+      : activeCli.value?.id === "codex"
+        ? props.state.codexProxyState
+        : null
 )
 const proxyTarget = computed(() =>
   activeProxy.value?.enabled ? activeProxy.value.activeProviderId || "" : ""
 )
 const activeProvider = computed(() =>
-  (props.state.providers || []).find(
+  (props.state.serviceProviders?.backend === "service"
+    ? props.state.serviceProviders.providers
+    : props.state.providers || []
+  ).find(
     (provider) =>
       provider.id === (proxyTarget.value || activeProfile.value?.providerId)
   )
@@ -723,6 +728,7 @@ let visibilitySequence = 0
 const drag = reactive({ active: false, moved: false, x: 0, y: 0, distance: 0 })
 
 function formatCost(value) {
+  if (value == null) return "—"
   const cost = Number(value || 0)
   return `$${cost === 0 ? "0" : cost.toFixed(cost >= 1 ? 2 : 4)}`
 }
@@ -943,17 +949,19 @@ async function loadTodayUsage() {
   start.setHours(0, 0, 0, 0)
   const end = new Date(start)
   end.setDate(end.getDate() + 1)
-  const nextKey = `${activeCli.value?.id || "all"}:${start.getTime()}`
+  const nextKey = `${props.state.serviceProviders?.backend || "legacy"}:${activeCli.value?.id || "all"}:${start.getTime()}`
   if (usageKey !== nextKey) usageSummary.value = null
   usageKey = nextKey
   usageError.value = ""
   try {
-    const result = await usageApi.getUsageStats({
+    // 与 Usage 页面共用查询，模式切换前后的今日用量连续显示。
+    const query = {
       appType: activeCli.value?.id || "all",
       startAt: start.getTime(),
       endAt: end.getTime() - 1,
       logPageSize: 1
-    })
+    }
+    const result = await usageApi.getUsageStats(query)
     if (!disposed && sequence === usageSequence)
       usageSummary.value = result.data.summary
   } catch (error) {
@@ -1054,6 +1062,7 @@ watch(
     windowVisible.value,
     desktopPet.value,
     activeCli.value?.id,
+    props.state.serviceProviders,
     props.state.usage
   ],
   loadTodayUsage,

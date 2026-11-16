@@ -3,9 +3,10 @@ use crate::core::{
     error::ManagerError,
     image_store::{self, StoredImage},
     paths::AppPaths,
-    provider_store,
     settings::CloudSyncSettings,
 };
+#[cfg(test)]
+use crate::core::provider_store;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use futures_util::StreamExt;
 use serde::{Deserialize, Serialize};
@@ -307,7 +308,7 @@ pub async fn delete_web_conversations(
 }
 
 pub async fn models(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
-    let account = provider_store::read_codex_accounts(paths)?
+    let account = codex_account::read_public_accounts(paths)?.as_array().cloned().unwrap_or_default()
         .into_iter()
         .find(|account| account["id"] == payload["accountId"] && account["type"] == "codex")
         .ok_or_else(|| failure("请选择 Codex 官方登录账号"))?;
@@ -410,7 +411,7 @@ async fn image_account_session(
     account_id: &str,
     generation_mode: &str,
 ) -> Result<(reqwest::Client, Value), ManagerError> {
-    let account = provider_store::read_codex_accounts(paths)?
+    let account = codex_account::read_public_accounts(paths)?.as_array().cloned().unwrap_or_default()
         .into_iter()
         .find(|account| account["id"] == account_id && account["type"] == "codex")
         .ok_or_else(|| failure("图片工作台仅支持 Codex 官方登录账号，其他 Provider 暂不支持"))?;

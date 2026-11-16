@@ -698,6 +698,11 @@ async fn restore_data_backup_content(
     content: &str,
     choices: &Value,
 ) -> Result<bool, ManagerError> {
+    let service_mode = crate::core::service_provider_store::active(paths)?;
+    if service_mode && database::open(paths)?.query_row(
+        "SELECT EXISTS(SELECT 1 FROM service_agent_instances WHERE status<>'detached')", [], |row| row.get::<_, bool>(0))? {
+        return Err(ManagerError::System("请先解除所有 Agent 接管和调用 Token，再恢复业务备份".into()));
+    }
     let backup = parse_backup(content)?;
     let choices = choices.as_object().cloned().unwrap_or_default();
     let runtime_provider_keys = backup
@@ -746,7 +751,7 @@ async fn restore_data_backup_content(
     migrate_skill_repository_storage(paths).await?;
     skill_store::initialize(paths)?;
     rule_store::initialize(paths)?;
-    provider_store::initialize(paths)?;
+    if !service_mode { provider_store::initialize(paths)?; }
     restore_database_entries(paths, &workspace_entries, &choices).await?;
     if let Some(runtime_provider_keys) = runtime_provider_keys {
         merge_provider_keys(paths, &runtime_provider_keys, &choices).await?;
@@ -775,7 +780,7 @@ async fn collect_backup_entries(
 ) -> Result<Vec<Value>, ManagerError> {
     skill_store::initialize(paths)?;
     rule_store::initialize(paths)?;
-    provider_store::initialize(paths)?;
+    if !crate::core::service_provider_store::active(paths)? { provider_store::initialize(paths)?; }
     let mut entries = Vec::new();
 
     let database = database::backup(paths)?;
@@ -888,6 +893,7 @@ async fn prepare_pet_restore_entries(
     workspace_entries: Vec<Value>,
     codex_pet_entries: Vec<Value>,
 ) -> Result<(Vec<Value>, Vec<Value>), ManagerError> {
+    let service_mode = crate::core::service_provider_store::active(paths)?;
     let mut existing_ids = HashSet::new();
     collect_pet_directory_ids(Path::new(&paths.disabled_pets_dir), &mut existing_ids).await?;
     if let Some(codex_pets_dir) = codex_pets_backup_dir(app_settings) {
@@ -904,6 +910,9 @@ async fn prepare_pet_restore_entries(
 
     let workspace_entries = workspace_entries
         .into_iter()
+        .filter(|entry| !service_mode || !matches!(entry["path"].as_str().unwrap_or(""),
+            "storage/providers.json" | "storage/runtime-models.json" | "storage/runtime-profiles.json"
+            | "storage/codex-accounts.json" | "storage/runtime-provider-keys.json"))
         .filter(|entry| {
             disabled_pet_entry_id(entry)
                 .map(|id| disabled_backup_ids.contains(&pet_id_key(id)))
@@ -2773,6 +2782,7 @@ fn backup_secret() -> [u8; 32] {
 }
 
 fn export_provider_keys(paths: &AppPaths) -> Result<Value, ManagerError> {
+    if crate::core::service_provider_store::active(paths)? { return Ok(json!({})); }
     let mut providers = provider_store::read_providers(paths)?;
     let google_credentials: Vec<_> = providers
         .iter()
@@ -2855,6 +2865,7 @@ fn append_provider_keys_preview(
     backup: &Value,
     preview: &mut Value,
 ) -> Result<(), ManagerError> {
+    if crate::core::service_provider_store::active(paths)? { return Ok(()); }
     let current = export_provider_keys(paths)?;
     for (provider_id, value) in backup.as_object().cloned().unwrap_or_default() {
         let current_keys = restore_provider_key_records(&current[&provider_id]);
@@ -2905,6 +2916,7 @@ async fn merge_provider_keys(
     api_keys: &Value,
     choices: &Map<String, Value>,
 ) -> Result<(), ManagerError> {
+    if crate::core::service_provider_store::active(paths)? { return Ok(()); }
     let mut next_keys = provider_store::read_keys(paths)?;
     let current = export_provider_keys(paths)?;
     let mut provider_ids = provider_store::read_providers(paths)?
@@ -3563,6 +3575,10 @@ fn restore_database_table_name(table: &str) -> &'static str {
         "skill_repositories" => "Skill 仓库",
         "rules" => "规则",
         "providers" => "Provider",
+        "service_provider_configs" => "服务商配置",
+        "service_provider_models" => "服务商模型",
+        "service_provider_agent_bindings" => "Agent 授权",
+        "service_agent_model_routes" => "Agent 模型别名",
         _ => "应用数据",
     }
 }
@@ -3762,6 +3778,43 @@ mod tests {
             "username": "test", "password": "test-secret", "fileName": "test.aimbackup"
         }));
         (config, task)
+    }
+
+    #[test]
+    fn service_backup_entry_points_work_without_reading_legacy_provider_storage() {
+        tauri::async_runtime::block_on(async {
+            use crate::core::service_provider_store as store;
+            let root=std::env::temp_dir().join(format!("ai-manager-service-backup-{}",uuid::Uuid::new_v4()));
+            let paths=resolve_app_paths(&root.join("source"));
+            store::initialize(&paths).unwrap();
+            store::save(&paths,&json!({"name":"新服务商","baseUrl":"https://example.test/v1","apiKey":"private-service-key",
+                "models":["test-model"],"bindings":[{"agentType":"codex","enabled":true}]})).unwrap();
+            crate::api::service_provider::switch_backend(&paths,"service").unwrap();
+            let settings=normalize_app_settings(root.join("source-settings.json"),Some(json!({
+                "cliConfigPaths":{"codex":root.join("client-source")}
+            })));
+            let backup=super::create_data_backup(&paths,&settings).await.unwrap();
+            let payload=super::parse_backup(&backup).unwrap();
+            assert_eq!(super::decrypt_backup_data(payload["runtimeProviderKeys"].as_str().unwrap()).unwrap(),json!({}));
+            let restored=resolve_app_paths(&root.join("restored"));
+            store::initialize(&restored).unwrap();
+            crate::api::service_provider::switch_backend(&restored,"service").unwrap();
+            let mut settings=normalize_app_settings(root.join("target-settings.json"),Some(json!({
+                "cliConfigPaths":{"codex":root.join("client-target")}
+            })));
+            let preview=preview_data_backup_restore_content(&restored,&settings,&backup).await.unwrap();
+            assert!(preview.to_string().contains("服务商配置"));
+            restore_data_backup_content(&restored,&mut settings,&backup,&json!({"*":"backup"})).await.unwrap();
+            let state=store::state(&restored).unwrap();
+            assert_eq!(state["providers"][0]["name"],"新服务商");
+            assert_eq!(state["providers"][0]["hasCredential"],0);
+            assert!(store::active(&restored).unwrap());
+            let c=database::open(&restored).unwrap();
+            assert!(!store::table_exists(&c,"providers").unwrap());
+            drop(c);
+            assert!(root.canonicalize().unwrap().starts_with(std::env::temp_dir().canonicalize().unwrap()));
+            std::fs::remove_dir_all(root).unwrap();
+        });
     }
 
     fn webdav_test_response(status: u16, headers: &str, body: &[u8]) -> Vec<u8> {
@@ -4249,7 +4302,7 @@ mod tests {
         assert!(!entry_paths.iter().any(|path| path.contains("usage")));
         assert_eq!(
             restore_tables,
-            vec!["app_metadata", "providers", "usage_pricing_items"]
+            vec!["providers", "app_metadata", "usage_pricing_items"]
         );
         database::restore_selected(&restore_paths, &database, &restore_tables).unwrap();
         assert_eq!(

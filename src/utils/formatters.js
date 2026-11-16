@@ -59,6 +59,7 @@ export function formatTokenCount(value) {
 }
 
 export function formatTokenCountParts(value) {
+  if (value === null) return { compact: "未知", exact: "" }
   const tokenCount = Number(value || 0)
 
   if (!Number.isFinite(tokenCount)) {

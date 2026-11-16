@@ -133,10 +133,25 @@ fn failure(status: StatusCode, message: &str) -> Response<Body> {
 }
 
 async fn handle(
+    request: Request<Incoming>,
+    paths: &AppPaths,
+    id: &str,
+    cancel: CancellationToken,
+) -> Response<Body> {
+    let guard=match crate::core::service_provider_store::legacy_request(paths) {
+        Ok(guard)=>Arc::new(guard),
+        Err(error)=>return failure(StatusCode::SERVICE_UNAVAILABLE,&error.to_string()),
+    };
+    let response=handle_legacy(request,paths,id,cancel,guard.clone()).await;
+    response.map(|body|body.map_frame(move |frame|{let _=&guard;frame}).boxed_unsync())
+}
+
+async fn handle_legacy(
     mut request: Request<Incoming>,
     paths: &AppPaths,
     id: &str,
     cancel: CancellationToken,
+    request_guard: Arc<crate::core::service_provider_store::LegacyRequest>,
 ) -> Response<Body> {
     let provider = match google_account::find_account(paths, id) {
         Ok(provider) if provider["enabled"] != false => provider,
@@ -205,6 +220,7 @@ async fn handle(
         let paths = paths.clone();
         let id = id.to_owned();
         tokio::spawn(async move {
+            let _request_guard=request_guard;
             let work = async {
                 if let Ok(stream) = upgraded.await {
                     websocket(stream, paths, id, cancel.clone()).await;

@@ -15,7 +15,8 @@ Thumbs.db
 tests
 !tests/
 !tests/manager-service.test.cjs
-docs
+/docs/*
+!/docs/provider配置中心化改造方案.md
 release
 backup/
 tests/

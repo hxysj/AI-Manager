@@ -350,11 +350,21 @@ const modelOptions = computed(() =>
                 (item) =>
                   item.providerId === props.modelValue.targetId ||
                   (official.value &&
-                    props.providers.some(
-                      (provider) =>
-                        provider.id === item.providerId &&
-                        provider.cli === "codex"
-                    ))
+                    (props.codexAccounts.find(
+                      (account) =>
+                        `account:${account.id}` === props.modelValue.targetId
+                    )?.serviceManaged
+                      ? item.providerId ===
+                        props.codexAccounts.find(
+                          (account) =>
+                            `account:${account.id}` ===
+                            props.modelValue.targetId
+                        )?.serviceProviderId
+                      : props.providers.some(
+                          (provider) =>
+                            provider.id === item.providerId &&
+                            provider.cli === "codex"
+                        )))
               )
               .map((item) => item.name || item.id),
             props.modelValue.model

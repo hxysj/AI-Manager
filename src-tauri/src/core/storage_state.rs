@@ -24,9 +24,12 @@ pub fn create_initial_state(
     paths: &AppPaths,
     app_settings: &AppSettings,
 ) -> Result<Value, ManagerError> {
+    crate::core::service_provider_store::initialize(paths)?;
+    let service_mode = crate::core::service_provider_store::active(paths)?;
+    let catalog=if service_mode {crate::core::service_provider_store::public_catalog(paths)?}else{json!({})};
     let files = &paths.storage_files;
     let cli_targets = read_cli_targets(paths, app_settings)?;
-    let runtime_state = Value::Object(provider_store::read_runtime_state(paths)?);
+    let runtime_state = if service_mode { json!({}) } else { Value::Object(provider_store::read_runtime_state(paths)?) };
     let claude_proxy_config = normalize_proxy_config(
         read_json_file(&files.claude_proxy_config, json!({}))?,
         15722,
@@ -65,13 +68,14 @@ pub fn create_initial_state(
       "repos": read_json_file(&files.repos, json!([]))?,
       "sessions": read_json_file(&files.sessions, json!([]))?,
       "usage": usage::build_state(paths)?,
-      "codexAccounts": codex_account::read_public_accounts(paths)?,
+      "codexAccounts": if service_mode { catalog["codexAccounts"].clone() } else { codex_account::read_public_accounts(paths)? },
+      "serviceProviders": crate::core::service_provider_store::state(paths)?,
       "codexLoginState": null,
-      "providers": runtime_provider::read_public_providers(paths)?,
+      "providers": if service_mode { catalog["providers"].clone() } else { runtime_provider::read_public_providers(paths)? },
       "rules": rules::build_state(paths, &cli_targets)?,
       "runtimeConfigSchemas": runtime_provider::runtime_config_schemas(),
-      "runtimeModels": provider_store::read_models(paths)?,
-      "runtimeProfiles": runtime_provider::read_public_profiles(paths)?,
+      "runtimeModels": if service_mode { catalog["runtimeModels"].clone() } else { json!(provider_store::read_models(paths)?) },
+      "runtimeProfiles": if service_mode { catalog["runtimeProfiles"].clone() } else { runtime_provider::read_public_profiles(paths)? },
       "runtimeProviderState": runtime_provider_state,
       "claudeProxyState": claude_proxy_state,
       "codexProxyState": codex_proxy_state,
@@ -86,6 +90,13 @@ pub fn refresh_runtime_provider_state(
     paths: &AppPaths,
     state: &mut Value,
 ) -> Result<(), ManagerError> {
+    if crate::core::service_provider_store::active(paths)? {
+        state["serviceProviders"] = crate::core::service_provider_store::state(paths)?;
+        let catalog=crate::core::service_provider_store::public_catalog(paths)?;
+        for key in ["providers","codexAccounts","runtimeModels","runtimeProfiles"]{state[key]=catalog[key].clone();}
+        state["runtimeProviderState"] = json!({});
+        return Ok(());
+    }
     let runtime_state = Value::Object(provider_store::read_runtime_state(paths)?);
     let mut runtime_provider_state = runtime_state
         .get("runtimeProviderState")

@@ -111,7 +111,10 @@
     </section>
 
     <section class="usage-view__metrics">
-      <article class="usage-view__metric">
+      <article
+        class="usage-view__metric"
+        :title="summaryCoverage('actualTokens')"
+      >
         <span class="usage-metric-label">真实消耗 Tokens</span>
         <span
           class="usage-metric-value"
@@ -124,7 +127,10 @@
           >新增输入 <TokenCount :value="summary.inputTokens"
         /></small>
       </article>
-      <article class="usage-view__metric">
+      <article
+        class="usage-view__metric"
+        :title="summaryCoverage('outputTokens')"
+      >
         <span class="usage-metric-label">输出 Tokens</span>
         <span
           class="usage-metric-value"
@@ -137,7 +143,10 @@
           >请求 {{ formatNumber(summary.requestCount) }} 次</small
         >
       </article>
-      <article class="usage-view__metric">
+      <article
+        class="usage-view__metric"
+        :title="summaryCoverage('cacheReadTokens')"
+      >
         <span class="usage-metric-label">缓存读取</span>
         <span
           class="usage-metric-value"
@@ -150,7 +159,10 @@
           >命中率 {{ formatPercent(summary.cacheHitRate) }}</small
         >
       </article>
-      <article class="usage-view__metric">
+      <article
+        class="usage-view__metric"
+        :title="summaryCoverage('totalCostUsd')"
+      >
         <span class="usage-metric-label">费用估算</span>
         <span class="usage-metric-value" data-emphasis>{{
           formatCost(summary.totalCostUsd)
@@ -2692,7 +2704,18 @@ function resizeCharts() {
   providerPie?.resize()
 }
 
+// 保留现有统计卡片，通过提示说明缺失用量，避免把已知小计误认为完整总量。
+function summaryCoverage(field) {
+  const count = summary.value.unknownFields?.[field] || 0
+  return count ? `汇总已记录的数值；另有 ${count} 次请求的该项数据未知。` : ""
+}
+
 function normalizeInput(item) {
+  if (
+    item.dataSource === "service-gateway" &&
+    (item.inputTokens == null || item.cacheReadTokens == null)
+  )
+    return null
   if (item.appType === "codex" || item.appType === "gemini") {
     return Math.max(0, item.inputTokens - item.cacheReadTokens)
   }
@@ -2701,6 +2724,7 @@ function normalizeInput(item) {
 }
 
 function actualTokens(item) {
+  if (item.dataSource === "service-gateway") return item.actualTokens
   return (
     normalizeInput(item) +
     item.outputTokens +
@@ -2714,10 +2738,12 @@ function formatNumber(value) {
 }
 
 function formatPercent(value) {
+  if (value === null) return "未知"
   return `${(Number(value || 0) * 100).toFixed(1)}%`
 }
 
 function formatCost(value) {
+  if (value === null) return "未知"
   const cost =
     displayCurrency.value === "CNY"
       ? Number(value || 0) * exchangeRate.value
@@ -2785,6 +2811,7 @@ function formatAppName(value) {
 function formatDataSource(value) {
   const names = {
     proxy: "代理",
+    "service-gateway": "共享网关",
     session_log: "Claude 日志",
     desktop_audit: "Desktop 回合结算",
     desktop_code: "Desktop Code 日志",
@@ -2800,6 +2827,7 @@ function formatRequestSourceOption(value) {
     "proxy-managed": "代理接管",
     "provider-instance": "独立实例",
     "desktop-session": "Desktop 会话",
+    "service-gateway": "共享网关",
     session: "会话日志"
   }
 
@@ -2807,6 +2835,7 @@ function formatRequestSourceOption(value) {
 }
 
 function formatRequestSource(item) {
+  if (item.requestSource === "service-gateway") return "共享网关"
   if (item.requestSource === "desktop-session") return "Desktop 会话"
   if (item.requestSource === "provider-instance" || item.instanceProviderId) {
     return `独立实例：${

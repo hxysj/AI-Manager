@@ -72,6 +72,8 @@ pub(crate) struct LlmTarget {
     key_id: String,
     api_key: String,
     low_reasoning: bool,
+    service_instance: Option<(AppPaths,String)>,
+    _legacy_request: Option<crate::core::service_provider_store::LegacyRequest>,
 }
 
 pub(crate) fn translation_target_info(
@@ -93,6 +95,13 @@ pub(crate) fn translation_target_info(
         )?;
         return crate::api::local_models::translation_target_info(paths, &settings.model);
     }
+    if crate::core::service_provider_store::active(paths)? {
+        let c=crate::core::database::open(paths)?;
+        let provider_id=crate::core::service_provider_store::source_provider_id(&c,&settings.target_id)?;
+        let provider=crate::core::service_provider_store::config(&c,&provider_id)?;
+        return Ok(json!({"targetId":settings.target_id,"providerName":provider["name"],"model":settings.model,
+            "engine":if provider["kind"]=="codex_account"{"codex"}else{"langchain"}}));
+    }
     let target = get_target(paths, "codex", &json!({}), &settings.target_id)?;
     Ok(json!({
         "targetId": settings.target_id, "providerName": target.name,
@@ -105,9 +114,11 @@ pub(crate) async fn prepare_translation_target(
     cli_targets: &Value,
     settings: &crate::core::settings::TranslationAgentSettings,
 ) -> Result<LlmTarget, ManagerError> {
-    let info = translation_target_info(paths, settings)?;
+    let mut info = translation_target_info(paths, settings)?;
     let mut target =
         prepare_llm_target(paths, cli_targets, &settings.target_id, &settings.model).await?;
+    // 展示信息不能丢失已解析的协议，否则发送前的推理约束无法生效。
+    info["api"] = target.info["api"].clone();
     target.info = info;
     target.low_reasoning = true;
     Ok(target)
@@ -129,6 +140,10 @@ pub(crate) async fn prepare_assistant_target(
     cli_targets: &Value,
     settings: &crate::core::settings::AssistantSettings,
 ) -> Result<LlmTarget, ManagerError> {
+    if crate::core::service_provider_store::active(paths)? {
+        let api=match settings.protocol.as_str(){""|"auto"=>"responses","responses"|"chat"|"messages"=>settings.protocol.as_str(),_=>return Err(ManagerError::System("API 协议无效".into()))};
+        return prepare_service_target(paths,&settings.target_id,&settings.model,api);
+    }
     if settings.target_id == "local" {
         return Err(ManagerError::System("本地助手模型尚未提供；当前 OCR 和翻译模型不支持通用对话及工具调用".into()));
     }
@@ -175,6 +190,10 @@ async fn prepare_text_target(
     cli: &str,
     api: &str,
 ) -> Result<LlmTarget, ManagerError> {
+    if crate::core::service_provider_store::active(paths)? {
+        return prepare_service_target(paths,target_id,model,api);
+    }
+    let legacy_request=crate::core::service_provider_store::legacy_request(paths)?;
     let target = get_target(paths, cli, &json!({}), target_id)?;
     let mut headers = hyper::HeaderMap::new();
     headers.insert("content-type", HeaderValue::from_static("application/json"));
@@ -222,7 +241,33 @@ async fn prepare_text_target(
         key_id,
         api_key,
         low_reasoning: false,
+        service_instance: None,
+        _legacy_request: Some(legacy_request),
     })
+}
+
+fn prepare_service_target(paths:&AppPaths,target_id:&str,model:&str,api:&str)->Result<LlmTarget,ManagerError>{
+    let provider=crate::core::service_provider_store::source_provider_id(&crate::core::database::open(paths)?,target_id)?;
+    let session=crate::api::service_provider::internal_session(paths,&provider,model,api)?;
+    let mut headers=HeaderMap::new();
+    headers.insert("content-type",HeaderValue::from_static("application/json"));
+    headers.insert("authorization",HeaderValue::from_str(&format!("Bearer {}",session["token"].as_str().unwrap_or("")))
+        .map_err(|_|ManagerError::System("共享网关 Token 无效".into()))?);
+    Ok(LlmTarget{
+        info:json!({"targetId":target_id,"providerName":session["providerName"],"model":model,"api":api}),
+        client:reqwest::Client::builder().no_proxy().build().map_err(|e|ManagerError::System(e.to_string()))?,
+        upstream_url:format!("http://127.0.0.1:{}/v1/{}",crate::core::service_provider_store::PORT,
+            if api=="chat"{"chat/completions"}else{api}),
+        headers,key_id:String::new(),api_key:String::new(),low_reasoning:false,
+        service_instance:Some((paths.clone(),session["instanceId"].as_str().unwrap_or("").to_string())),
+        _legacy_request:None,
+    })
+}
+
+impl Drop for LlmTarget{
+    fn drop(&mut self){
+        if let Some((paths,instance))=&self.service_instance{crate::api::service_provider::release_session(paths,instance);}
+    }
 }
 
 impl LlmTarget {
@@ -251,7 +296,11 @@ impl LlmTarget {
         }
         // 在真正发送上游前统一限制，官方 CLI 和 LangChain 都不能提升翻译推理强度。
         if self.low_reasoning {
-            body["reasoning"] = json!({ "effort": "low" });
+            if self.info["api"] == "chat" {
+                body["reasoning_effort"] = json!("low");
+            } else if self.info["api"] == "responses" {
+                body["reasoning"] = json!({ "effort": "low" });
+            }
         }
         self.client
             .post(&self.upstream_url)
@@ -305,6 +354,27 @@ where
         ));
     }
 
+    if crate::core::service_provider_store::active(paths)? {
+        let catalog=crate::core::service_provider_store::public_catalog(paths)?;
+        let profile=catalog["runtimeProfiles"].as_array().and_then(|v|v.iter().find(|item|item["cli"]=="codex"))
+            .ok_or_else(||ManagerError::System("请先在配置中心为 Codex 应用服务商".into()))?;
+        let requested=payload["model"].as_str().filter(|v|!v.is_empty()).or(profile["model"].as_str()).unwrap_or("");
+        let target=prepare_service_target(paths,profile["providerId"].as_str().unwrap_or(""),requested,"responses")?;
+        let mut body=payload["body"].as_object().cloned().ok_or_else(||ManagerError::System("JSON Agent 请求体无效".into()))?;
+        body.insert("stream".into(),json!(true));
+        let response=target.send_agent(Value::Object(body)).await?;
+        let status=response.status().as_u16();
+        emit(json!({"requestId":request_id,"type":"start","status":status,"headers":{"content-type":response.headers().get("content-type").and_then(|v|v.to_str().ok())}}))?;
+        let mut stream=response.bytes_stream();
+        while let Some(bytes)=stream.next().await {
+            let bytes=bytes.map_err(|e|ManagerError::System(e.to_string()))?;
+            emit(json!({"requestId":request_id,"type":"chunk","data":BASE64_STANDARD.encode(bytes)}))?;
+        }
+        emit(json!({"requestId":request_id,"type":"done"}))?;
+        return Ok(json!({"requestId":request_id,"status":status,"streamed":true}));
+    }
+
+    let _request=crate::core::service_provider_store::legacy_request(paths)?;
     let profile = provider_store::read_profiles(paths)?
         .into_iter()
         .find(|item| item.get("cli").and_then(Value::as_str) == Some("codex"))
@@ -539,6 +609,13 @@ impl ProxyServerRegistry {
     pub async fn stop(&self, cli: &str) {
         if let Some(handle) = self.inner.lock().await.remove(cli) {
             handle.abort();
+        }
+    }
+
+    pub(crate) async fn stop_provider_instances(&self) {
+        for (_,(_,handle)) in self.provider_instance_inner.lock().await.drain() {
+            handle.abort();
+            let _=handle.await;
         }
     }
 
@@ -1090,6 +1167,7 @@ async fn process_proxy_request(
     request: Request<Incoming>,
     context: ProxyContext,
 ) -> Result<Response<Full<Bytes>>, ManagerError> {
+    let _request=crate::core::service_provider_store::legacy_request(&context.paths)?;
     let route = if context.cli == "claude" {
         normalize_anthropic_endpoint(&request.uri().to_string())
     } else {

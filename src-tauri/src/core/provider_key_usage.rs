@@ -37,6 +37,9 @@ pub struct KeyRequest {
 }
 
 fn open(paths: &AppPaths) -> Result<Connection, ManagerError> {
+    if crate::core::service_provider_store::active(paths)? {
+        return Err(ManagerError::System("共享网关模式不读写旧 Key 统计".into()));
+    }
     let mut connection = database::open(paths)?;
     let ready: bool = connection.query_row(
         "SELECT EXISTS(SELECT 1 FROM pragma_table_info('provider_keys') WHERE name='is_current')

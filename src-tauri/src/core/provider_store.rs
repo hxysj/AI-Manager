@@ -31,6 +31,9 @@ const OLD_TABLES: &[&str] = &[
 ];
 
 pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
+    if super::service_provider_store::active(paths)? {
+        return Err(ManagerError::System("当前使用服务商配置中心，旧 Provider 存储已隔离；请使用新入口或回滚到旧模式".into()));
+    }
     database::initialize(paths)?;
     let mut connection = database::open(paths)?;
     migrate_connection(&mut connection)?;
