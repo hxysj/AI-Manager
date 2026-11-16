@@ -79,10 +79,10 @@ fn copy_configuration(paths: &AppPaths, migration: &str) -> Result<Value, Manage
             } else {
                 "responses"
             };
-            tx.execute("INSERT INTO service_provider_configs(id,name,kind,upstream_protocol,base_url,proxy,headers_json,note,enabled,created_at,updated_at)
-                VALUES(?1,?2,?3,?10,?4,?5,?6,?7,?8,?9,?9)",params![provider,
+            tx.execute("INSERT INTO service_provider_configs(id,name,kind,upstream_protocol,base_url,proxy,headers_json,note,enabled,created_at,updated_at,icon)
+                VALUES(?1,?2,?3,?10,?4,?5,?6,?7,?8,?9,?9,?11)",params![provider,
                 source["name"].as_str().filter(|v|!v.trim().is_empty()).unwrap_or(source_id),kind,text(&source,"base_url"),
-                text(&source,"proxy"),headers.to_string(),text(&source,"note"),source["enabled"].as_i64().unwrap_or(1)!=0,now(),if kind=="api"{protocol}else{"responses"}])?;
+                text(&source,"proxy"),headers.to_string(),text(&source,"note"),source["enabled"].as_i64().unwrap_or(1)!=0,now(),if kind=="api"{protocol}else{"responses"},text(&source,"icon")])?;
             let mut unreadable = false;
             if kind == "codex_account" {
                 let mut auth = source.clone();

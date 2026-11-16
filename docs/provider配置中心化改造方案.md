@@ -45,6 +45,8 @@ Token 只保存 SHA-256 哈希和可识别前缀；工具 Token 明文只在生�
 
 新增普通服务商时填写名称、API 基础地址、上游协议、API Key 和模型。支持代理、自定义请求头、备注与多个逻辑 Key；保存 API Key 留空表示保留原值。认证头、Host、Content-Length 和连接控制头不能放进自定义请求头。
 
+服务商图标沿用旧 Provider 的 `icon` 配置和现有 `AiIcon` 渲染组件，支持内置图标名称与原有自定义图片地址。首次迁移同步图标；已有新模式数据库自动从 schema 1 升级至 2，仅给 `service_provider_configs` 增加 `icon` 字段，并依据迁移映射补齐缺失图标。升级不改写旧表，不覆盖新模式已保存的非空图标；之后保存时省略 `icon` 会保留现有值，空字符串表示主动清空。
+
 普通上游必须是完整 HTTP/HTTPS 地址，禁止 URL 用户名密码、查询参数、片段及共享网关自身地址。官方账号的上游固定使用项目现有 Codex 官方适配逻辑，其地址字段不用于任意转发。
 
 模型 JSON 可填写名称数组；已有模型按名称重新保存时保留其价格和目录元数据。完整模型示例：
@@ -106,7 +108,7 @@ Token 只保存 SHA-256 哈希和可识别前缀；工具 Token 明文只在生�
 
 1. 打开“设置 → 系统设置”，开启“共享服务商模式”。
 2. 后端先同步尚未入库的旧会话用量，再启动共享网关并自动复制 Codex API 服务商与官方账号。有在途请求则拒绝切换；迁移失败时保持旧模式，关闭本次启动的新监听。
-3. 成功后自动进入新服务商配置界面。检查迁移报告中的 copied、skipped、unreadable 和失败原因；重复启用不覆盖新表修改。
+3. 成功后自动进入服务商列表，沿用原 Provider 列表的紧凑卡片、图标操作与启用状态。顶部按全部、服务商、官方账号筛选；已禁用项通过右上角显示按钮查看。迁移报告位于右上角“网关与实例管理”中，检查 copied、skipped、unreadable 和失败原因；重复启用不覆盖新表修改。
 4. 核对上游协议、Key、官方账号、模型与价格；补录不可读凭据，勾选所需 Agent。
 5. 在“应用 / 测试 Agent”选择 Agent、模型、配置目录。可先做兼容测试，再应用到客户端。
 6. 外部工具使用 gateway 授权，生成独立 Token 并配置后端返回的地址。
@@ -238,6 +240,7 @@ node scripts/test-service-providers.mjs
 | --- | --- | --- | --- | --- | --- |
 | `id` | TEXT | 否 | 无 | 本表稳定主键；新建由应用生成，迁移服务商保留旧存储 ID | `PRIMARY KEY` |
 | `name` | TEXT | 否 | 无 | 界面显示名称 | `CHECK(length(trim(name))>0)` |
+| `icon` | TEXT | 否 | `''` | 沿用旧 Provider 的图标名称或自定义图片地址；空串使用默认展示 | — |
 | `kind` | TEXT | 否 | 无 | 来源类型：api 或 codex_account | `CHECK(kind IN ('api','codex_account'))` |
 | `upstream_protocol` | TEXT | 否 | 无 | 上游协议；普通 API 可为 responses/chat，官方账号固定 responses | `CHECK(upstream_protocol IN ('responses','chat'))` |
 | `base_url` | TEXT | 否 | `''` | 普通 API 的基础地址；官方账号不使用任意自定义上游 | — |

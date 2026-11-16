@@ -191,7 +191,7 @@ fn service_migration_is_idempotent_and_source_tables_are_read_only() {
     let f = Fixture::new();
     let keys = Map::from_iter([("old-codex".into(), json!({"apiKey":"legacy-secret"}))]);
     provider_store::write_provider_bundle(&f.paths,&[
-        json!({"id":"old-codex","cli":"codex","name":"旧 Codex","baseUrl":"https://example.test/v1","runtimeConfig":{"mainModel":"m",
+        json!({"id":"old-codex","cli":"codex","name":"旧 Codex","icon":"alibabacloud.svg","baseUrl":"https://example.test/v1","runtimeConfig":{"mainModel":"m",
             "modelCatalog":{"models":[{"slug":"m","context_window":10000,"custom_flag":true}]}}}),
         json!({"id":"old-claude","cli":"claude","name":"旧 Claude","baseUrl":"https://example.test"})
     ],&[],&[],&keys).unwrap();
@@ -205,6 +205,7 @@ fn service_migration_is_idempotent_and_source_tables_are_read_only() {
     migrate(&f.paths).unwrap();
     let first = state(&f.paths).unwrap();
     assert_eq!(first["providers"].as_array().unwrap().len(), 1);
+    assert_eq!(first["providers"][0]["icon"], "alibabacloud.svg");
     let provider = text(&first["providers"][0], "id");
     assert_eq!(first["models"][0]["catalog"]["custom_flag"], true);
     c.execute(
@@ -229,6 +230,104 @@ fn service_migration_is_idempotent_and_source_tables_are_read_only() {
         .as_array()
         .unwrap()
         .is_empty());
+}
+
+#[test]
+fn service_icons_upgrade_existing_migration_without_writing_legacy_tables() {
+    let f = Fixture::new();
+    let custom = "data:image/png;base64,aWNvbg==";
+    provider_store::write_provider_bundle(
+        &f.paths,
+        &[
+            json!({"id":"builtin","cli":"codex","name":"内置图标","icon":"alibabacloud.svg","baseUrl":"https://example.test/v1","runtimeConfig":{"mainModel":"model"}}),
+            json!({"id":"custom","cli":"codex","name":"上传图标","icon":custom,"baseUrl":"https://example.test/v1"}),
+        ],
+        &[],
+        &[],
+        &Map::new(),
+    )
+    .unwrap();
+    migrate(&f.paths).unwrap();
+    let c = database::open(&f.paths).unwrap();
+    let before = query(&c, "SELECT * FROM providers ORDER BY id", &[]).unwrap();
+    let models = query(&c, "SELECT * FROM service_provider_models ORDER BY id", &[]).unwrap();
+    // 模拟已经启用新模式的 v1 数据库，升级过程禁止对旧表执行任何写入。
+    c.execute_batch(
+        "ALTER TABLE service_provider_configs DROP COLUMN icon;
+        UPDATE app_metadata SET value='1' WHERE key='service_provider:schema_version';
+        INSERT INTO app_metadata(key,value) VALUES('service_provider:active_backend','service');
+        UPDATE service_provider_configs SET name='新模式已编辑',revision=5 WHERE id='builtin';",
+    )
+    .unwrap();
+    for event in ["INSERT", "UPDATE", "DELETE"] {
+        c.execute_batch(&format!("CREATE TRIGGER protect_icons_{event} BEFORE {event} ON providers BEGIN SELECT RAISE(ABORT,'禁止写旧表'); END;")).unwrap();
+    }
+    initialize(&f.paths).unwrap();
+    assert_eq!(config(&c, "builtin").unwrap()["icon"], "alibabacloud.svg");
+    assert_eq!(config(&c, "custom").unwrap()["icon"], custom);
+    assert_eq!(config(&c, "builtin").unwrap()["name"], "新模式已编辑");
+    assert_eq!(config(&c, "builtin").unwrap()["revision"], 5);
+    assert_eq!(
+        query(&c, "SELECT * FROM providers ORDER BY id", &[]).unwrap(),
+        before
+    );
+    assert_eq!(
+        query(&c, "SELECT * FROM service_provider_models ORDER BY id", &[]).unwrap(),
+        models
+    );
+    assert!(state(&f.paths).unwrap()["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["id"] == "custom" && p["icon"] == custom));
+    assert!(public_catalog(&f.paths).unwrap()["providers"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|p| p["id"] == "builtin" && p["icon"] == "alibabacloud.svg"));
+    c.execute_batch(
+        "UPDATE service_provider_configs SET icon='codex.svg' WHERE id='builtin';
+        UPDATE app_metadata SET value='1' WHERE key='service_provider:schema_version';",
+    )
+    .unwrap();
+    initialize(&f.paths).unwrap();
+    assert_eq!(config(&c, "builtin").unwrap()["icon"], "codex.svg");
+    // 后续主动清空图标后，重复初始化和迁移不能把旧图标重新覆盖回来。
+    c.execute(
+        "UPDATE service_provider_configs SET icon='' WHERE id='builtin'",
+        [],
+    )
+    .unwrap();
+    migrate(&f.paths).unwrap();
+    assert_eq!(config(&c, "builtin").unwrap()["icon"], "");
+}
+
+#[test]
+fn service_icons_save_preserves_omitted_field_and_accepts_custom_or_empty_icon() {
+    let f = Fixture::new();
+    let saved = save(
+        &f.paths,
+        &json!({
+            "name":"图标配置","baseUrl":"https://example.test/v1","icon":"alibabacloud.svg"
+        }),
+    )
+    .unwrap();
+    let c = database::open(&f.paths).unwrap();
+    let provider = text(&saved, "id");
+    let mut value = config(&c, provider).unwrap();
+    assert_eq!(value["icon"], "alibabacloud.svg");
+    value.as_object_mut().unwrap().remove("icon");
+    value["name"] = json!("仅修改名称");
+    save(&f.paths, &value).unwrap();
+    let mut value = config(&c, provider).unwrap();
+    assert_eq!(value["icon"], "alibabacloud.svg");
+    value["icon"] = json!("data:image/png;base64,aWNvbg==");
+    save(&f.paths, &value).unwrap();
+    let mut saved = config(&c, provider).unwrap();
+    assert_eq!(saved["icon"], value["icon"]);
+    saved["icon"] = json!("");
+    save(&f.paths, &saved).unwrap();
+    assert_eq!(config(&c, provider).unwrap()["icon"], "");
 }
 
 #[test]

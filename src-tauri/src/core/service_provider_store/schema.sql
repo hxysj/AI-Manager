@@ -2,6 +2,7 @@
 CREATE TABLE IF NOT EXISTS service_provider_configs (
   id TEXT PRIMARY KEY NOT NULL,
   name TEXT NOT NULL CHECK(length(trim(name))>0),
+  icon TEXT NOT NULL DEFAULT '',
   kind TEXT NOT NULL CHECK(kind IN ('api','codex_account')),
   upstream_protocol TEXT NOT NULL CHECK(upstream_protocol IN ('responses','chat')),
   base_url TEXT NOT NULL DEFAULT '',

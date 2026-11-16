@@ -1,129 +1,449 @@
 <template>
   <section class="service-center">
-    <header class="center-header">
-      <div class="header-title">
-        <h2 class="page-title">服务商配置中心</h2>
-        <p class="page-description">共享网关模式 · {{ data.baseUrl }}</p>
+    <header class="provider-toolbar">
+      <div class="provider-tabs" aria-label="服务商类型">
+        <button
+          v-for="item in providerTabs"
+          :key="item.id"
+          class="provider-tab"
+          :class="{ 'provider-tab-active': providerTab === item.id }"
+          type="button"
+          :aria-pressed="providerTab === item.id"
+          @click="providerTab = item.id"
+        >
+          <component :is="item.icon" :size="17" />
+          {{ item.label }}
+        </button>
       </div>
-      <div class="header-actions">
-        <button class="btn" :disabled="busy" @click="refresh">刷新</button>
+      <div class="toolbar-actions">
+        <button
+          class="toolbar-button"
+          :class="{ 'toolbar-button-selected': showDisabledItems }"
+          type="button"
+          :title="showDisabledItems ? '隐藏禁用项' : '显示禁用项'"
+          :aria-label="`${showDisabledItems ? '隐藏禁用项' : '显示禁用项'}，共 ${disabledProviderCount} 项`"
+          :aria-pressed="showDisabledItems"
+          @click="showDisabledItems = !showDisabledItems"
+        >
+          <Eye v-if="showDisabledItems" :size="17" />
+          <EyeOff v-else :size="17" />
+          <span v-if="disabledProviderCount" class="toolbar-count">
+            {{ disabledProviderCount }}
+          </span>
+        </button>
+        <button
+          class="toolbar-button"
+          type="button"
+          title="刷新列表"
+          aria-label="刷新列表"
+          :disabled="busy"
+          @click="refresh"
+        >
+          <RefreshCw :size="17" />
+        </button>
+        <button
+          class="toolbar-button"
+          type="button"
+          title="网关与实例管理"
+          aria-label="网关与实例管理"
+          @click="showGatewayManager = true"
+        >
+          <Server :size="18" />
+        </button>
+        <button
+          class="toolbar-button toolbar-add"
+          type="button"
+          title="新增服务商"
+          aria-label="新增服务商"
+          :disabled="busy"
+          @click="editProvider()"
+        >
+          <Plus :size="22" />
+        </button>
       </div>
     </header>
 
-    <p class="notice">
-      上游统一使用 OpenAI Responses 或 Chat，Agent
-      的协议由本地网关转换。迁移只复制配置；启用新模式后，为各 Agent
-      单独应用配置。修改已接管的配置后，需要解除并重新应用。
-    </p>
-    <div class="provider-toolbar">
-      <h3 class="section-title">服务商配置</h3>
-      <button class="btn btn-primary" :disabled="busy" @click="editProvider()">
-        新增服务商
-      </button>
-    </div>
     <div class="provider-list">
+      <p v-if="loginState?.status === 'pending'" class="notice">
+        官方登录进行中：{{ loginState.message }}
+        <button class="btn" :disabled="busy" @click="perform('cancel-login')">
+          取消登录
+        </button>
+      </p>
       <article
-        v-for="provider in data.providers"
+        v-for="provider in visibleProviders"
         :key="provider.id"
         class="provider-card"
+        :class="{
+          'provider-card-active': providerInstances(provider.id).length,
+          'provider-card-disabled': !provider.enabled
+        }"
       >
-        <div class="card-title">
-          <span>{{ provider.name }}</span>
-          <span class="muted"
-            >{{
+        <span class="provider-avatar">
+          <AiIcon
+            v-if="provider.icon"
+            :name="provider.icon"
+            class="provider-avatar-icon"
+            :alt="`${providerDisplayName(provider)} 图标`"
+          />
+          <ShieldCheck v-else-if="provider.kind === 'codex_account'" :size="18" />
+          <template v-else>{{ providerDisplayName(provider).slice(0, 1) || "AI" }}</template>
+        </span>
+        <div class="provider-main">
+          <div class="provider-title">
+            <span
+              class="provider-name"
+              data-emphasis
+              :title="providerDisplayName(provider)"
+            >
+              {{ providerDisplayName(provider) }}
+            </span>
+            <span class="provider-tag">
+              {{
+                provider.kind === "codex_account"
+                  ? "官方账号"
+                  : provider.upstreamProtocol === "chat"
+                    ? "Chat"
+                    : "Responses"
+              }}
+            </span>
+            <span v-if="!provider.enabled" class="provider-tag disabled-tag"
+              >已禁用</span
+            >
+            <span
+              v-if="!provider.hasCredential"
+              class="provider-tag missing-tag"
+              >待配置凭据</span
+            >
+          </div>
+          <span
+            v-if="provider.note"
+            class="provider-note"
+            :title="provider.note"
+            >{{ provider.note }}</span
+          >
+          <span class="provider-url" :title="provider.baseUrl">
+            {{
               provider.kind === "codex_account"
                 ? "Codex 官方账号"
-                : provider.upstreamProtocol
+                : provider.baseUrl
             }}
-            · {{ provider.enabled ? "启用" : "禁用" }} ·
-            {{ provider.hasCredential ? "已配置凭据" : "缺少凭据" }}</span
-          >
-        </div>
-        <p class="provider-url">
-          {{
-            provider.kind === "codex_account"
-              ? "官方账号凭据由网关管理"
-              : provider.baseUrl
-          }}
-        </p>
-        <p class="muted">
-          授权：{{ enabledAgents(provider.id) || "尚未授权" }} · 模型
-          {{ providerModels(provider.id).length }} 个
-        </p>
-        <div class="card-actions">
-          <button class="btn" :disabled="busy" @click="editProvider(provider)">
-            编辑
-          </button>
-          <button
-            class="btn"
-            :disabled="busy"
-            @click="
-              perform('fetch-models', {
-                providerId: provider.id,
-                agentVersion: agentVersion('codex')
-              })
+          </span>
+          <div
+            v-if="
+              provider.kind === 'codex_account' && quotaWindows(provider).length
             "
+            class="quota-list"
           >
-            获取模型
-          </button>
-          <button
-            class="btn"
-            :disabled="busy || data.backend !== 'service'"
-            @click="openApply(provider)"
-          >
-            应用 / 测试 Agent
-          </button>
-          <template v-if="provider.kind === 'codex_account'">
-            <button
-              class="btn"
-              :disabled="busy || data.backend !== 'service'"
-              @click="
-                perform('login', {
-                  accountId: provider.id,
-                  proxy: provider.proxy
-                })
+            <div
+              v-for="quota in quotaWindows(provider)"
+              :key="quota.name"
+              class="quota-item"
+              :title="
+                quota.resetAt
+                  ? `重置时间：${formatTime(quota.resetAt * 1000)}`
+                  : ''
               "
             >
-              官方登录
+              <div class="quota-heading">
+                <span>{{ quota.name }}</span>
+                <span>{{
+                  quota.remaining == null ? "未知" : `${quota.remaining}%`
+                }}</span>
+              </div>
+              <div class="quota-track">
+                <span
+                  class="quota-fill"
+                  :style="{ width: `${quota.remaining ?? 0}%` }"
+                ></span>
+              </div>
+            </div>
+          </div>
+          <span
+            class="provider-meta"
+            :title="
+              enabledAgents(provider.id) || '请在编辑中选择允许使用的 Agent'
+            "
+          >
+            {{ enabledAgents(provider.id) || "尚未授权 Agent" }} ·
+            {{ providerModels(provider.id).length }} 个模型
+          </span>
+        </div>
+        <div class="provider-actions">
+          <div class="action-main">
+            <span
+              class="state-pill"
+              :class="{
+                'state-pill-muted':
+                  !provider.enabled || !providerInstances(provider.id).length
+              }"
+            >
+              <span
+                v-if="provider.enabled && providerInstances(provider.id).length"
+                class="state-dot"
+              ></span>
+              {{
+                !provider.enabled
+                  ? "已禁用"
+                  : providerInstances(provider.id).length
+                    ? "已启用"
+                    : "未启用"
+              }}
+            </span>
+            <button
+              v-if="!provider.enabled"
+              class="provider-enable"
+              type="button"
+              :disabled="busy"
+              @click="toggleProviderEnabled(provider)"
+            >
+              <RefreshCw :size="15" />恢复
             </button>
             <button
-              class="btn"
+              v-else-if="providerInstances(provider.id).length"
+              class="provider-using"
+              type="button"
+              :disabled="busy"
+              @click="stopUsingProvider(provider)"
+            >
+              <X :size="15" />取消使用
+            </button>
+            <button
+              v-else
+              class="provider-enable"
+              type="button"
+              :disabled="busy || !provider.hasCredential"
+              @click="openApply(provider)"
+            >
+              <Play :size="15" />启用
+            </button>
+          </div>
+          <div class="icon-actions">
+            <button
+              v-if="provider.kind === 'codex_account'"
+              class="icon-button"
+              type="button"
+              title="刷新额度"
+              aria-label="刷新额度"
               :disabled="busy"
               @click="perform('refresh-quota', { providerId: provider.id })"
             >
-              刷新官方额度
+              <RefreshCw :size="16" />
+            </button>
+            <button
+              class="icon-button"
+              type="button"
+              title="查看详情"
+              aria-label="查看详情"
+              @click="openProviderDetail(provider)"
+            >
+              <Eye :size="16" />
+            </button>
+            <button
+              v-if="provider.kind === 'api'"
+              class="icon-button"
+              type="button"
+              title="管理 API Key"
+              aria-label="管理 API Key"
+              @click="openProviderDetail(provider, 'keys')"
+            >
+              <KeyRound :size="16" />
+            </button>
+            <button
+              class="icon-button"
+              type="button"
+              title="编辑服务商"
+              aria-label="编辑服务商"
+              :disabled="busy"
+              @click="editProvider(provider)"
+            >
+              <SquarePen :size="16" />
+            </button>
+            <button
+              v-if="provider.enabled"
+              class="icon-button icon-warning"
+              type="button"
+              title="禁用服务商"
+              aria-label="禁用服务商"
+              :disabled="busy"
+              @click="toggleProviderEnabled(provider)"
+            >
+              <Ban :size="16" />
+            </button>
+            <button
+              class="icon-button icon-danger"
+              type="button"
+              title="删除服务商"
+              aria-label="删除服务商"
+              :disabled="busy"
+              @click="deleteProvider = provider"
+            >
+              <Trash2 :size="16" />
+            </button>
+          </div>
+        </div>
+      </article>
+      <div v-if="!visibleProviders.length" class="provider-empty">
+        <span>{{
+          disabledProviderCount && !showDisabledItems
+            ? "当前服务商均已禁用，可点击右上角显示禁用项。"
+            : "暂无服务商，点击右上角新增。"
+        }}</span>
+      </div>
+    </div>
+
+    <BaseModal
+      v-if="detailProvider"
+      :title="providerDisplayName(detailProvider)"
+      description=""
+      @close="detailProviderId = ''"
+    >
+      <div class="provider-detail">
+        <div class="detail-tabs">
+          <button
+            v-for="item in detailTabs"
+            :key="item.id"
+            class="detail-tab"
+            :class="{ 'detail-tab-active': detailTab === item.id }"
+            type="button"
+            @click="detailTab = item.id"
+          >
+            {{ item.label }}
+          </button>
+        </div>
+        <template v-if="detailTab === 'overview'">
+          <dl class="detail-fields">
+            <div class="detail-field">
+              <dt class="detail-label">服务商类型</dt>
+              <dd class="detail-value">
+                {{
+                  detailProvider.kind === "codex_account"
+                    ? "Codex 官方账号"
+                    : "OpenAI 兼容服务商"
+                }}
+              </dd>
+            </div>
+            <div v-if="detailProvider.kind === 'api'" class="detail-field">
+              <dt class="detail-label">基础地址</dt>
+              <dd class="detail-value">{{ detailProvider.baseUrl }}</dd>
+            </div>
+            <div class="detail-field">
+              <dt class="detail-label">允许使用</dt>
+              <dd class="detail-value">
+                {{ enabledAgents(detailProvider.id) || "尚未授权 Agent" }}
+              </dd>
+            </div>
+            <div class="detail-field">
+              <dt class="detail-label">凭据状态</dt>
+              <dd class="detail-value">
+                {{ detailProvider.hasCredential ? "已配置" : "待配置" }}
+              </dd>
+            </div>
+            <div v-if="detailProvider.proxy" class="detail-field">
+              <dt class="detail-label">代理地址</dt>
+              <dd class="detail-value">{{ detailProvider.proxy }}</dd>
+            </div>
+          </dl>
+          <div class="card-actions">
+            <button
+              class="btn"
+              :disabled="busy"
+              @click="
+                perform('fetch-models', {
+                  providerId: detailProvider.id,
+                  agentVersion: agentVersion('codex')
+                })
+              "
+            >
+              获取模型
+            </button>
+            <button
+              class="btn"
+              :disabled="busy || !detailProvider.enabled"
+              @click="openApply(detailProvider)"
+            >
+              应用 / 测试 Agent
             </button>
             <button
               class="btn"
               :disabled="busy"
-              @click="((accountProvider = provider.id), (accountContent = ''))"
+              @click="editProvider(detailProvider)"
             >
-              导入 auth.json
+              编辑配置与 Agent 授权
             </button>
+          </div>
+          <div class="detail-models">
+            <h3 class="section-title">模型</h3>
+            <span
+              v-for="model in providerModels(detailProvider.id)"
+              :key="model.id"
+              class="model-tag"
+              :class="{ 'model-tag-disabled': !model.enabled }"
+              >{{ model.displayName || model.upstreamModelId }}</span
+            >
+            <p v-if="!providerModels(detailProvider.id).length" class="muted">
+              尚未配置模型，可以获取模型或在编辑中添加。
+            </p>
+          </div>
+          <template v-if="detailProvider.kind === 'codex_account'">
+            <h3 class="section-title">官方账号</h3>
+            <div class="card-actions">
+              <button
+                class="btn"
+                :disabled="busy || data.backend !== 'service'"
+                @click="
+                  perform('login', {
+                    accountId: detailProvider.id,
+                    proxy: detailProvider.proxy
+                  })
+                "
+              >
+                官方登录
+              </button>
+              <button
+                class="btn"
+                :disabled="busy"
+                @click="
+                  perform('refresh-quota', { providerId: detailProvider.id })
+                "
+              >
+                刷新官方额度
+              </button>
+              <button
+                class="btn"
+                :disabled="busy"
+                @click="
+                  ((accountProvider = detailProvider.id), (accountContent = ''))
+                "
+              >
+                导入 auth.json
+              </button>
+            </div>
+            <details class="quota-report">
+              <summary>官方额度（独立于网关用量）</summary>
+              <pre class="quota-json">{{
+                JSON.stringify(
+                  providerAccount(detailProvider.id)?.quota || {},
+                  null,
+                  2
+                )
+              }}</pre>
+            </details>
           </template>
-          <button
-            class="btn"
-            :disabled="busy"
-            @click="deleteProvider = provider"
-          >
-            删除
-          </button>
-        </div>
-        <details v-if="provider.kind === 'codex_account'" class="quota-report">
-          <summary>官方额度（独立于网关用量）</summary>
-          <pre class="quota-json">{{
-            JSON.stringify(
-              data.accounts?.find((item) => item.providerId === provider.id)
-                ?.quota || {},
-              null,
-              2
-            )
-          }}</pre>
-        </details>
-        <div v-if="provider.kind === 'api'" class="key-list">
+        </template>
+        <div v-else-if="detailTab === 'keys'" class="key-list">
+          <div class="card-actions">
+            <button
+              class="btn btn-primary"
+              :disabled="busy"
+              @click="editProvider(detailProvider)"
+            >
+              添加 / 更新 Key
+            </button>
+          </div>
           <div
             v-for="key in data.keys.filter(
-              (item) => item.providerId === provider.id
+              (item) => item.providerId === detailProvider.id
             )"
             :key="key.id"
             class="key-row"
@@ -136,7 +456,10 @@
               class="btn"
               :disabled="busy || key.isActive || key.status !== 'active'"
               @click="
-                perform('key-select', { id: key.id, providerId: provider.id })
+                perform('key-select', {
+                  id: key.id,
+                  providerId: detailProvider.id
+                })
               "
             >
               使用此 Key
@@ -145,205 +468,257 @@
               class="btn"
               :disabled="busy || key.status === 'revoked'"
               @click="
-                perform('key-revoke', { id: key.id, providerId: provider.id })
+                perform('key-revoke', {
+                  id: key.id,
+                  providerId: detailProvider.id
+                })
               "
             >
               撤销
             </button>
           </div>
-        </div>
-      </article>
-      <p v-if="!data.providers?.length" class="muted">
-        暂无服务商，请新建服务商。
-      </p>
-    </div>
-
-    <h3 class="section-title">Agent 实例与文件接管</h3>
-    <div class="instance-list">
-      <article
-        v-for="instance in visibleInstances"
-        :key="instance.id"
-        class="instance-card"
-      >
-        <div class="instance-description">
-          <span
-            >{{ instance.name }} · {{ agentLabel(instance.agentType) }} ·
-            {{ instance.status }} / {{ instance.syncStatus }}</span
+          <p
+            v-if="
+              !data.keys.some((item) => item.providerId === detailProvider.id)
+            "
+            class="muted"
           >
-          <code>{{ instance.configPath }}</code>
-          <span v-if="instance.lastError" class="error-text">{{
-            instance.lastError
-          }}</span>
+            尚未添加 API Key。
+          </p>
         </div>
-        <button
-          class="btn"
-          :disabled="busy || instance.status === 'detached'"
-          @click="perform('detach', { id: instance.id })"
-        >
-          解除接管 / 重试恢复
-        </button>
-        <div
-          v-for="file in data.managedFiles.filter(
-            (item) =>
-              item.instanceId === instance.id &&
-              item.restoreStatus === 'conflict'
-          )"
-          :key="file.id"
-          class="file-conflict"
-        >
-          <span>{{ file.filePath }} · {{ file.errorMessage }}</span>
-          <button class="btn" :disabled="busy" @click="showBackup(file.id)">
-            查看加密备份
-          </button>
-        </div>
-      </article>
-    </div>
-    <p v-if="loginState?.status" class="notice">
-      官方登录：{{ loginState.status }} {{ loginState.message }}
-      <button
-        v-if="loginState.status === 'pending'"
-        class="btn"
-        @click="perform('cancel-login')"
-      >
-        取消登录
-      </button>
-    </p>
-    <details class="migration-report">
-      <summary>
-        最近迁移报告（{{ data.migrationItems?.length || 0 }} 项）
-      </summary>
-      <p
-        v-for="item in data.migrationItems"
-        :key="`${item.sourceTable}:${item.sourceId}`"
-        class="report-row"
-      >
-        {{ item.sourceId }} · {{ item.status }} · {{ item.reason }}
-      </p>
-    </details>
-    <details class="migration-report">
-      <summary>兼容性测试记录（工具调用 → 工具结果 → 流式文本）</summary>
-      <p v-for="item in data.compatibility" :key="item.id" class="report-row">
-        {{ providerName(item.providerId) }} · {{ agentLabel(item.agentType) }} ·
-        修订 {{ item.providerRevision }} · {{ item.status }} ·
-        {{ formatTime(item.testedAt) }}
-      </p>
-    </details>
-
-    <section class="usage-panel">
-      <h3 class="section-title">网关统计</h3>
-      <div class="usage-counters">
-        <div v-for="item in counters" :key="item.label" class="counter">
-          <span>{{ item.label }}</span
-          ><span>{{ item.value ?? "未知" }}</span>
-        </div>
-      </div>
-      <p class="muted">
-        只累计共享网关收到的请求。上游未返回用量时保留未知；缓存输入包含在输入
-        Token 中。官方账号额度与此处调用量分别记录。
-      </p>
-      <label class="usage-dimension"
-        >汇总维度<select v-model="usageDimension" class="input">
-          <option
-            v-for="item in usageDimensions"
-            :key="item.id"
-            :value="item.id"
+        <div v-else class="instance-list">
+          <article
+            v-for="instance in providerInstances(detailProvider.id)"
+            :key="instance.id"
+            class="instance-card"
           >
-            {{ item.label }}
-          </option>
-        </select></label
-      >
-      <div class="usage-table-wrap">
-        <table class="usage-table">
-          <thead>
-            <tr>
-              <th class="usage-cell">分组</th>
-              <th class="usage-cell">上游尝试 / 成功</th>
-              <th class="usage-cell">输入 / 输出 / 缓存 Token（已知值）</th>
-              <th class="usage-cell">未知用量</th>
-              <th class="usage-cell">估算费用 / 已计价次数</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr
-              v-for="item in data.usage?.[usageDimension]"
-              :key="`${item.groupKey}:${item.currency}:${item.groupName}`"
+            <div class="instance-description">
+              <span
+                >{{ instance.name }} ·
+                {{ agentLabel(instance.agentType) }}</span
+              ><code>{{ instance.configPath }}</code
+              ><span v-if="instance.lastError" class="error-text">{{
+                instance.lastError
+              }}</span>
+            </div>
+            <button
+              class="btn"
+              :disabled="busy"
+              @click="perform('detach', { id: instance.id })"
             >
-              <td class="usage-cell">
-                {{
-                  usageDimension === "byAgent"
-                    ? agentLabel(item.groupName)
-                    : item.groupName || item.groupKey
-                }}
-              </td>
-              <td class="usage-cell">
-                {{ item.attemptCount }} / {{ item.successCount }}
-              </td>
-              <td class="usage-cell">
-                {{ item.inputTokens ?? "未知" }} /
-                {{ item.outputTokens ?? "未知" }} /
-                {{ item.cachedInputTokens ?? "未知" }}
-              </td>
-              <td class="usage-cell">{{ item.unknownUsageCount }}</td>
-              <td class="usage-cell">
-                {{
-                  item.estimatedCostMicros == null
-                    ? "未知"
-                    : `${item.estimatedCostMicros / 1000000} ${item.currency}`
-                }}
-                / {{ item.pricedCount }}
-              </td>
-            </tr>
-          </tbody>
-        </table>
+              取消使用 / 恢复配置
+            </button>
+          </article>
+          <p v-if="!providerInstances(detailProvider.id).length" class="muted">
+            此服务商尚未应用到 Agent。
+          </p>
+        </div>
       </div>
-      <p class="muted">
-        以下展示最近 100 条请求；汇总使用全部账本记录。不同币种分别展示，部分
-        Token 或价格缺失时费用保持未知。
-      </p>
-      <div class="usage-table-wrap">
-        <table class="usage-table">
-          <thead>
-            <tr>
-              <th class="usage-cell">时间 / Agent</th>
-              <th class="usage-cell">服务商 / Key</th>
-              <th class="usage-cell">模型</th>
-              <th class="usage-cell">结果</th>
-              <th class="usage-cell">输入 / 输出 Token</th>
-              <th class="usage-cell">估算费用</th>
-            </tr>
-          </thead>
-          <tbody>
-            <tr v-for="log in data.usage?.logs" :key="log.id">
-              <td class="usage-cell">
-                {{ formatTime(log.createdAt) }}<br />{{
-                  agentLabel(log.agentType)
-                }}
-              </td>
-              <td class="usage-cell">
-                {{ log.providerName || "未路由" }}<br />{{ log.credentialName }}
-              </td>
-              <td class="usage-cell">
-                {{ log.upstreamModel || log.requestedModel }}
-              </td>
-              <td class="usage-cell" :title="log.errorMessage">
-                {{ log.state }} / {{ log.statusCode || "—" }}
-              </td>
-              <td class="usage-cell">
-                {{ log.inputTokens ?? "未知" }} /
-                {{ log.outputTokens ?? "未知" }}
-              </td>
-              <td class="usage-cell">
-                {{
-                  log.estimatedCostMicros == null
-                    ? "未知"
-                    : `${log.estimatedCostMicros / 1000000} ${log.currency}`
-                }}
-              </td>
-            </tr>
-          </tbody>
-        </table>
+    </BaseModal>
+
+    <BaseModal
+      v-if="showGatewayManager"
+      title="网关与实例管理"
+      :description="data.baseUrl"
+      @close="showGatewayManager = false"
+    >
+      <div class="gateway-manager">
+        <h3 class="section-title">Agent 实例与文件接管</h3>
+        <div class="instance-list">
+          <article
+            v-for="instance in visibleInstances"
+            :key="instance.id"
+            class="instance-card"
+          >
+            <div class="instance-description">
+              <span
+                >{{ instance.name }} · {{ agentLabel(instance.agentType) }} ·
+                {{ instance.status }} / {{ instance.syncStatus }}</span
+              >
+              <code>{{ instance.configPath }}</code>
+              <span v-if="instance.lastError" class="error-text">{{
+                instance.lastError
+              }}</span>
+            </div>
+            <button
+              class="btn"
+              :disabled="busy || instance.status === 'detached'"
+              @click="perform('detach', { id: instance.id })"
+            >
+              解除接管 / 重试恢复
+            </button>
+            <div
+              v-for="file in data.managedFiles.filter(
+                (item) =>
+                  item.instanceId === instance.id &&
+                  item.restoreStatus === 'conflict'
+              )"
+              :key="file.id"
+              class="file-conflict"
+            >
+              <span>{{ file.filePath }} · {{ file.errorMessage }}</span>
+              <button class="btn" :disabled="busy" @click="showBackup(file.id)">
+                查看加密备份
+              </button>
+            </div>
+          </article>
+        </div>
+        <p v-if="loginState?.status" class="notice">
+          官方登录：{{ loginState.status }} {{ loginState.message }}
+          <button
+            v-if="loginState.status === 'pending'"
+            class="btn"
+            @click="perform('cancel-login')"
+          >
+            取消登录
+          </button>
+        </p>
+        <details class="migration-report">
+          <summary>
+            最近迁移报告（{{ data.migrationItems?.length || 0 }} 项）
+          </summary>
+          <p
+            v-for="item in data.migrationItems"
+            :key="`${item.sourceTable}:${item.sourceId}`"
+            class="report-row"
+          >
+            {{ item.sourceId }} · {{ item.status }} · {{ item.reason }}
+          </p>
+        </details>
+        <details class="migration-report">
+          <summary>兼容性测试记录（工具调用 → 工具结果 → 流式文本）</summary>
+          <p
+            v-for="item in data.compatibility"
+            :key="item.id"
+            class="report-row"
+          >
+            {{ providerName(item.providerId) }} ·
+            {{ agentLabel(item.agentType) }} · 修订
+            {{ item.providerRevision }} · {{ item.status }} ·
+            {{ formatTime(item.testedAt) }}
+          </p>
+        </details>
+
+        <section class="usage-panel">
+          <h3 class="section-title">网关统计</h3>
+          <div class="usage-counters">
+            <div v-for="item in counters" :key="item.label" class="counter">
+              <span>{{ item.label }}</span
+              ><span>{{ item.value ?? "未知" }}</span>
+            </div>
+          </div>
+          <p class="muted">
+            只累计共享网关收到的请求。上游未返回用量时保留未知；缓存输入包含在输入
+            Token 中。官方账号额度与此处调用量分别记录。
+          </p>
+          <label class="usage-dimension"
+            >汇总维度<select v-model="usageDimension" class="input">
+              <option
+                v-for="item in usageDimensions"
+                :key="item.id"
+                :value="item.id"
+              >
+                {{ item.label }}
+              </option>
+            </select></label
+          >
+          <div class="usage-table-wrap">
+            <table class="usage-table">
+              <thead>
+                <tr>
+                  <th class="usage-cell">分组</th>
+                  <th class="usage-cell">上游尝试 / 成功</th>
+                  <th class="usage-cell">输入 / 输出 / 缓存 Token（已知值）</th>
+                  <th class="usage-cell">未知用量</th>
+                  <th class="usage-cell">估算费用 / 已计价次数</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr
+                  v-for="item in data.usage?.[usageDimension]"
+                  :key="`${item.groupKey}:${item.currency}:${item.groupName}`"
+                >
+                  <td class="usage-cell">
+                    {{
+                      usageDimension === "byAgent"
+                        ? agentLabel(item.groupName)
+                        : item.groupName || item.groupKey
+                    }}
+                  </td>
+                  <td class="usage-cell">
+                    {{ item.attemptCount }} / {{ item.successCount }}
+                  </td>
+                  <td class="usage-cell">
+                    {{ item.inputTokens ?? "未知" }} /
+                    {{ item.outputTokens ?? "未知" }} /
+                    {{ item.cachedInputTokens ?? "未知" }}
+                  </td>
+                  <td class="usage-cell">{{ item.unknownUsageCount }}</td>
+                  <td class="usage-cell">
+                    {{
+                      item.estimatedCostMicros == null
+                        ? "未知"
+                        : `${item.estimatedCostMicros / 1000000} ${item.currency}`
+                    }}
+                    / {{ item.pricedCount }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="muted">
+            以下展示最近 100
+            条请求；汇总使用全部账本记录。不同币种分别展示，部分 Token
+            或价格缺失时费用保持未知。
+          </p>
+          <div class="usage-table-wrap">
+            <table class="usage-table">
+              <thead>
+                <tr>
+                  <th class="usage-cell">时间 / Agent</th>
+                  <th class="usage-cell">服务商 / Key</th>
+                  <th class="usage-cell">模型</th>
+                  <th class="usage-cell">结果</th>
+                  <th class="usage-cell">输入 / 输出 Token</th>
+                  <th class="usage-cell">估算费用</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="log in data.usage?.logs" :key="log.id">
+                  <td class="usage-cell">
+                    {{ formatTime(log.createdAt) }}<br />{{
+                      agentLabel(log.agentType)
+                    }}
+                  </td>
+                  <td class="usage-cell">
+                    {{ log.providerName || "未路由" }}<br />{{
+                      log.credentialName
+                    }}
+                  </td>
+                  <td class="usage-cell">
+                    {{ log.upstreamModel || log.requestedModel }}
+                  </td>
+                  <td class="usage-cell" :title="log.errorMessage">
+                    {{ log.state }} / {{ log.statusCode || "—" }}
+                  </td>
+                  <td class="usage-cell">
+                    {{ log.inputTokens ?? "未知" }} /
+                    {{ log.outputTokens ?? "未知" }}
+                  </td>
+                  <td class="usage-cell">
+                    {{
+                      log.estimatedCostMicros == null
+                        ? "未知"
+                        : `${log.estimatedCostMicros / 1000000} ${log.currency}`
+                    }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
       </div>
-    </section>
+    </BaseModal>
 
     <BaseModal
       v-if="form"
@@ -646,6 +1021,22 @@
 
 <script setup>
 import { computed, onMounted, ref, watch } from "vue"
+import {
+  Ban,
+  Eye,
+  EyeOff,
+  KeyRound,
+  Layers,
+  Play,
+  Plus,
+  RefreshCw,
+  Server,
+  ShieldCheck,
+  SquarePen,
+  Trash2,
+  X
+} from "lucide-vue-next"
+import AiIcon from "@/components/AiIcon.vue"
 import BaseModal from "@/components/BaseModal.vue"
 import ProviderApiKeyInput from "./ProviderApiKeyInput.vue"
 import { serviceProviderApi } from "@/api/modules/service-providers"
@@ -666,6 +1057,40 @@ const data = ref({
   ...props.initialState
 })
 const busy = ref(false)
+const providerTab = ref("all")
+const showDisabledItems = ref(false)
+const showGatewayManager = ref(false)
+const detailProviderId = ref("")
+const detailTab = ref("overview")
+const providerTabs = [
+  { id: "all", label: "全部", icon: Layers },
+  { id: "api", label: "服务商", icon: Server },
+  { id: "codex_account", label: "官方账号", icon: ShieldCheck }
+]
+// 列表按配置类型展示，Agent 授权保留在编辑中，避免重新按 Agent 拆分配置。
+const scopedProviders = computed(() =>
+  data.value.providers.filter(
+    (item) => providerTab.value === "all" || item.kind === providerTab.value
+  )
+)
+const disabledProviderCount = computed(
+  () => scopedProviders.value.filter((item) => !item.enabled).length
+)
+const visibleProviders = computed(() =>
+  scopedProviders.value.filter(
+    (item) => showDisabledItems.value || item.enabled
+  )
+)
+const detailProvider = computed(() =>
+  data.value.providers.find((item) => item.id === detailProviderId.value)
+)
+const detailTabs = computed(() => [
+  { id: "overview", label: "基本信息" },
+  ...(detailProvider.value?.kind === "api"
+    ? [{ id: "keys", label: "API Key" }]
+    : []),
+  { id: "instances", label: "已启用实例" }
+])
 const form = ref(null)
 const applyForm = ref(null)
 const accountProvider = ref("")
@@ -736,8 +1161,19 @@ const agentVersion = (id) =>
   props.cliTargets.find((item) => item.id === id)?.version || ""
 const providerName = (id) =>
   data.value.providers.find((item) => item.id === id)?.name || id
+const providerAccount = (id) =>
+  data.value.accounts?.find((item) => item.providerId === id)
+const providerDisplayName = (provider) =>
+  provider.kind === "codex_account" &&
+  (!provider.name || provider.name === provider.id)
+    ? providerAccount(provider.id)?.email || "Codex 官方账号"
+    : provider.name
 const providerModels = (id) =>
   data.value.models.filter((item) => item.providerId === id)
+const providerInstances = (id) =>
+  visibleInstances.value.filter(
+    (item) => item.providerId === id && item.status === "active"
+  )
 const enabledAgents = (id) =>
   data.value.bindings
     .filter((item) => item.providerId === id && item.enabled)
@@ -745,6 +1181,52 @@ const enabledAgents = (id) =>
     .join("、")
 const formatTime = (value) =>
   value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "—"
+
+function quotaWindows(provider) {
+  const limits = providerAccount(provider.id)?.quota?.rate_limit
+  return [limits?.primary_window, limits?.secondary_window]
+    .filter(Boolean)
+    .map((window, index) => ({
+      name:
+        window.limit_window_seconds >= 86400
+          ? `${window.limit_window_seconds / 86400} 天额度`
+          : window.limit_window_seconds
+            ? `${window.limit_window_seconds / 3600} 小时额度`
+            : `额度 ${index + 1}`,
+      remaining:
+        window.used_percent == null
+          ? null
+          : Math.max(0, Math.min(100, 100 - window.used_percent)),
+      resetAt: window.reset_at
+    }))
+}
+
+function openProviderDetail(provider, tab = "overview") {
+  detailProviderId.value = provider.id
+  detailTab.value = tab
+}
+
+async function toggleProviderEnabled(provider) {
+  if (busy.value) return false
+  busy.value = true
+  let detail
+  try {
+    detail = await serviceProviderApi.invoke("detail", { id: provider.id })
+  } catch (error) {
+    createMessage.error(error?.message || String(error))
+    return false
+  } finally {
+    busy.value = false
+  }
+  // 只更新配置启用状态；模型、授权和 Key 由后端保留，使用详情中的最新修订号。
+  return perform("save", { ...provider, ...detail, enabled: !provider.enabled })
+}
+
+async function stopUsingProvider(provider) {
+  const instances = providerInstances(provider.id)
+  if (instances.length === 1) return perform("detach", { id: instances[0].id })
+  openProviderDetail(provider, "instances")
+}
 
 async function refresh() {
   return perform("state", undefined, false)
@@ -787,7 +1269,7 @@ async function editProvider(provider = {}) {
       enabled: true,
       ...provider,
       ...detail,
-      enabled: provider.enabled !== 0,
+      enabled: Boolean(detail.enabled ?? provider.enabled ?? true),
       apiKey: "",
       keyLogicalId: "default",
       keyName: "默认 Key",
@@ -820,6 +1302,7 @@ async function editProvider(provider = {}) {
         }
       })
     }
+    detailProviderId.value = ""
   } catch (error) {
     createMessage.error(error?.message || String(error))
   }
@@ -861,6 +1344,7 @@ function openApply(provider) {
     )
   )
   if (!agent) return createMessage.error("请先编辑服务商并授权 Agent")
+  detailProviderId.value = ""
   applyForm.value = {
     providerId: provider.id,
     agentType: agent.id,
@@ -926,12 +1410,15 @@ async function showBackup(id) {
 <style scoped lang="less">
 .service-center {
   display: flex;
+  height: 100%;
   flex-direction: column;
-  gap: 18px;
-  padding: 24px;
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow: hidden;
+  background: var(--color-panel);
+  :deep(.base-modal__panel) {
+    max-width: calc(100vw - 48px);
+  }
   .btn {
     display: inline-flex;
     align-items: center;
@@ -964,24 +1451,92 @@ async function showBackup(id) {
     font: inherit;
     font-size: 13px;
   }
-  .center-header {
+  .provider-toolbar {
     display: flex;
+    flex: none;
+    align-items: center;
     justify-content: space-between;
-    gap: 18px;
-    .header-title {
-      .page-title {
-        margin: 0;
-      }
-      .page-description {
+    gap: 12px;
+    min-height: 58px;
+    padding: 0 14px;
+    border-bottom: 1px solid var(--color-line);
+    .provider-tabs {
+      display: flex;
+      gap: 4px;
+      padding: 4px;
+      border-radius: 12px;
+      background: var(--color-panel-soft);
+      .provider-tab {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        height: 38px;
+        padding: 0 16px;
+        border: 0;
+        border-radius: 10px;
+        background: transparent;
         color: var(--color-text-muted);
-        margin-bottom: 0;
+        font: inherit;
+        cursor: pointer;
+        white-space: nowrap;
+        &.provider-tab-active {
+          background: var(--color-panel);
+          color: var(--color-text);
+          box-shadow: 0 1px 5px rgba(15, 23, 42, 0.08);
+        }
       }
     }
-    .header-actions {
+    .toolbar-actions {
       display: flex;
+      flex: none;
       gap: 8px;
       align-items: center;
-      flex-wrap: wrap;
+      .toolbar-button {
+        position: relative;
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 38px;
+        height: 38px;
+        padding: 0;
+        border: 1px solid var(--color-line);
+        border-radius: 12px;
+        background: var(--color-panel);
+        color: var(--color-text-muted);
+        cursor: pointer;
+        &:disabled {
+          opacity: 0.55;
+          cursor: default;
+        }
+        &:hover {
+          background: var(--color-panel-soft);
+          color: var(--color-text);
+        }
+        &.toolbar-button-selected {
+          border-color: var(--color-warning-line);
+          background: var(--color-warning-soft);
+          color: var(--color-warning);
+        }
+        &.toolbar-add {
+          border-color: var(--color-primary-solid);
+          background: var(--color-primary-solid);
+          color: #fff;
+        }
+        .toolbar-count {
+          position: absolute;
+          top: -6px;
+          right: -6px;
+          min-width: 18px;
+          height: 18px;
+          padding: 0 4px;
+          border: 2px solid var(--color-panel);
+          border-radius: 999px;
+          background: var(--color-primary-solid);
+          color: #fff;
+          font-size: var(--font-size-xs);
+          line-height: 14px;
+        }
+      }
     }
   }
   .notice {
@@ -989,11 +1544,6 @@ async function showBackup(id) {
     border: 1px solid var(--color-line);
     border-radius: 8px;
     margin: 0;
-  }
-  .provider-toolbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
   }
   .section-title {
     margin: 0;
@@ -1005,43 +1555,345 @@ async function showBackup(id) {
   }
   .provider-list {
     display: flex;
+    flex: 1;
+    min-height: 0;
+    padding: 14px;
     flex-direction: column;
-    gap: 12px;
+    gap: 10px;
+    overflow-x: hidden;
+    overflow-y: auto;
     .provider-card {
-      padding: 16px;
+      display: flex;
+      flex: none;
+      align-items: center;
+      gap: 14px;
+      padding: 18px 18px 16px 12px;
       border: 1px solid var(--color-line);
-      border-radius: 8px;
+      border-radius: 12px;
       background: var(--color-panel);
-      .card-title {
+      box-shadow: 0 3px 12px rgba(15, 23, 42, 0.06);
+      transition:
+        border-color 0.18s ease,
+        background 0.18s ease,
+        box-shadow 0.18s ease;
+      &:hover {
+        border-color: var(--color-info-line);
+        box-shadow: 0 10px 24px rgba(15, 23, 42, 0.1);
+      }
+      &.provider-card-active {
+        border-color: var(--color-info-line);
+        background: var(--color-primary-soft);
+        box-shadow:
+          0 8px 22px rgba(22, 130, 255, 0.12),
+          inset 4px 0 0 var(--color-primary-solid);
+      }
+      &.provider-card-disabled {
+        border-color: var(--color-line-strong);
+        background: var(--color-panel-soft);
+        box-shadow: none;
+        opacity: 0.72;
+      }
+      .provider-avatar {
         display: flex;
+        flex: none;
         align-items: center;
-        gap: 16px;
-      }
-      .provider-url {
-        overflow-wrap: anywhere;
-      }
-      .quota-report {
-        margin-top: 12px;
-        .quota-json {
-          white-space: pre-wrap;
-          overflow-wrap: anywhere;
-          font-size: 12px;
+        justify-content: center;
+        width: 32px;
+        height: 32px;
+        border: 1px solid var(--color-line);
+        border-radius: 12px;
+        background: var(--color-panel-soft);
+        color: var(--color-text);
+        .provider-avatar-icon {
+          width: 22px;
+          height: 22px;
         }
       }
-      .card-actions {
+      .provider-main {
         display: flex;
-        flex-wrap: wrap;
+        flex: 1;
+        min-width: 0;
+        flex-direction: column;
         gap: 8px;
+        .provider-title {
+          display: flex;
+          min-width: 0;
+          align-items: center;
+          gap: 8px;
+          .provider-name {
+            overflow: hidden;
+            min-width: 0;
+            font-size: var(--font-size-lg);
+            text-overflow: ellipsis;
+            white-space: nowrap;
+          }
+          .provider-tag {
+            flex: none;
+            padding: 1px 8px;
+            border: 1px solid var(--color-success-line);
+            border-radius: 999px;
+            background: var(--color-success-soft);
+            color: var(--color-success);
+            font-size: var(--font-size-xs);
+            line-height: 1.4;
+            &.disabled-tag {
+              border-color: var(--color-line);
+              background: var(--color-panel-soft);
+              color: var(--color-text-muted);
+            }
+            &.missing-tag {
+              border-color: var(--color-warning-line);
+              background: var(--color-warning-soft);
+              color: var(--color-warning);
+            }
+          }
+        }
+        .provider-note,
+        .provider-url,
+        .provider-meta {
+          overflow: hidden;
+          color: var(--color-text-muted);
+          font-size: var(--font-size-base);
+          text-overflow: ellipsis;
+          white-space: nowrap;
+        }
+        .provider-url {
+          color: var(--color-primary);
+        }
+        .provider-meta {
+          font-size: var(--font-size-xs);
+        }
+        .quota-list {
+          display: flex;
+          gap: 12px;
+          .quota-item {
+            display: flex;
+            flex: 1;
+            min-width: 0;
+            flex-direction: column;
+            gap: 5px;
+            .quota-heading {
+              display: flex;
+              justify-content: space-between;
+              gap: 8px;
+              color: var(--color-text-muted);
+              font-size: var(--font-size-xs);
+            }
+            .quota-track {
+              height: 4px;
+              overflow: hidden;
+              border-radius: 999px;
+              background: var(--color-line);
+              .quota-fill {
+                display: block;
+                height: 100%;
+                border-radius: inherit;
+                background: var(--color-success);
+              }
+            }
+          }
+        }
       }
-      .key-list {
-        margin-top: 12px;
-        .key-row {
+      .provider-actions {
+        display: flex;
+        flex: none;
+        width: 272px;
+        flex-direction: column;
+        align-items: flex-end;
+        gap: 12px;
+        .action-main {
           display: flex;
           align-items: center;
-          gap: 10px;
-          padding-top: 8px;
-          font-size: 13px;
+          justify-content: flex-end;
+          gap: 8px;
+          min-height: 36px;
+          .state-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            height: 24px;
+            padding: 0 10px;
+            border-radius: 999px;
+            background: var(--color-success-soft);
+            color: var(--color-success);
+            font-size: var(--font-size-sm);
+            &.state-pill-muted {
+              background: var(--color-panel-soft);
+              color: var(--color-text-muted);
+            }
+            .state-dot {
+              width: 6px;
+              height: 6px;
+              border-radius: 999px;
+              background: var(--color-success);
+            }
+          }
+          .provider-enable,
+          .provider-using {
+            display: inline-flex;
+            min-width: 134px;
+            height: 36px;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 0 14px;
+            border: 0;
+            border-radius: 6px;
+            background: var(--color-primary-solid);
+            color: #fff;
+            font: inherit;
+            font-size: var(--font-size-sm);
+            cursor: pointer;
+            &:disabled {
+              opacity: 0.55;
+              cursor: default;
+            }
+          }
+          .provider-using {
+            background: var(--color-panel-soft);
+            color: var(--color-text-muted);
+          }
         }
+        .icon-actions {
+          display: flex;
+          align-items: center;
+          gap: 18px;
+          padding-right: 3px;
+          .icon-button {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2px;
+            border: 0;
+            border-radius: 4px;
+            background: transparent;
+            color: var(--color-text-muted);
+            cursor: pointer;
+            &:hover {
+              color: var(--color-primary);
+              background: var(--color-primary-soft);
+            }
+            &.icon-warning:hover {
+              color: var(--color-warning);
+              background: var(--color-warning-soft);
+            }
+            &.icon-danger:hover {
+              color: var(--color-danger);
+              background: var(--color-danger-soft);
+            }
+            &:disabled {
+              opacity: 0.55;
+              cursor: default;
+            }
+          }
+        }
+      }
+    }
+    .provider-empty {
+      display: flex;
+      min-height: 220px;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+      border: 1px dashed var(--color-line);
+      border-radius: 14px;
+      color: var(--color-text-muted);
+      text-align: center;
+    }
+  }
+  .gateway-manager,
+  .provider-detail {
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    gap: 18px;
+    padding-top: 12px;
+    overflow: auto;
+  }
+  .card-actions {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+  }
+  .provider-detail {
+    .detail-tabs {
+      display: flex;
+      gap: 8px;
+      border-bottom: 1px solid var(--color-line);
+      .detail-tab {
+        padding: 10px 14px;
+        border: 0;
+        border-bottom: 2px solid transparent;
+        background: transparent;
+        color: var(--color-text-muted);
+        font: inherit;
+        cursor: pointer;
+        &.detail-tab-active {
+          border-bottom-color: var(--color-primary);
+          color: var(--color-primary);
+        }
+      }
+    }
+    .detail-fields {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      margin: 0;
+      .detail-field {
+        display: flex;
+        gap: 16px;
+        font-size: var(--font-size-base);
+        .detail-label {
+          flex: none;
+          width: 80px;
+          color: var(--color-text-muted);
+        }
+        .detail-value {
+          min-width: 0;
+          margin: 0;
+          overflow-wrap: anywhere;
+        }
+      }
+    }
+    .detail-models {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      .section-title {
+        width: 100%;
+        margin-bottom: 4px;
+      }
+      .model-tag {
+        padding: 5px 9px;
+        border: 1px solid var(--color-line);
+        border-radius: 6px;
+        font-size: var(--font-size-sm);
+        &.model-tag-disabled {
+          color: var(--color-text-muted);
+          opacity: 0.6;
+        }
+      }
+    }
+    .key-list {
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+      .key-row {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        padding: 12px;
+        border: 1px solid var(--color-line);
+        border-radius: 8px;
+        font-size: var(--font-size-sm);
+      }
+    }
+    .quota-report {
+      .quota-json {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+        font-size: var(--font-size-xs);
       }
     }
   }

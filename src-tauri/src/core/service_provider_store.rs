@@ -101,12 +101,46 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
             |r| r.get(0),
         )
         .optional()?;
-    if version.as_deref().is_some_and(|v| v != "1") {
+    if version.as_deref().is_some_and(|v| !matches!(v, "1" | "2")) {
         return Err(fail("服务商配置数据库版本高于当前程序支持的版本"));
     }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
     transaction.execute_batch(SCHEMA)?;
-    transaction.execute("INSERT OR IGNORE INTO app_metadata(key,value) VALUES('service_provider:schema_version','1')", [])?;
+    if version.as_deref() != Some("2") {
+        let columns = query(
+            &transaction,
+            "SELECT name FROM pragma_table_info('service_provider_configs')",
+            &[],
+        )?;
+        if !columns.iter().any(|column| text(column, "name") == "icon") {
+            transaction.execute(
+                "ALTER TABLE service_provider_configs ADD COLUMN icon TEXT NOT NULL DEFAULT ''",
+                [],
+            )?;
+        }
+        // 已迁移的配置只在升级时补齐缺失图标，不覆盖新模式的图标，也不回写旧表。
+        if table_exists(&transaction, "providers")?
+            && query(
+                &transaction,
+                "SELECT name FROM pragma_table_info('providers') WHERE name='icon'",
+                &[],
+            )?
+            .iter()
+            .any(|column| text(column, "name") == "icon")
+        {
+            transaction.execute(
+                "UPDATE service_provider_configs SET icon=coalesce((
+                    SELECT p.icon FROM providers p
+                    JOIN service_provider_migration_items m ON m.source_id=p.id
+                    WHERE m.source_table='providers' AND m.status IN ('copied','unreadable')
+                        AND m.target_id=service_provider_configs.id LIMIT 1
+                ),'') WHERE icon=''",
+                [],
+            )?;
+        }
+        transaction.execute("INSERT INTO app_metadata(key,value) VALUES('service_provider:schema_version','2')
+            ON CONFLICT(key) DO UPDATE SET value=excluded.value", [])?;
+    }
     transaction.commit()?;
     Ok(())
 }
@@ -187,7 +221,7 @@ pub fn query(
 pub fn state(paths: &AppPaths) -> Result<Value, ManagerError> {
     initialize(paths)?;
     let c = database::open(paths)?;
-    let providers = query(&c, "SELECT id,name,kind,upstream_protocol AS upstreamProtocol,base_url AS baseUrl,proxy,
+    let providers = query(&c, "SELECT id,name,icon,kind,upstream_protocol AS upstreamProtocol,base_url AS baseUrl,proxy,
         note,enabled,revision,created_at AS createdAt,updated_at AS updatedAt,
         CASE WHEN kind='api' THEN EXISTS(SELECT 1 FROM service_provider_keys k WHERE k.provider_id=p.id AND k.is_active=1 AND k.status='active' AND k.secret_ciphertext<>'')
         ELSE EXISTS(SELECT 1 FROM service_provider_accounts a WHERE a.provider_id=p.id AND a.access_ciphertext<>'') END AS hasCredential
@@ -223,7 +257,7 @@ pub fn state(paths: &AppPaths) -> Result<Value, ManagerError> {
 }
 
 pub fn config(connection: &Connection, provider_id: &str) -> Result<Value, ManagerError> {
-    query(connection, "SELECT id,name,kind,upstream_protocol AS upstreamProtocol,base_url AS baseUrl,proxy,
+    query(connection, "SELECT id,name,icon,kind,upstream_protocol AS upstreamProtocol,base_url AS baseUrl,proxy,
         headers_json AS headersJson,note,enabled,revision,deleted_at AS deletedAt FROM service_provider_configs WHERE id=?1", &[&provider_id])?
         .pop().ok_or_else(|| fail("服务商配置不存在"))
 }
@@ -262,7 +296,7 @@ pub(crate) fn source_provider_id(c: &Connection, target: &str) -> Result<String,
 // 为现有助手、翻译和图片选择器提供新表的只读投影，不经过旧 Provider 存储。
 pub fn public_catalog(paths: &AppPaths) -> Result<Value, ManagerError> {
     let c = database::open(paths)?;
-    let rows = query(&c, "SELECT p.id,p.name,p.kind,p.enabled,p.proxy,b.enabled AS authorized,
+    let rows = query(&c, "SELECT p.id,p.name,p.icon,p.kind,p.enabled,p.proxy,b.enabled AS authorized,
         a.external_account_id AS accountId,a.email,a.expires_at AS expiresAt,a.quota_json AS usageJson,
         CASE WHEN p.kind='api' THEN EXISTS(SELECT 1 FROM service_provider_keys k WHERE k.provider_id=p.id
             AND k.is_active=1 AND k.status='active' AND k.secret_ciphertext<>'')
@@ -280,11 +314,11 @@ pub fn public_catalog(paths: &AppPaths) -> Result<Value, ManagerError> {
             .collect::<Vec<_>>();
         let available = row["enabled"] == 1 && row["authorized"] == 1 && row["hasCredential"] == 1;
         if row["kind"] == "api" {
-            providers.push(json!({"id":row["id"],"name":row["name"],"cli":"codex","enabled":available,
+            providers.push(json!({"id":row["id"],"name":row["name"],"icon":row["icon"],"cli":"codex","enabled":available,
                 "runtimeConfig":{"mainModel":names.first(),"modelList":names},"serviceManaged":true}));
         } else {
             accounts.push(json!({"id":text(&row,"id").strip_prefix("account:").unwrap_or(text(&row,"id")),"serviceProviderId":row["id"],"type":"codex","email":row["email"],"accountId":row["accountId"],
-                "name":row["name"],"proxy":row["proxy"],"disabled":!available,"requires_reauth":row["hasCredential"]!=1,
+                "name":row["name"],"icon":row["icon"],"proxy":row["proxy"],"disabled":!available,"requires_reauth":row["hasCredential"]!=1,
                 "active":false,"usage":row["usage"],"plan":row["usage"]["plan_type"],"expiresAt":row["expiresAt"],"modelNames":names,"serviceManaged":true}));
         }
     }
@@ -378,14 +412,14 @@ pub fn save(paths: &AppPaths, value: &Value) -> Result<Value, ManagerError> {
             return Err(fail("已有服务商不能改变凭据类型，请新建配置"));
         }
         tx.execute("UPDATE service_provider_configs SET name=?2,upstream_protocol=?3,base_url=?4,proxy=?5,headers_json=?6,
-            note=?7,enabled=?8,revision=revision+1,updated_at=?9 WHERE id=?1",
-            params![provider_id,name,protocol,text(value,"baseUrl"),text(value,"proxy"),headers.to_string(),text(value,"note"),value["enabled"].as_bool().unwrap_or(true),now()])?;
+            note=?7,enabled=?8,revision=revision+1,updated_at=?9,icon=coalesce(?10,icon) WHERE id=?1",
+            params![provider_id,name,protocol,text(value,"baseUrl"),text(value,"proxy"),headers.to_string(),text(value,"note"),value["enabled"].as_bool().unwrap_or(true),now(),value["icon"].as_str()])?;
     } else {
         if !text(value, "id").is_empty() {
             return Err(fail("配置已删除或不存在"));
         }
-        tx.execute("INSERT INTO service_provider_configs(id,name,kind,upstream_protocol,base_url,proxy,headers_json,note,enabled,created_at,updated_at)
-            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10)",params![provider_id,name,kind,protocol,text(value,"baseUrl"),text(value,"proxy"),headers.to_string(),text(value,"note"),value["enabled"].as_bool().unwrap_or(true),now()])?;
+        tx.execute("INSERT INTO service_provider_configs(id,name,kind,upstream_protocol,base_url,proxy,headers_json,note,enabled,created_at,updated_at,icon)
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10,?11)",params![provider_id,name,kind,protocol,text(value,"baseUrl"),text(value,"proxy"),headers.to_string(),text(value,"note"),value["enabled"].as_bool().unwrap_or(true),now(),text(value,"icon")])?;
     }
     if let Some(secret) = value["apiKey"].as_str().filter(|s| !s.is_empty()) {
         if kind != "api" {

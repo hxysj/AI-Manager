@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { compileScript, compileStyleAsync, compileTemplate, parse } from '@vue/compiler-sfc'
 import { transformSync } from 'esbuild'
-import { createSSRApp, reactive } from 'vue'
+import { createSSRApp, h, reactive } from 'vue'
 import { renderToString } from '@vue/server-renderer'
 
 const require = createRequire(import.meta.url)
@@ -61,7 +61,7 @@ for (const filename of files) {
 let state = {
   backend: 'service',
   baseUrl: 'http://127.0.0.1:15724',
-  providers: [{ id: 'p', name: '统一服务商', kind: 'api', enabled: 1, hasCredential: 1, revision: 7, upstreamProtocol: 'responses' }],
+  providers: [{ id: 'p', name: '统一服务商', icon: 'alibabacloud.svg', kind: 'api', enabled: 1, hasCredential: 1, revision: 7, upstreamProtocol: 'responses' }],
   models: [{ id: 'm', providerId: 'p', upstreamModelId: 'upstream-model', displayName: '测试模型', enabled: 1, inputPriceMicros: 2000000, catalog: { custom: true } }],
   bindings: [{ providerId: 'p', agentType: 'codex', enabled: 1, defaultModelId: 'm', options: { serviceTierFast: true } }],
   keys: [],
@@ -98,6 +98,11 @@ const invoke = async (action, payload) => {
 const localRequire = name => {
   if (name === '@/api/modules/service-providers') return { serviceProviderApi: { invoke } }
   if (name === '@/utils/message') return { createMessage: { success: message => messages.push(message), error: message => messages.push(message) } }
+  // 记录传入已有 AiIcon 的图标配置，验证列表没有再写死 Agent 图标。
+  if (name === '@/components/AiIcon.vue') return {
+    __esModule: true,
+    default: { props: ['name', 'alt'], render() { return h('span', { 'data-provider-icon': this.name, 'aria-label': this.alt }) } }
+  }
   if (name.endsWith('.vue')) {
     return {
       __esModule: true,
@@ -121,9 +126,69 @@ const failures = []
 app.config.errorHandler = error => failures.push(error)
 const html = await renderToString(app)
 assert.deepEqual(failures, [])
-assert.ok(html.includes('统一服务商') && html.includes('未知') && html.includes('外部工具'))
+assert.ok(html.includes('统一服务商') && html.includes('provider-avatar') && html.includes('icon-actions'))
+assert.ok(html.includes('管理 API Key') && html.includes('查看详情'))
+assert.ok(html.includes('data-provider-icon="alibabacloud.svg"'))
+assert.ok(!html.includes('网关统计') && !html.includes('外部工具') && !html.includes('服务商配置中心'))
 assert.ok(!html.includes('内置会话'))
 assert.ok(!/<button\b[^>]*>\s*(?:复制旧 Codex 配置|启用新模式|回滚旧模式)\s*<\/button>/u.test(html))
+const renderCenter = async (initialState, configure) => {
+  const app = createSSRApp({
+    ...Center,
+    setup(props, context) {
+      const value = Center.setup(props, context)
+      configure?.(value)
+      return value
+    }
+  }, { initialState })
+  return renderToString(app)
+}
+const managerHtml = await renderCenter(state, value => { value.showGatewayManager.value = true })
+assert.ok(managerHtml.includes('网关统计') && managerHtml.includes('未知') && managerHtml.includes('外部工具'))
+assert.ok(!managerHtml.includes('内置会话'))
+// 官方账号显示邮箱，类型筛选和禁用项筛选只影响列表，不改变后端授权。
+const official = { id: 'account:internal-id', name: 'account:internal-id', kind: 'codex_account', enabled: 1, hasCredential: 1 }
+const disabled = { id: 'disabled', name: '已禁用服务商', kind: 'api', enabled: 0 }
+const listState = {
+  ...state,
+  providers: [...state.providers, official, disabled],
+  accounts: [{ providerId: official.id, email: 'official@example.test', quota: { rate_limit: { primary_window: { used_percent: 25, limit_window_seconds: 18000 } } } }]
+}
+const listHtml = await renderCenter(listState)
+assert.ok(listHtml.includes('official@example.test') && listHtml.includes('75%'))
+assert.ok(!listHtml.includes('account:internal-id') && !listHtml.includes('已禁用服务商'))
+const accountHtml = await renderCenter(listState, value => { value.providerTab.value = 'codex_account' })
+assert.ok(accountHtml.includes('official@example.test') && !accountHtml.includes('统一服务商'))
+const customIcon = 'data:image/png;base64,aWNvbg=='
+const customIconHtml = await renderCenter({ ...listState, providers: [{ ...official, icon: customIcon }] })
+assert.ok(customIconHtml.includes(`data-provider-icon="${customIcon}"`))
+const noIconHtml = await renderCenter({ ...state, providers: [{ ...state.providers[0], icon: '' }] })
+assert.ok(!noIconHtml.includes('data-provider-icon'))
+const disabledHtml = await renderCenter(listState, value => { value.showDisabledItems.value = true })
+assert.ok(disabledHtml.includes('已禁用服务商'))
+const keysHtml = await renderCenter(state, value => { value.openProviderDetail(state.providers[0], 'keys') })
+assert.ok(keysHtml.includes('添加 / 更新 Key') && keysHtml.includes('尚未添加 API Key'))
+await bindings.toggleProviderEnabled(state.providers[0])
+const disabledPayload = calls.find(item => item.action === 'save').payload
+assert.equal(disabledPayload.enabled, false)
+assert.equal(disabledPayload.headers['x-test'], 'yes')
+assert.equal(disabledPayload.revision, 7)
+assert.equal(disabledPayload.models, undefined)
+assert.equal(disabledPayload.icon, 'alibabacloud.svg')
+calls.length = 0
+const instance = { id: 'one', providerId: 'p', agentType: 'codex', configPath: 'D:/test-codex', status: 'active' }
+bindings.data.value = { ...state, instances: [instance] }
+await bindings.stopUsingProvider(state.providers[0])
+assert.deepEqual(calls.find(item => item.action === 'detach').payload, { id: 'one' })
+calls.length = 0
+bindings.data.value = { ...state, instances: [instance, { ...instance, id: 'two' }] }
+await bindings.stopUsingProvider(state.providers[0])
+assert.equal(calls.length, 0)
+assert.equal(bindings.detailProviderId.value, 'p')
+assert.equal(bindings.detailTab.value, 'instances')
+bindings.data.value = state
+await bindings.editProvider({ ...state.providers[0], enabled: false })
+assert.equal(bindings.form.value.enabled, false)
 await bindings.editProvider(state.providers[0])
 assert.equal(bindings.form.value.revision, 7)
 assert.equal(bindings.form.value.bindings[0].defaultModelId, 'm')
@@ -135,6 +200,7 @@ assert.equal(saved.models[0].inputPriceMicros, 2000000)
 assert.equal(saved.bindings.find(item => item.agentType === 'claude').enabled, true)
 assert.equal(saved.routes[0].modelId, 'm')
 assert.equal(saved.revision, 7)
+assert.equal(saved.icon, 'alibabacloud.svg')
 assert.equal(bindings.form.value, null)
 bindings.openApply(state.providers[0])
 assert.equal(bindings.applyForm.value.modelId, 'm')
@@ -249,4 +315,4 @@ for (const { filename, code } of selectorComponents) {
     assert.equal(selector.invalidTarget.value, false)
   }
 }
-console.log(`${files.length} 个 SFC 编译通过；设置模式切换、Usage 入口保留、未知值、配置保存、授权、Token、回滚冲突及官方模型隔离交互通过`)
+console.log(`${files.length} 个 SFC 编译通过；原列表布局、图标继承、类型/禁用筛选、账号展示、Key 入口、实例取消、设置模式切换、Usage 保留、配置保存、授权、Token 及回滚交互通过`)
