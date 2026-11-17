@@ -25,6 +25,7 @@ const files = [
   "src/components/AppSidebar.vue",
   "src/components/QuickSwitchPanel.vue",
   "src/features/providers/components/ServiceProviderCenter.vue",
+  "src/features/providers/components/ServiceGatewayManager.vue",
   "src/features/providers/index.vue",
   "src/features/providers/components/CodexAccountLoginModal.vue",
   "src/features/providers/components/GoogleAccountModal.vue",
@@ -84,7 +85,7 @@ for (const filename of files) {
       { format: "cjs" }
     ).code
   } else if (
-    /ProviderIconPicker|ProviderModelListEditor|ServiceAgentModelFields|ServiceOfficialAccountOverview|ServiceProviderOverview|CodexAccountLoginModal|GoogleAccountModal/.test(
+    /ProviderIconPicker|ProviderModelListEditor|ServiceAgentModelFields|ServiceGatewayManager|ServiceOfficialAccountOverview|ServiceProviderOverview|CodexAccountLoginModal|GoogleAccountModal/.test(
       filename
     )
   ) {
@@ -251,8 +252,6 @@ const invoke = async (action, payload) => {
       ]
     }
   }
-  if (action === "issue-token")
-    return { token: "shown-once-token", baseUrl: state.baseUrl }
   if (action === "switch-backend" && payload.backend === "legacy") {
     state = {
       ...state,
@@ -459,13 +458,51 @@ const managerHtml = await renderCenter(state, (value) => {
   value.showGatewayManager.value = true
 })
 assert.ok(
-  managerHtml.includes("网关统计") &&
-    managerHtml.includes("未知") &&
-    managerHtml.includes("外部工具")
+  managerHtml.includes("Agent 接管") &&
+    managerHtml.includes("调用统计") &&
+    managerHtml.includes("尚无 Agent 接管记录")
 )
-assert.ok(!managerHtml.includes("内置会话"))
 assert.ok(
-  managerHtml.includes("应用 / 测试 Agent") && managerHtml.includes("解除接管")
+  !managerHtml.includes("内置会话") && !managerHtml.includes("外部工具")
+)
+assert.ok(
+  managerHtml.includes("配置 Codex") && !managerHtml.includes("测试来源")
+)
+assert.ok(
+  !managerHtml.includes("外部调用") && !managerHtml.includes("生成调用 Token")
+)
+assert.ok(
+  !managerHtml.includes("本地共享网关") && !managerHtml.includes("文件冲突")
+)
+const usageManagerHtml = await renderCenter(state, (value) => {
+  value.openGatewayManager(state.providers[0])
+  value.gatewayTab.value = "usage"
+})
+assert.ok(
+  usageManagerHtml.includes("未知") &&
+    usageManagerHtml.includes("已确认用量") &&
+    usageManagerHtml.includes("汇总维度") &&
+    usageManagerHtml.includes("最近请求")
+)
+const diagnosticsManagerHtml = await renderCenter(state, (value) => {
+  value.openGatewayManager(state.providers[0])
+  value.gatewayTab.value = "diagnostics"
+})
+assert.ok(
+  diagnosticsManagerHtml.includes("暂无迁移记录") &&
+    diagnosticsManagerHtml.includes("暂无兼容性测试记录") &&
+    diagnosticsManagerHtml.includes("测试来源") &&
+    diagnosticsManagerHtml.includes("兼容性测试")
+)
+const testOnlyHtml = await renderCenter(state, (value) => {
+  value.gatewayTab.value = "diagnostics"
+  value.openCompatibilityTest(state.providers[0])
+})
+assert.ok(testOnlyHtml.includes("测试工具与流式兼容"))
+assert.ok(
+  !testOnlyHtml.includes("备份并应用") &&
+    !testOnlyHtml.includes("生成调用 Token") &&
+    !testOnlyHtml.includes("配置目录")
 )
 // 官方账号显示邮箱，类型筛选和禁用项筛选只影响列表，不改变后端授权。
 const official = {
@@ -998,6 +1035,28 @@ assert.ok(
   activeHtml.includes("running-agent-tag") &&
     !activeHtml.includes("取消使用") &&
     !activeHtml.includes("provider-card-active")
+)
+const conflictManagerHtml = await renderCenter(
+  {
+    ...state,
+    instances: [{ ...instance, syncStatus: "conflict", status: "error" }],
+    managedFiles: [
+      {
+        id: "conflict-file",
+        instanceId: instance.id,
+        restoreStatus: "conflict",
+        filePath: "D:/test-codex/config.toml",
+        errorMessage: "配置已被外部修改"
+      }
+    ]
+  },
+  (value) => value.openGatewayManager(state.providers[0])
+)
+assert.ok(
+  conflictManagerHtml.includes("配置冲突") &&
+    conflictManagerHtml.includes("重试恢复") &&
+    conflictManagerHtml.includes("查看加密备份") &&
+    conflictManagerHtml.includes("D:/test-codex/config.toml")
 )
 bindings.openProviderDetail(state.providers[0], "instances")
 bindings.openGatewayManager(state.providers[0])
@@ -1592,24 +1651,25 @@ await googleBindings.poll()
 assert.deepEqual(googleEvents.at(-1), ["created", "auto-google"])
 googleStateHandler = undefined
 await bindings.closeOfficialLogin()
-await bindings.openToolConfig(state.providers[0])
-assert.equal(bindings.agentConfig.value.id, "gateway")
-await bindings.saveAgentConfig()
-assert.equal(
-  calls.filter((item) => item.action === "configure-agent").at(-1).payload
-    .agentType,
-  "gateway"
-)
-assert.equal(bindings.showGatewayManager.value, true)
-bindings.openApply(state.providers[0])
-assert.equal(bindings.applyForm.value.modelId, "m")
-assert.equal(bindings.applyForm.value.configPath, "D:/test-codex")
+// Agent 管理不再配置 gateway，即使旧授权存在也不会出现在 Agent 选项中。
+assert.ok(!bindings.agents.some((item) => item.id === "gateway"))
+bindings.openCompatibilityTest(state.providers[0])
+assert.equal(bindings.compatibilityForm.value.modelId, "m")
 assert.equal(bindings.showGatewayManager.value, false)
-await bindings.applyProvider()
-assert.equal(bindings.applyForm.value, null)
+assert.equal(bindings.compatibilityForm.value.agentType, "codex")
+assert.equal(bindings.compatibilityForm.value.configPath, undefined)
+calls.length = 0
+await bindings.perform("test", {
+  ...bindings.compatibilityForm.value,
+  agentVersion: bindings.agentVersion("codex")
+})
+assert.ok(calls.some((item) => item.action === "test"))
+assert.ok(!calls.some((item) => item.action === "activate"))
+bindings.gatewayTab.value = "diagnostics"
+bindings.closeCompatibilityTest()
+assert.equal(bindings.compatibilityForm.value, null)
 assert.equal(bindings.showGatewayManager.value, true)
-await bindings.perform("issue-token", { providerId: "p", modelId: "m" })
-assert.equal(bindings.createdToken.value.token, "shown-once-token")
+assert.equal(bindings.gatewayTab.value, "diagnostics")
 assert.equal(
   await bindings.perform("switch-backend", { backend: "legacy" }),
   false
@@ -1936,5 +1996,5 @@ for (const { filename, code } of selectorComponents) {
   }
 }
 console.log(
-  `${files.length} 个 SFC 编译通过；原列表布局、图标继承、类型/禁用筛选、官方详情与额度状态、服务商概览与价格状态、Key 入口、Agent 管理、模型目录共用、Codex 同步开关、设置模式切换、Usage 保留、配置保存、授权、Token 及回滚交互通过`
+  `${files.length} 个 SFC 编译通过；原列表布局、图标继承、类型/禁用筛选、官方详情与额度状态、服务商概览与价格状态、Key 入口、Agent 管理、模型目录共用、Codex 同步开关、设置模式切换、Usage 保留、配置保存、诊断测试及回滚交互通过`
 )

@@ -689,247 +689,23 @@
       @close="officialLogin = null"
     />
 
-    <BaseModal
+    <ServiceGatewayManager
       v-if="showGatewayManager"
-      title="网关与 Agent 管理"
-      :description="data.baseUrl"
+      v-model:provider-id="managerProviderId"
+      v-model:tab="gatewayTab"
+      :state="data"
+      :instances="visibleInstances"
+      :agents="detectedAgents"
+      :busy="busy"
+      :login-state="loginState"
       @close="showGatewayManager = false"
-    >
-      <div class="gateway-manager">
-        <div class="agent-apply">
-          <label class="form-field"
-            >服务商<select v-model="managerProviderId" class="input">
-              <option value="" disabled>选择服务商</option>
-              <option
-                v-for="provider in data.providers"
-                :key="provider.id"
-                :value="provider.id"
-              >
-                {{ providerDisplayName(provider)
-                }}{{ provider.enabled ? "" : "（已停用）" }}
-              </option>
-            </select></label
-          >
-          <button
-            class="btn btn-primary"
-            :disabled="
-              busy ||
-              !managerProvider?.enabled ||
-              !managerProvider?.hasCredential
-            "
-            @click="openApply(managerProvider)"
-          >
-            应用 / 测试 Agent
-          </button>
-          <button
-            class="btn"
-            :disabled="
-              busy ||
-              !managerProvider?.enabled ||
-              !managerProvider?.hasCredential
-            "
-            @click="openToolConfig(managerProvider)"
-          >
-            配置多协议工具
-          </button>
-        </div>
-        <h3 class="section-title">Agent 实例与文件接管</h3>
-        <div class="instance-list">
-          <article
-            v-for="instance in visibleInstances"
-            :key="instance.id"
-            class="instance-card"
-          >
-            <div class="instance-description">
-              <span
-                >{{ instance.name }} · {{ agentLabel(instance.agentType) }} ·
-                {{ instance.status }} / {{ instance.syncStatus }}</span
-              >
-              <span>{{ providerName(instance.providerId) }}</span>
-              <code>{{ instance.configPath }}</code>
-              <span v-if="instance.lastError" class="error-text">{{
-                instance.lastError
-              }}</span>
-            </div>
-            <button
-              class="btn"
-              :disabled="busy || instance.status === 'detached'"
-              @click="perform('detach', { id: instance.id })"
-            >
-              解除接管 / 重试恢复
-            </button>
-            <div
-              v-for="file in data.managedFiles.filter(
-                (item) =>
-                  item.instanceId === instance.id &&
-                  item.restoreStatus === 'conflict'
-              )"
-              :key="file.id"
-              class="file-conflict"
-            >
-              <span>{{ file.filePath }} · {{ file.errorMessage }}</span>
-              <button class="btn" :disabled="busy" @click="showBackup(file.id)">
-                查看加密备份
-              </button>
-            </div>
-          </article>
-        </div>
-        <p v-if="loginState?.status" class="notice">
-          官方登录：{{ loginState.status }} {{ loginState.message }}
-          <button
-            v-if="loginState.status === 'pending'"
-            class="btn"
-            @click="perform('cancel-login')"
-          >
-            取消登录
-          </button>
-        </p>
-        <details class="migration-report">
-          <summary>
-            最近迁移报告（{{ data.migrationItems?.length || 0 }} 项）
-          </summary>
-          <p
-            v-for="item in data.migrationItems"
-            :key="`${item.sourceTable}:${item.sourceId}`"
-            class="report-row"
-          >
-            {{ item.sourceId }} · {{ item.status }} · {{ item.reason }}
-          </p>
-        </details>
-        <details class="migration-report">
-          <summary>兼容性测试记录（工具调用 → 工具结果 → 流式文本）</summary>
-          <p
-            v-for="item in data.compatibility"
-            :key="item.id"
-            class="report-row"
-          >
-            {{ providerName(item.providerId) }} ·
-            {{ agentLabel(item.agentType) }} · 修订
-            {{ item.providerRevision }} · {{ item.status }} ·
-            {{ formatTime(item.testedAt) }}
-          </p>
-        </details>
-
-        <section class="usage-panel">
-          <h3 class="section-title">网关统计</h3>
-          <div class="usage-counters">
-            <div v-for="item in counters" :key="item.label" class="counter">
-              <span>{{ item.label }}</span
-              ><span>{{ item.value ?? "未知" }}</span>
-            </div>
-          </div>
-          <p class="muted">
-            只累计共享网关收到的请求。上游未返回用量时保留未知；缓存输入包含在输入
-            Token 中。官方账号额度与此处调用量分别记录。
-          </p>
-          <label class="usage-dimension"
-            >汇总维度<select v-model="usageDimension" class="input">
-              <option
-                v-for="item in usageDimensions"
-                :key="item.id"
-                :value="item.id"
-              >
-                {{ item.label }}
-              </option>
-            </select></label
-          >
-          <div class="usage-table-wrap">
-            <table class="usage-table">
-              <thead>
-                <tr>
-                  <th class="usage-cell">分组</th>
-                  <th class="usage-cell">上游尝试 / 成功</th>
-                  <th class="usage-cell">输入 / 输出 / 缓存 Token（已知值）</th>
-                  <th class="usage-cell">未知用量</th>
-                  <th class="usage-cell">估算费用 / 已计价次数</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr
-                  v-for="item in data.usage?.[usageDimension]"
-                  :key="`${item.groupKey}:${item.currency}:${item.groupName}`"
-                >
-                  <td class="usage-cell">
-                    {{
-                      usageDimension === "byAgent"
-                        ? agentLabel(item.groupName)
-                        : item.groupName || item.groupKey
-                    }}
-                  </td>
-                  <td class="usage-cell">
-                    {{ item.attemptCount }} / {{ item.successCount }}
-                  </td>
-                  <td class="usage-cell">
-                    {{ item.inputTokens ?? "未知" }} /
-                    {{ item.outputTokens ?? "未知" }} /
-                    {{ item.cachedInputTokens ?? "未知" }}
-                  </td>
-                  <td class="usage-cell">{{ item.unknownUsageCount }}</td>
-                  <td class="usage-cell">
-                    {{
-                      item.estimatedCostMicros == null
-                        ? "未知"
-                        : `${item.estimatedCostMicros / 1000000} ${item.currency}`
-                    }}
-                    / {{ item.pricedCount }}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-          <p class="muted">
-            以下展示最近 100
-            条请求；汇总使用全部账本记录。不同币种分别展示，部分 Token
-            或价格缺失时费用保持未知。
-          </p>
-          <div class="usage-table-wrap">
-            <table class="usage-table">
-              <thead>
-                <tr>
-                  <th class="usage-cell">时间 / Agent</th>
-                  <th class="usage-cell">服务商 / Key</th>
-                  <th class="usage-cell">模型</th>
-                  <th class="usage-cell">结果</th>
-                  <th class="usage-cell">输入 / 输出 Token</th>
-                  <th class="usage-cell">估算费用</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="log in data.usage?.logs" :key="log.id">
-                  <td class="usage-cell">
-                    {{ formatTime(log.createdAt) }}<br />{{
-                      agentLabel(log.agentType)
-                    }}
-                  </td>
-                  <td class="usage-cell">
-                    {{ log.providerName || "未路由" }}<br />{{
-                      log.credentialName
-                    }}
-                  </td>
-                  <td class="usage-cell">
-                    {{ log.upstreamModel || log.requestedModel }}
-                  </td>
-                  <td class="usage-cell" :title="log.errorMessage">
-                    {{ log.state }} / {{ log.statusCode || "—" }}
-                  </td>
-                  <td class="usage-cell">
-                    {{ log.inputTokens ?? "未知" }} /
-                    {{ log.outputTokens ?? "未知" }}
-                  </td>
-                  <td class="usage-cell">
-                    {{
-                      log.estimatedCostMicros == null
-                        ? "未知"
-                        : `${log.estimatedCostMicros / 1000000} ${log.currency}`
-                    }}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-        </section>
-      </div>
-    </BaseModal>
+      @refresh="refresh"
+      @open-test="openCompatibilityTest"
+      @configure-agent="openAgentConfig"
+      @detach="perform('detach', { id: $event })"
+      @show-backup="showBackup"
+      @cancel-login="perform('cancel-login')"
+    />
 
     <BaseModal
       v-if="showCreateOptions"
@@ -1131,11 +907,7 @@
       v-if="agentConfig"
       class="agent-config-modal"
       :title="`配置 ${agentLabel(agentConfig.id)}`"
-      :description="
-        agentConfig.id === 'gateway'
-          ? '保存此服务商的工具授权后，可在网关管理中生成独立调用 Token。'
-          : '选择当前使用的服务商或官方账号，保存后应用到此 Agent。'
-      "
+      description="选择当前使用的服务商或官方账号，保存后应用到此 Agent。"
       role="dialog"
       aria-modal="true"
       :aria-label="`配置 ${agentLabel(agentConfig.id)}`"
@@ -1161,13 +933,7 @@
                     :disabled="busy"
                     @change="selectAgentProvider"
                   >
-                    <option value="" :disabled="agentConfig.id === 'gateway'">
-                      {{
-                        agentConfig.id === "gateway"
-                          ? "选择服务商"
-                          : "停止使用，恢复原有配置"
-                      }}
-                    </option>
+                    <option value="">停止使用，恢复原有配置</option>
                     <optgroup
                       v-for="group in sourceGroups"
                       :key="group.kind"
@@ -1211,11 +977,9 @@
           <p class="agent-config-hint">
             <Info :size="16" />
             {{
-              agentConfig.id === "gateway"
-                ? "保存后，可在网关管理中生成调用 Token。"
-                : agentProviderId
-                  ? "保存后，配置将应用到当前 Agent。"
-                  : "保存后，将停止接管并恢复原有配置。"
+              agentProviderId
+                ? "保存后，配置将应用到当前 Agent。"
+                : "保存后，将停止接管并恢复原有配置。"
             }}
           </p>
           <div class="agent-config-actions">
@@ -1230,14 +994,10 @@
             <button
               class="btn btn-primary"
               type="submit"
-              :disabled="
-                busy ||
-                Boolean(agentProviderId && !form) ||
-                (agentConfig.id === 'gateway' && !agentProviderId)
-              "
+              :disabled="busy || Boolean(agentProviderId && !form)"
               :aria-busy="busy"
             >
-              {{ agentConfig.id === "gateway" ? "保存授权" : "保存并应用" }}
+              保存并应用
             </button>
           </div>
         </footer>
@@ -1245,20 +1005,20 @@
     </BaseModal>
 
     <BaseModal
-      v-if="applyForm"
-      title="应用服务商到 Agent"
-      :description="`${providerName(applyForm.providerId)} · 接管前保存原始文件，默认配置目录来自应用设置。`"
-      @close="closeApply"
+      v-if="compatibilityForm"
+      title="Agent 兼容性测试"
+      :description="`${providerName(compatibilityForm.providerId)} · 验证工具调用、工具结果与流式文本兼容性。`"
+      @close="closeCompatibilityTest"
     >
       <div class="provider-form">
         <label class="form-field"
           >Agent<select
-            v-model="applyForm.agentType"
+            v-model="compatibilityForm.agentType"
             class="input"
-            @change="updateAgent"
+            @change="updateTestAgent"
           >
             <option
-              v-for="agent in allowedApplyAgents"
+              v-for="agent in testAgents"
               :key="agent.id"
               :value="agent.id"
             >
@@ -1267,11 +1027,11 @@
           </select></label
         >
         <label class="form-field"
-          >模型<select v-model="applyForm.modelId" class="input">
+          >模型<select v-model="compatibilityForm.modelId" class="input">
             <option
-              v-for="model in providerModels(applyForm.providerId).filter(
-                (item) => item.enabled
-              )"
+              v-for="model in providerModels(
+                compatibilityForm.providerId
+              ).filter((item) => item.enabled)"
               :key="model.id"
               :value="model.id"
             >
@@ -1279,74 +1039,26 @@
             </option>
           </select></label
         >
-        <label
-          v-if="!['claude-desktop', 'gateway'].includes(applyForm.agentType)"
-          class="form-field"
-          >配置目录<input v-model="applyForm.configPath" class="input"
-        /></label>
-        <label class="form-field"
-          >实例名称<input v-model="applyForm.name" class="input"
-        /></label>
-        <p v-if="applyForm.agentType === 'claude-desktop'" class="muted">
-          Desktop 会接管当前用户的普通 / 3P 配置和 Profile
-          索引。应用后重启客户端。
-        </p>
         <div class="card-actions">
-          <button class="btn" :disabled="busy" @click="closeApply">
+          <button class="btn" :disabled="busy" @click="closeCompatibilityTest">
             返回管理
           </button>
           <button
-            class="btn"
-            :disabled="busy || !applyForm.modelId"
+            class="btn btn-primary"
+            :disabled="busy || !compatibilityForm.modelId"
             @click="
               perform('test', {
-                ...applyForm,
-                agentVersion: agentVersion(applyForm.agentType)
+                ...compatibilityForm,
+                agentVersion: agentVersion(compatibilityForm.agentType)
               })
             "
           >
             测试工具与流式兼容
           </button>
-          <button
-            v-if="applyForm.agentType === 'gateway'"
-            class="btn btn-primary"
-            :disabled="busy || !applyForm.modelId"
-            @click="perform('issue-token', applyForm)"
-          >
-            生成调用 Token
-          </button>
-          <button
-            v-else
-            class="btn btn-primary"
-            :disabled="busy || !applyForm.modelId"
-            @click="applyProvider"
-          >
-            备份并应用
-          </button>
         </div>
       </div>
     </BaseModal>
 
-    <BaseModal
-      v-if="createdToken"
-      title="多协议调用 Token"
-      description="Token 仅在本次显示，请自行保存。它只允许使用当前服务商已启用的模型；可在实例列表撤销。"
-      @close="createdToken = null"
-    >
-      <div class="provider-form">
-        <p>{{ createdToken.baseUrl }}</p>
-        <textarea
-          class="input code-input"
-          :value="createdToken.token"
-          rows="3"
-          readonly
-        ></textarea>
-        <p class="muted">
-          Chat：/v1/chat/completions · Responses：/v1/responses ·
-          Claude：/v1/messages · Gemini：/v1beta/models/模型名:generateContent
-        </p>
-      </div>
-    </BaseModal>
     <BaseModal
       v-if="deleteProvider"
       title="删除服务商"
@@ -1417,6 +1129,7 @@ import ProviderModelListEditor from "./ProviderModelListEditor.vue"
 import CodexAccountLoginModal from "./CodexAccountLoginModal.vue"
 import GoogleAccountModal from "./GoogleAccountModal.vue"
 import ServiceAgentModelFields from "./ServiceAgentModelFields.vue"
+import ServiceGatewayManager from "./ServiceGatewayManager.vue"
 import ServiceOfficialAccountOverview from "./ServiceOfficialAccountOverview.vue"
 import ServiceProviderOverview from "./ServiceProviderOverview.vue"
 import { serviceProviderApi } from "@/api/modules/service-providers"
@@ -1470,9 +1183,7 @@ const createSources = [
 const showDisabledItems = ref(false)
 const showGatewayManager = ref(false)
 const managerProviderId = ref("")
-const managerProvider = computed(() =>
-  data.value.providers.find((item) => item.id === managerProviderId.value)
-)
+const gatewayTab = ref("agents")
 const detailProviderId = ref("")
 const detailTab = ref("overview")
 const providerTabs = [
@@ -1585,58 +1296,34 @@ const draftModelNames = computed(() =>
     .map((item) => item.upstreamModelId)
     .join("\n")
 )
-const applyForm = ref(null)
+const compatibilityForm = ref(null)
 const deleteProvider = ref(null)
 const backup = ref(null)
-const createdToken = ref(null)
-const usageDimension = ref("byProvider")
-const usageDimensions = [
-  { id: "byProvider", label: "服务商" },
-  { id: "byAgent", label: "Agent" },
-  { id: "byModel", label: "模型" },
-  { id: "byKey", label: "上游 Key / 官方凭据版本" },
-  { id: "byToken", label: "调用 Token" },
-  { id: "byDay", label: "日期（本地时区）" }
-]
 const agents = [
   { id: "codex", label: "Codex" },
   { id: "claude", label: "Claude Code" },
-  { id: "claude-desktop", label: "Claude Desktop" },
-  { id: "gateway", label: "多协议工具" }
+  { id: "claude-desktop", label: "Claude Desktop" }
 ]
 const visibleInstances = computed(() =>
   data.value.instances.filter(
     (item) =>
       !item.configPath.startsWith("test:") &&
-      !item.configPath.startsWith("internal:")
+      !item.configPath.startsWith("internal:") &&
+      item.agentType !== "gateway"
   )
 )
-const allowedApplyAgents = computed(() =>
-  agents.filter((agent) =>
-    data.value.bindings.some(
-      (binding) =>
-        binding.providerId === applyForm.value?.providerId &&
-        binding.agentType === agent.id &&
-        binding.enabled
-    )
+const testAgents = computed(() =>
+  agents.filter(
+    (agent) =>
+      detectedAgents.value.some((item) => item.id === agent.id) &&
+      data.value.bindings.some(
+        (binding) =>
+          binding.providerId === compatibilityForm.value?.providerId &&
+          binding.agentType === agent.id &&
+          binding.enabled
+      )
   )
 )
-const counters = computed(() => [
-  { label: "入站请求", value: data.value.usage?.requests?.requestCount },
-  { label: "成功", value: data.value.usage?.requests?.successCount ?? 0 },
-  {
-    label: "失败 / 拒绝",
-    value: data.value.usage?.requests?.failureCount ?? 0
-  },
-  { label: "未确认结果", value: data.value.usage?.requests?.unknownCount ?? 0 },
-  {
-    label: "客户端取消",
-    value: data.value.usage?.requests?.cancelledCount ?? 0
-  },
-  { label: "上游尝试", value: data.value.usage?.attempts?.attemptCount },
-  { label: "已确认用量", value: data.value.usage?.attempts?.measuredCount }
-])
-
 // 后端事件与页面刷新都使用同一公开状态，凭据不会进入列表。
 watch(
   () => props.initialState,
@@ -1744,6 +1431,7 @@ function openProviderDetail(provider, tab = "overview") {
 }
 
 function openGatewayManager(provider) {
+  gatewayTab.value = "agents"
   managerProviderId.value =
     provider?.id ||
     managerProviderId.value ||
@@ -1836,7 +1524,6 @@ async function perform(action, payload, notify = true) {
   busy.value = true
   try {
     const result = await serviceProviderApi.invoke(action, payload)
-    if (action === "issue-token") createdToken.value = result
     data.value = await serviceProviderApi.invoke("state")
     if (notify) createMessage.success("操作已完成")
     return true
@@ -1884,7 +1571,12 @@ async function startOfficialLogin(payload) {
       await serviceProviderApi.invoke("cancel-login")
       return
     }
-    if (officialLogin.value && !["success", "failed", "cancelled"].includes(officialLoginState.value?.status))
+    if (
+      officialLogin.value &&
+      !["success", "failed", "cancelled"].includes(
+        officialLoginState.value?.status
+      )
+    )
       officialLoginState.value = result
   } catch (error) {
     if (request === officialLoginRequest)
@@ -2044,13 +1736,6 @@ async function openAgentConfig(agent) {
   await selectAgentProvider()
 }
 
-async function openToolConfig(provider) {
-  if (busy.value || !provider?.enabled || !provider.hasCredential) return
-  agentConfig.value = { id: "gateway" }
-  agentProviderId.value = provider.id
-  await selectAgentProvider()
-}
-
 async function selectAgentProvider() {
   form.value = null
   if (!agentProviderId.value) return
@@ -2059,10 +1744,17 @@ async function selectAgentProvider() {
   )
   if (!provider?.enabled || !provider.hasCredential) return
   if (provider.kind !== "api" && !providerModels(provider.id).length) {
-    if (!(await perform("fetch-models", {
-      providerId: provider.id,
-      agentVersion: agentVersion("codex")
-    }, false))) return
+    if (
+      !(await perform(
+        "fetch-models",
+        {
+          providerId: provider.id,
+          agentVersion: agentVersion("codex")
+        },
+        false
+      ))
+    )
+      return
   }
   await editProvider(provider, "agent")
   if (form.value) {
@@ -2084,7 +1776,6 @@ async function saveAgentConfig() {
   const binding = form.value?.bindings[agentBindingIndex.value]
   if (agentProviderId.value && (!binding || !binding.defaultModelName))
     return createMessage.error("请先选择可用模型")
-  const tool = agentConfig.value.id === "gateway"
   if (
     await perform("configure-agent", {
       agentType: agentConfig.value.id,
@@ -2095,7 +1786,6 @@ async function saveAgentConfig() {
     })
   ) {
     closeAgentConfig()
-    if (tool) showGatewayManager.value = true
   }
 }
 
@@ -2276,10 +1966,12 @@ async function saveProvider() {
   }
 }
 
-function openApply(provider) {
+function openCompatibilityTest(provider) {
+  if (busy.value) return
   if (!provider?.enabled || !provider.hasCredential)
     return createMessage.error("请先恢复服务商可用状态并配置凭据")
-  const agent = agents.find((item) =>
+  // 测试只读取已检测并授权的 Agent，不改写客户端配置。
+  const agent = detectedAgents.value.find((item) =>
     data.value.bindings.some(
       (binding) =>
         binding.providerId === provider.id &&
@@ -2287,44 +1979,36 @@ function openApply(provider) {
         binding.enabled
     )
   )
-  if (!agent) return createMessage.error("请先点击 Agent 配置并授权 Agent")
+  if (!agent)
+    return createMessage.error("请先在 Agent 列表配置此来源，再运行兼容性测试")
   detailProviderId.value = ""
   managerProviderId.value = provider.id
   showGatewayManager.value = false
-  applyForm.value = {
+  compatibilityForm.value = {
     providerId: provider.id,
     agentType: agent.id,
-    modelId: "",
-    configPath: "",
-    name: ""
+    modelId: ""
   }
-  updateAgent()
+  updateTestAgent()
 }
 
-function closeApply() {
-  applyForm.value = null
+function closeCompatibilityTest() {
+  compatibilityForm.value = null
   showGatewayManager.value = true
 }
 
-function updateAgent() {
+function updateTestAgent() {
   const binding = data.value.bindings.find(
     (item) =>
-      item.providerId === applyForm.value.providerId &&
-      item.agentType === applyForm.value.agentType
+      item.providerId === compatibilityForm.value.providerId &&
+      item.agentType === compatibilityForm.value.agentType
   )
-  applyForm.value.modelId =
+  compatibilityForm.value.modelId =
     binding?.defaultModelId ||
-    providerModels(applyForm.value.providerId).find((item) => item.enabled)
-      ?.id ||
+    providerModels(compatibilityForm.value.providerId).find(
+      (item) => item.enabled
+    )?.id ||
     ""
-  applyForm.value.configPath =
-    props.cliTargets.find((item) => item.id === applyForm.value.agentType)
-      ?.configPath || ""
-  applyForm.value.name = agentLabel(applyForm.value.agentType)
-}
-
-async function applyProvider() {
-  if (await perform("activate", applyForm.value)) closeApply()
 }
 
 async function removeProvider() {
@@ -2842,7 +2526,6 @@ async function showBackup(id) {
     color: var(--color-text-muted);
     text-align: center;
   }
-  .gateway-manager,
   .provider-detail {
     display: flex;
     min-height: 0;
@@ -2856,23 +2539,6 @@ async function showBackup(id) {
     flex-wrap: wrap;
     align-items: center;
     gap: 8px;
-  }
-  .gateway-manager {
-    .agent-apply {
-      display: flex;
-      flex-wrap: wrap;
-      align-items: flex-end;
-      gap: 10px;
-
-      .form-field {
-        display: flex;
-        flex: 1;
-        min-width: 200px;
-        flex-direction: column;
-        gap: 8px;
-        font-size: var(--font-size-sm);
-      }
-    }
   }
   .provider-detail {
     flex: 1;
@@ -3210,89 +2876,6 @@ async function showBackup(id) {
         border-top: 1px solid var(--color-line);
         color: var(--color-text-muted);
         font-size: var(--font-size-sm);
-      }
-    }
-  }
-  .instance-list {
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-    .instance-card {
-      display: flex;
-      align-items: flex-start;
-      flex-wrap: wrap;
-      gap: 12px;
-      padding: 14px;
-      border: 1px solid var(--color-line);
-      border-radius: 8px;
-      .instance-description {
-        display: flex;
-        flex: 1;
-        flex-direction: column;
-        gap: 8px;
-        min-width: 200px;
-        overflow-wrap: anywhere;
-      }
-      .file-conflict {
-        display: flex;
-        width: 100%;
-        justify-content: space-between;
-        align-items: center;
-        gap: 10px;
-      }
-      .error-text {
-        color: var(--color-danger);
-        font-size: 13px;
-      }
-    }
-  }
-  .migration-report {
-    padding: 14px;
-    border: 1px solid var(--color-line);
-    border-radius: 8px;
-    .report-row {
-      font-size: 13px;
-      overflow-wrap: anywhere;
-    }
-  }
-  .usage-panel {
-    display: flex;
-    flex-direction: column;
-    gap: 14px;
-    .usage-counters {
-      display: flex;
-      gap: 12px;
-      flex-wrap: wrap;
-      .counter {
-        display: flex;
-        flex-direction: column;
-        gap: 8px;
-        min-width: 110px;
-        padding: 14px;
-        border: 1px solid var(--color-line);
-        border-radius: 8px;
-      }
-    }
-    .usage-dimension {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      .input {
-        width: 240px;
-      }
-    }
-    .usage-table-wrap {
-      overflow: auto;
-      .usage-table {
-        width: 100%;
-        border-collapse: collapse;
-        white-space: nowrap;
-        .usage-cell {
-          padding: 12px;
-          text-align: left;
-          border-bottom: 1px solid var(--color-line);
-          font-size: 13px;
-        }
       }
     }
   }
