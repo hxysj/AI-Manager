@@ -745,11 +745,7 @@ pub(crate) fn switch_backend(paths: &AppPaths, backend: &str) -> Result<(), Mana
     if backend == current {
         return Ok(());
     }
-    let _legacy_gate = if current == "legacy" {
-        Some(store::pause_legacy(paths)?)
-    } else {
-        None
-    };
+    let _legacy_gate = store::pause_legacy(paths)?;
     let c = database::open(paths)?;
     let operation = store::id();
     c.execute("INSERT INTO service_operations(id,operation_type,from_backend,to_backend,generation,status,created_at)

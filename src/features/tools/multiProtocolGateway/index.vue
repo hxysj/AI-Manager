@@ -1837,12 +1837,13 @@ import {
 import BaseModal from "@/components/BaseModal.vue"
 import GatewayConnectionPanel from "@/features/tools/multiProtocolGateway/components/GatewayConnectionPanel.vue"
 import { multiProtocolGatewayApi, usageApi } from "@/api"
-import { formatDateTime } from "@/utils/formatters"
+import { formatDateTime, formatServiceProviderName } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"
 
 const props = defineProps({
   providers: { type: Array, default: () => [] },
-  codexAccounts: { type: Array, default: () => [] }
+  codexAccounts: { type: Array, default: () => [] },
+  serviceProviders: { type: Object, default: () => ({}) }
 })
 
 const emit = defineEmits(["status-change"])
@@ -2006,27 +2007,44 @@ const defaultBaseUrl = computed(() => {
 
 const isLanMode = computed(() => draft.host === "0.0.0.0")
 
-const targets = computed(() => [
-  ...props.providers
-    .filter((item) => item.enabled !== false)
-    .map((item) => ({
-      id: item.id,
-      name: item.name || item.id,
-      cli: item.cli || item.type,
-      type:
-        item.type === "google-account"
-          ? "Gemini 官方账号"
-          : `${item.cli || item.type} Provider`
-    })),
-  ...props.codexAccounts
-    .filter((item) => !item.disabled)
-    .map((item) => ({
-      id: `account:${item.id}`,
-      name: item.email || item.id,
-      cli: "codex",
-      type: "Codex 官方账号"
-    }))
-])
+const targets = computed(() => {
+  if (props.serviceProviders?.backend === "service") {
+    return (props.serviceProviders.providers || [])
+      .filter((item) => item.enabled !== false && item.enabled !== 0)
+      .map((item) => ({
+        id: item.id,
+        name: formatServiceProviderName(item, props.serviceProviders),
+        cli: item.kind === "google_account" ? "google-account" : "openai",
+        type:
+          item.kind === "codex_account"
+            ? "Codex 官方账号"
+            : item.kind === "google_account"
+              ? "Gemini 官方账号"
+              : "OpenAI Provider"
+      }))
+  }
+  return [
+    ...props.providers
+      .filter((item) => item.enabled !== false)
+      .map((item) => ({
+        id: item.id,
+        name: item.name || item.id,
+        cli: item.cli || item.type,
+        type:
+          item.type === "google-account"
+            ? "Gemini 官方账号"
+            : `${item.cli || item.type} Provider`
+      })),
+    ...props.codexAccounts
+      .filter((item) => !item.disabled)
+      .map((item) => ({
+        id: `account:${item.id}`,
+        name: item.email || item.id,
+        cli: "codex",
+        type: "Codex 官方账号"
+      }))
+  ]
+})
 
 function formatGroupTitle(target) {
   if (target.type === "Gemini 官方账号" || target.cli === "google-account") {
@@ -3017,6 +3035,7 @@ async function copyText(value) {
 }
 
 watch([activeTab, viewingToken], hideTokenPreviews, { flush: "sync" })
+watch(() => props.serviceProviders?.backend, load)
 onMounted(load)
 </script>
 

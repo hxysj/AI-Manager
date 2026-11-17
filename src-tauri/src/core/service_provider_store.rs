@@ -48,6 +48,15 @@ impl Drop for LegacyRequest {
     }
 }
 pub(crate) fn legacy_request(paths: &AppPaths) -> Result<LegacyRequest, ManagerError> {
+    register_gateway_request(paths, false)
+}
+
+// 多协议反代在两种模式下共用原有功能，只在请求期间固定当前数据源。
+pub(crate) fn gateway_request(paths: &AppPaths) -> Result<LegacyRequest, ManagerError> {
+    register_gateway_request(paths, true)
+}
+
+fn register_gateway_request(paths: &AppPaths, shared_sources: bool) -> Result<LegacyRequest, ManagerError> {
     let mut entries = LEGACY_REQUESTS
         .get_or_init(Default::default)
         .lock()
@@ -55,7 +64,7 @@ pub(crate) fn legacy_request(paths: &AppPaths) -> Result<LegacyRequest, ManagerE
     let entry = entries
         .entry(paths.storage_files.database.clone())
         .or_default();
-    if entry.1 || active(paths)? {
+    if entry.1 || (!shared_sources && active(paths)?) {
         return Err(fail("运行模式正在切换或旧网关已停用"));
     }
     entry.0 += 1;
@@ -84,7 +93,7 @@ pub(crate) fn pause_legacy(paths: &AppPaths) -> Result<LegacySwitch, ManagerErro
         .entry(paths.storage_files.database.clone())
         .or_default();
     if entry.0 > 0 || entry.1 {
-        return Err(fail("旧模式仍有请求进行中，请结束请求后重试切换"));
+        return Err(fail("仍有网关请求进行中，请结束请求后重试切换"));
     }
     entry.1 = true;
     Ok(LegacySwitch {

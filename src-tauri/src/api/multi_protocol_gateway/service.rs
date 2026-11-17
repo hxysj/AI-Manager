@@ -167,6 +167,7 @@ pub(super) fn resolve(
                 "google_account" => TargetKind::GoogleAccount,
                 _ => TargetKind::Provider,
             },
+            service_source: true,
         },
         model,
     ))
@@ -504,7 +505,7 @@ pub(crate) fn settle(paths: &AppPaths, record: &Value) -> Result<(), ManagerErro
     Ok(())
 }
 
-fn configured_target(
+pub(super) fn configured_target(
     paths: &AppPaths,
     provider: &str,
 ) -> Result<(GatewayTarget, i64), ManagerError> {
@@ -527,9 +528,23 @@ fn configured_target(
                 "google_account" => TargetKind::GoogleAccount,
                 _ => TargetKind::Provider,
             },
+            service_source: true,
         },
         config["revision"].as_i64().unwrap_or(0),
     ))
+}
+
+pub(super) fn target_models(paths: &AppPaths, target: &GatewayTarget) -> Result<Vec<String>, ManagerError> {
+    let models = store::query(
+        &database::open(paths)?,
+        "SELECT upstream_model_id AS name FROM service_provider_models WHERE provider_id=?1 AND enabled=1 ORDER BY created_at,id",
+        &[&target.id],
+    )?;
+    let mut names = models.iter().map(|model| store::text(model, "name").to_owned()).collect::<Vec<_>>();
+    if target.kind == TargetKind::CodexAccount && names.is_empty() {
+        names = runtime_provider::codex_model_list(&json!({}));
+    }
+    Ok(names)
 }
 
 pub async fn fetch_models(paths: &AppPaths, value: &Value) -> Result<Value, ManagerError> {

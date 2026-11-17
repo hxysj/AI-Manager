@@ -23,6 +23,24 @@ export function formatStatusLabel(value) {
   return statusLabels[value] || value || "未知"
 }
 
+export function formatServiceProviderName(provider, state = {}) {
+  const name = provider.name?.trim()
+  if (provider.kind === "api") return name || provider.id
+
+  const isGoogle = provider.kind === "google_account"
+  const accounts = isGoogle ? state.googleAccounts : state.accounts
+  const account = accounts?.find((item) => item.providerId === provider.id)
+  const identities = [provider.id, account?.accountId, account?.subject]
+  if (name && !identities.includes(name)) return name
+
+  return (
+    account?.metadata?.name ||
+    account?.name ||
+    account?.email ||
+    (isGoogle ? "Google 官方账号" : "Codex 官方账号")
+  )
+}
+
 export function formatCount(value, singularLabel, pluralLabel = singularLabel) {
   const count = Number(value || 0)
   const label = count === 1 ? singularLabel : pluralLabel

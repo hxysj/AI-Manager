@@ -1293,6 +1293,15 @@ fn service_legacy_gate_blocks_switch_until_all_requests_finish() {
     drop(gate);
     service_provider::switch_backend(&f.paths, "service").unwrap();
     assert!(legacy_request(&f.paths).is_err());
+    let tool_request = std::sync::Arc::new(gateway_request(&f.paths).unwrap());
+    let tool_stream = tool_request.clone();
+    assert!(service_provider::switch_backend(&f.paths, "legacy").is_err());
+    drop(tool_request);
+    assert!(service_provider::switch_backend(&f.paths, "legacy").is_err());
+    drop(tool_stream);
+    let gate = pause_legacy(&f.paths).unwrap();
+    assert!(gateway_request(&f.paths).is_err());
+    drop(gate);
     service_provider::switch_backend(&f.paths, "legacy").unwrap();
     assert!(legacy_request(&f.paths).is_ok());
 }

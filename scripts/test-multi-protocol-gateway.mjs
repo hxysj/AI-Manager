@@ -10,6 +10,7 @@ import {
 import { transformSync } from "esbuild"
 import * as vue from "vue"
 import { renderToString } from "@vue/server-renderer"
+import { formatServiceProviderName } from "../src/utils/formatters.js"
 
 const require = createRequire(import.meta.url)
 
@@ -183,7 +184,8 @@ const localRequire = (name) => {
   if (name === "@/utils/formatters")
     return {
       formatDateTime: String,
-      formatTokenCount: (value) => String(value || 0)
+      formatTokenCount: (value) => String(value || 0),
+      formatServiceProviderName
     }
   if (name.endsWith("/GatewayConnectionPanel.vue"))
     return { __esModule: true, default: connectionComponent }
@@ -224,20 +226,19 @@ assert.ok(
     ".gateway-tool .modal-form .pool-content .target-list .target-item .target-info .target-name"
   )
 )
-const setup = gateway.component.setup(
-  {
-    providers: [
-      { id: "provider", name: "普通 Provider", enabled: true, cli: "claude" },
-      { id: "google", type: "google-account", enabled: true },
-      { id: "disabled", enabled: false }
-    ],
-    codexAccounts: [
-      { id: "official", email: "test@example.com" },
-      { id: "off", disabled: true }
-    ]
-  },
-  { expose() {} }
-)
+const gatewayProps = vue.reactive({
+  providers: [
+    { id: "provider", name: "普通 Provider", enabled: true, cli: "claude" },
+    { id: "google", type: "google-account", enabled: true },
+    { id: "disabled", enabled: false }
+  ],
+  codexAccounts: [
+    { id: "official", email: "test@example.com" },
+    { id: "off", disabled: true }
+  ],
+  serviceProviders: { backend: "legacy" }
+})
+const setup = gateway.component.setup(gatewayProps, { expose() {} })
 await mounted()
 const setupProxy = vue.proxyRefs(setup)
 let renderGatewayTree
@@ -310,6 +311,79 @@ for (const entry of ["添加模型", "编辑支持模型", "导入模型", "模�
 assert.deepEqual(
   setup.targets.value.map((target) => target.id),
   ["provider", "google", "account:official"]
+)
+// 新模式沿用同一个工具组件，只切换底层池来源，官方账号 ID 不重复加前缀。
+gatewayProps.serviceProviders = {
+  backend: "service",
+  providers: [
+    { id: "service-api", name: "共享服务商", kind: "api", enabled: 1 },
+    {
+      id: "account:official",
+      name: "GPT 官方",
+      kind: "codex_account",
+      enabled: 1
+    },
+    {
+      id: "service-google",
+      name: "service-google",
+      kind: "google_account",
+      enabled: 1
+    },
+    { id: "service-disabled", kind: "api", enabled: 0 },
+    { id: "service-off", kind: "api", enabled: false }
+  ],
+  googleAccounts: [
+    {
+      providerId: "service-google",
+      email: "google@example.test",
+      metadata: { name: "Google 工作账号" }
+    }
+  ]
+}
+await vue.nextTick()
+assert.deepEqual(
+  setup.targets.value.map((target) => target.id),
+  ["service-api", "account:official", "service-google"]
+)
+assert.deepEqual(
+  setup.targets.value.map((target) => target.name),
+  ["共享服务商", "GPT 官方", "Google 工作账号"]
+)
+assert.deepEqual(
+  new Set(setup.groupedTargets.value.map((group) => group.name)),
+  new Set(["OpenAI Provider", "Codex 官方账号", "Gemini 官方账号"])
+)
+const serviceHtml = await renderGateway()
+assert.ok(serviceHtml.includes("支持模型与集成"))
+assert.deepEqual(setup.draft.providerIds, ["provider", "google"])
+assert.equal(setup.draft.modelMappings.alias.model, "real-model")
+gatewayProps.serviceProviders = { backend: "legacy" }
+await vue.nextTick()
+await setup.load()
+assert.deepEqual(
+  setup.targets.value.map((target) => target.id),
+  ["provider", "google", "account:official"]
+)
+const toolsSource = readFileSync("src/features/tools/index.vue", "utf8")
+const toolsDescriptor = parse(toolsSource).descriptor
+assert.ok(!toolsDescriptor.template.content.includes("<ServiceProviderCenter"))
+assert.ok(
+  toolsDescriptor.template.content.includes(
+    ':service-providers="serviceProviders"'
+  )
+)
+assert.ok(
+  !toolsDescriptor.template.content.includes("serviceProviders.backend")
+)
+const toolsScript = compileScript(toolsDescriptor, { id: "tools-check" })
+assert.deepEqual(
+  compileTemplate({
+    source: toolsDescriptor.template.content,
+    filename: "src/features/tools/index.vue",
+    id: "tools-check",
+    compilerOptions: { bindingMetadata: toolsScript.bindings }
+  }).errors,
+  []
 )
 setup.draft.port = 8047
 assert.equal(setup.draft.modelMappings.alias.model, "real-model")

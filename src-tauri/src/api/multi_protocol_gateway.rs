@@ -135,6 +135,7 @@ struct GatewayTarget {
     headers: Value,
     cli: String,
     kind: TargetKind,
+    service_source: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -475,7 +476,7 @@ async fn handle_request(
     if context.service_mode {
         return service::handle_request(request, context, peer).await;
     }
-    context.legacy_request=match crate::core::service_provider_store::legacy_request(&context.paths) {
+    context.legacy_request=match crate::core::service_provider_store::gateway_request(&context.paths) {
         Ok(guard)=>Some(Arc::new(guard)),
         Err(error)=>return error_response(StatusCode::SERVICE_UNAVAILABLE,&error.to_string()),
     };
@@ -1449,7 +1450,7 @@ fn build_upstream_request(
             }
         },
     };
-    let tracking = if target.kind == TargetKind::Provider && !context.service_mode {
+    let tracking = if target.kind == TargetKind::Provider && !target.service_source {
         Some(KeyRequest::new(
             &context.paths,
             &target.id,
@@ -1466,7 +1467,7 @@ async fn target_auth(
     context: &GatewayContext,
     target: &GatewayTarget,
 ) -> Result<TargetAuth, ManagerError> {
-    if context.service_mode {
+    if target.service_source {
         return service::target_auth(&context.paths, target).await;
     }
     match target.kind {
@@ -1570,6 +1571,9 @@ fn build_target(
     _cli_targets: &Value,
     id: &str,
 ) -> Result<GatewayTarget, ManagerError> {
+    if crate::core::service_provider_store::active(paths)? {
+        return service::configured_target(paths, id).map(|(target, _)| target);
+    }
     if let Some(account_id) = id.strip_prefix("account:") {
         let account = provider_store::read_codex_accounts(paths)?
             .into_iter()
@@ -1588,6 +1592,7 @@ fn build_target(
             headers: json!({}),
             cli: "codex".into(),
             kind: TargetKind::CodexAccount,
+            service_source: false,
         });
     }
     let provider = runtime_provider::find_provider(paths, id)?;
@@ -1612,6 +1617,7 @@ fn build_target(
             .unwrap_or_else(|| json!({})),
         cli: string_value(provider.get("cli")),
         kind,
+        service_source: false,
     })
 }
 
@@ -1633,6 +1639,9 @@ fn model_is_available(paths: &AppPaths, target: &GatewayTarget, requested: &str)
 }
 
 fn list_target_models(paths: &AppPaths, target: &GatewayTarget) -> Vec<String> {
+    if target.service_source {
+        return service::target_models(paths, target).unwrap_or_default();
+    }
     if target.kind == TargetKind::CodexAccount {
         // 复用已有 Codex 模型目录，避免网关维护另一份易过期的硬编码模型名。
         return runtime_provider::codex_model_list(&json!({}));

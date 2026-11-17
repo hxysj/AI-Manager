@@ -492,7 +492,12 @@ impl AppState {
         let manager = self.manager.lock().await;
 
         if crate::core::service_provider_store::active(&manager.paths)? {
-            return multi_protocol_gateway::service::start(&manager.service_gateway_registry, &manager.paths).await;
+            multi_protocol_gateway::service::start(&manager.service_gateway_registry, &manager.paths).await?;
+            return multi_protocol_gateway::start_enabled(
+                &manager.gateway_server_registry,
+                &manager.paths,
+                &manager.state["cliTargets"],
+            ).await;
         }
         let google_result = google_account::start_enabled(&manager.paths).await;
         let desktop_result = manager.desktop_manager.start_enabled(&manager.paths).await;
@@ -655,7 +660,6 @@ impl ManagerState {
                 }
                 service_provider::switch_backend(&self.paths, backend)?;
                 if backend == "service" {
-                    self.gateway_server_registry.stop().await;
                     self.proxy_server_registry.stop("codex").await;
                     self.proxy_server_registry.stop("claude").await;
                     self.proxy_server_registry.stop_provider_instances().await;
@@ -663,6 +667,7 @@ impl ManagerState {
                     for provider in self.state["providers"].as_array().into_iter().flatten().filter(|p|p["type"]=="google-account") {
                         crate::api::google_gateway::stop(&self.paths,provider["id"].as_str().unwrap_or("")).await;
                     }
+                    multi_protocol_gateway::start_enabled(&self.gateway_server_registry,&self.paths,&self.state["cliTargets"]).await?;
                 } else {
                     self.service_gateway_registry.stop().await;
                     google_account::start_enabled(&self.paths).await?;
@@ -688,7 +693,7 @@ impl ManagerState {
         }
         if crate::core::service_provider_store::active(&self.paths)?
             && ["provider:","runtime:","codex-account:","codex-models:","claude-models:","google-account:",
-                "claude-proxy:","codex-proxy:","claude-desktop:","gateway:","multi-protocol-gateway:"]
+                "claude-proxy:","codex-proxy:","claude-desktop:"]
                 .iter().any(|prefix|channel.starts_with(prefix)) {
             return Err(ManagerError::System("当前已启用服务商配置中心，请使用新配置入口；旧入口保留供回滚".into()));
         }

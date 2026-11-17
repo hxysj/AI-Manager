@@ -486,6 +486,42 @@ assert.ok(
   !listHtml.includes("account:internal-id") &&
     !listHtml.includes("已禁用服务商")
 )
+const namedOfficial = { ...official, name: "GPT 工作账号" }
+const namedOfficialHtml = await renderCenter(
+  { ...listState, providers: [namedOfficial] },
+  (value) => {
+    value.providerTab.value = "codex_account"
+    assert.equal(value.providerName(official.id), "GPT 工作账号")
+  }
+)
+assert.ok(namedOfficialHtml.includes('title="GPT 工作账号"'))
+assert.ok(!namedOfficialHtml.includes("account:internal-id"))
+const googleNamedState = {
+  ...listState,
+  providers: [
+    {
+      id: "google-storage-id",
+      name: "google-storage-id",
+      kind: "google_account",
+      enabled: 1,
+      hasCredential: 1
+    }
+  ],
+  googleAccounts: [
+    {
+      providerId: "google-storage-id",
+      subject: "google-subject",
+      email: "google@example.test",
+      metadata: { name: "Google 工作账号" }
+    }
+  ]
+}
+const googleNamedHtml = await renderCenter(googleNamedState, (value) => {
+  value.providerTab.value = "google_account"
+  assert.equal(value.providerName("google-storage-id"), "Google 工作账号")
+})
+assert.ok(googleNamedHtml.includes('title="Google 工作账号"'))
+assert.ok(!googleNamedHtml.includes("google-storage-id"))
 const accountHtml = await renderCenter(listState, (value) => {
   value.providerTab.value = "codex_account"
 })

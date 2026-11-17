@@ -169,10 +169,7 @@
           </button>
         </div>
         <div
-          v-if="
-            activeTool === 'multi-protocol-gateway' &&
-            serviceProviders.backend !== 'service'
-          "
+          v-if="activeTool === 'multi-protocol-gateway'"
           class="tools-view-gateway-actions"
         >
           <span
@@ -225,19 +222,12 @@
       />
       <LanShareView v-else-if="activeTool === 'lan-share'" />
       <NetworkQualityView v-else-if="activeTool === 'network-quality'" />
-      <ServiceProviderCenter
-        v-else-if="
-          activeTool === 'multi-protocol-gateway' &&
-          serviceProviders.backend === 'service'
-        "
-        :initial-state="serviceProviders"
-        :cli-targets="cliTargets"
-      />
       <MultiProtocolGateway
         v-else-if="activeTool === 'multi-protocol-gateway'"
         ref="gatewayRef"
         :providers="providers"
         :codex-accounts="codexAccounts"
+        :service-providers="serviceProviders"
         @status-change="gatewayStatus = $event"
       />
       <CodexPetManager v-else-if="activeTool === 'codex-pets'" />
@@ -302,10 +292,6 @@ const JsonAgentTool = defineAsyncComponent(
 // 网络诊断包含多组明细表，进入工具后再加载页面代码。
 const NetworkQualityView = defineAsyncComponent(
   () => import("@/features/networkQuality/index.vue")
-)
-// 共享网关模式复用配置中心，避免进入已停用的旧网关接口。
-const ServiceProviderCenter = defineAsyncComponent(
-  () => import("@/features/providers/components/ServiceProviderCenter.vue")
 )
 const MultiProtocolGateway = defineAsyncComponent(
   () => import("@/features/tools/multiProtocolGateway/index.vue")

@@ -483,6 +483,148 @@ fn service_gateway_matrix_routes_only_new_sources_and_records_usage(){
 }
 
 #[test]
+fn tool_gateway_keeps_pool_tokens_protocols_and_history_with_service_sources() {
+    run(async {
+        use crate::api::service_provider;
+        use crate::core::{database, service_provider_store as store};
+
+        for format in [UpstreamFormat::OpenAiChat, UpstreamFormat::OpenAiResponses] {
+            let fixture = Fixture::new();
+            let (url, mut captures, upstream) = mock(format, StatusCode::OK, false, false, None).await;
+            let (legacy_url, mut legacy_captures, legacy_upstream) =
+                mock(UpstreamFormat::OpenAiResponses, StatusCode::OK, false, false, None).await;
+            let (base, token) = setup(&fixture, &legacy_url, UpstreamFormat::OpenAiResponses).await;
+            let client = Client::builder().no_proxy().build().unwrap();
+            let (path, body) = input(Protocol::Chat, false);
+            let previous = client.post(format!("{base}{path}")).bearer_auth(&token)
+                .json(&body).send().await.unwrap();
+            assert_eq!(previous.status(), 200);
+            previous.text().await.unwrap();
+            legacy_captures.recv().await.unwrap();
+            let before = read_state(&fixture.paths).unwrap();
+            let previous_log = before["logs"][0]["id"].clone();
+
+            service_provider::switch_backend(&fixture.paths, "service").unwrap();
+            let c = database::open(&fixture.paths).unwrap();
+            let revision = store::config(&c, "provider-test").unwrap()["revision"].clone();
+            store::save(&fixture.paths, &json!({
+                "id":"provider-test","revision":revision,"name":"新表服务商","baseUrl":url,
+                "upstreamProtocol":if format == UpstreamFormat::OpenAiChat {"chat"} else {"responses"},
+                "apiKey":"service-only-key","models":["real-model","service-only-model"]
+            })).unwrap();
+            let second = store::save(&fixture.paths, &json!({
+                "name":"第二来源","baseUrl":url,"apiKey":"second-only-key","models":["second-model"],
+                "upstreamProtocol":if format == UpstreamFormat::OpenAiChat {"chat"} else {"responses"}
+            })).unwrap()["id"].as_str().unwrap().to_owned();
+            // 工具池无需启动任何 Agent，也不能写回旧 Provider 和 Key。
+            c.execute("UPDATE service_provider_agent_bindings SET enabled=0", []).unwrap();
+            for table in ["providers", "provider_keys"] {
+                for event in ["INSERT", "UPDATE", "DELETE"] {
+                    c.execute_batch(&format!("CREATE TRIGGER tool_readonly_{table}_{event} BEFORE {event} ON {table} BEGIN SELECT RAISE(ABORT,'禁止写旧表'); END;")).unwrap();
+                }
+            }
+            let state = read_state(&fixture.paths).unwrap();
+            for field in ["host", "port", "providerIds", "modelMappings", "tokens", "usage", "logs"] {
+                assert_eq!(state[field], before[field], "{field}");
+            }
+            assert!(state["models"].as_array().unwrap().iter().any(|m| m["id"] == "service-only-model"));
+            save_config(&fixture.registry, &fixture.paths, &json!({}),
+                json!({"providerIds":["provider-test",second]})).await.unwrap();
+            let models = client.get(format!("{base}/v1/models")).bearer_auth(&token)
+                .send().await.unwrap().json::<Value>().await.unwrap();
+            assert!(models["data"].as_array().unwrap().iter().any(|m| m["id"] == "second-model"));
+            for protocol in [Protocol::Chat, Protocol::Responses, Protocol::Claude, Protocol::Gemini] {
+                for streaming in [false, true] {
+                    let (path, body) = input(protocol, streaming);
+                    let request = client.post(format!("{base}{path}"));
+                    let request = match protocol {
+                        Protocol::Claude => request.header("x-api-key", &token),
+                        Protocol::Gemini => request.header("x-goog-api-key", &token),
+                        _ => request.bearer_auth(&token),
+                    };
+                    let response = request.json(&body).send().await.unwrap();
+                    let status = response.status();
+                    let text = response.text().await.unwrap();
+                    assert_eq!(status, 200, "{text}");
+                    assert!(text.contains("中文🙂") && text.contains("lookup"), "{text}");
+                    assert!(!text.contains("gateway_error"), "{text}");
+                    let (path, headers, body) = captures.recv().await.unwrap();
+                    assert!(path.ends_with(if format == UpstreamFormat::OpenAiChat {"/chat/completions"} else {"/responses"}));
+                    assert_eq!(headers["authorization"], "Bearer service-only-key");
+                    assert_eq!(body["model"], "real-model");
+                }
+            }
+            let response = client.post(format!("{base}/v1/responses")).bearer_auth(&token)
+                .json(&json!({"model":"second-model","input":"test"})).send().await.unwrap();
+            assert_eq!(response.status(), 200);
+            response.text().await.unwrap();
+            let (_, headers, body) = captures.recv().await.unwrap();
+            assert_eq!(headers["authorization"], "Bearer second-only-key");
+            assert_eq!(body["model"], "second-model");
+            let state = read_state(&fixture.paths).unwrap();
+            assert_eq!(state["usage"]["requestCount"], 10);
+            assert_eq!(state["usage"]["successCount"], 10);
+            assert_eq!(state["tokens"][0]["requestCount"], 10);
+            assert!(state["logs"].as_array().unwrap().iter().any(|log| log["id"] == previous_log));
+            let detail = read_log_detail(&fixture.paths, &json!({"logId":state["logs"][0]["id"]})).unwrap();
+            for field in ["requestBody", "upstreamRequestBody", "upstreamResponseBody", "responseBody"] {
+                assert!(detail[field].as_str().is_some_and(|s| !s.is_empty()), "{field}");
+            }
+            assert!(!detail.to_string().contains("second-only-key"));
+            let token_id = state["tokens"][0]["id"].clone();
+            set_token_enabled(&fixture.registry, &fixture.paths, json!({"tokenId":token_id,"enabled":false})).await.unwrap();
+            assert_eq!(client.get(format!("{base}/v1/models")).bearer_auth(&token).send().await.unwrap().status(), 401);
+            set_token_enabled(&fixture.registry, &fixture.paths, json!({"tokenId":token_id,"enabled":true})).await.unwrap();
+            c.execute("UPDATE service_provider_configs SET enabled=0 WHERE id='provider-test'", []).unwrap();
+            assert!(build_target(&fixture.paths, &json!({}), "provider-test").is_err());
+            assert_eq!(client.post(format!("{base}/v1/responses")).bearer_auth(&token)
+                .json(&json!({"model":"alias","input":"test"})).send().await.unwrap().status(), 503);
+
+            service_provider::switch_backend(&fixture.paths, "legacy").unwrap();
+            let response = client.post(format!("{base}/v1/responses")).bearer_auth(&token)
+                .json(&json!({"model":"alias","input":"test"})).send().await.unwrap();
+            assert_eq!(response.status(), 200);
+            response.text().await.unwrap();
+            assert_eq!(legacy_captures.recv().await.unwrap().1["authorization"], "Bearer private-upstream-key");
+            fixture.registry.stop().await;
+            upstream.abort();
+            legacy_upstream.abort();
+        }
+    });
+}
+
+#[test]
+fn tool_gateway_reads_official_accounts_and_model_catalogs_from_service_tables() {
+    run(async {
+        use crate::core::{database, service_provider_store as store};
+        let fixture = Fixture::new();
+        store::initialize(&fixture.paths).unwrap();
+        let codex = store::save(&fixture.paths, &json!({
+            "name":"GPT 官方","kind":"codex_account","models":["official-codex-model"]
+        })).unwrap()["id"].as_str().unwrap().to_owned();
+        let google = store::save(&fixture.paths, &json!({
+            "name":"Google 官方","kind":"google_account","models":["official-google-model"]
+        })).unwrap()["id"].as_str().unwrap().to_owned();
+        let c = database::open(&fixture.paths).unwrap();
+        store::save_account(&c, &codex, &json!({
+            "account_id":"new-official-id","access_token":"new-official-access"
+        })).unwrap();
+        crate::api::service_provider::switch_backend(&fixture.paths, "service").unwrap();
+        let target = build_target(&fixture.paths, &json!({}), &codex).unwrap();
+        assert!(target.service_source && target.kind == TargetKind::CodexAccount);
+        assert_eq!(list_target_models(&fixture.paths, &target), ["official-codex-model"]);
+        let auth = service::target_auth(&fixture.paths, &target).await.unwrap();
+        assert_eq!(auth.token, "new-official-access");
+        assert_eq!(auth.account_id, "new-official-id");
+        let target = build_target(&fixture.paths, &json!({}), &google).unwrap();
+        assert!(target.service_source && target.kind == TargetKind::GoogleAccount);
+        assert_eq!(list_target_models(&fixture.paths, &target), ["official-google-model"]);
+        c.execute("UPDATE service_provider_configs SET enabled=0 WHERE id=?1", [&google]).unwrap();
+        assert!(build_target(&fixture.paths, &json!({}), &google).is_err());
+    });
+}
+
+#[test]
 fn service_gateway_skill_usage_is_available_without_session_logs() {
     run(async {
         use crate::api::usage;

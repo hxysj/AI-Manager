@@ -1434,7 +1434,7 @@ import ServiceOfficialAccountOverview from "./ServiceOfficialAccountOverview.vue
 import ServiceProviderOverview from "./ServiceProviderOverview.vue"
 import { serviceProviderApi } from "@/api/modules/service-providers"
 import { createMessage } from "@/utils/message"
-import { formatDateTime } from "@/utils/formatters"
+import { formatDateTime, formatServiceProviderName } from "@/utils/formatters"
 
 const props = defineProps({
   initialState: { type: Object, default: () => ({}) },
@@ -1683,17 +1683,16 @@ const agentLabel = (id) =>
   agents.find((item) => item.id === id)?.label || id || "未鉴权"
 const agentVersion = (id) =>
   props.cliTargets.find((item) => item.id === id)?.version || ""
-const providerName = (id) =>
-  data.value.providers.find((item) => item.id === id)?.name || id
+const providerName = (id) => {
+  const provider = data.value.providers.find((item) => item.id === id)
+  return provider ? providerDisplayName(provider) : id
+}
 const providerAccount = (id) =>
   data.value.accounts?.find((item) => item.providerId === id)
 const googleAccount = (id) =>
   data.value.googleAccounts?.find((item) => item.providerId === id)
 const providerDisplayName = (provider) =>
-  provider.kind === "codex_account" &&
-  (!provider.name || provider.name === provider.id)
-    ? providerAccount(provider.id)?.email || "Codex 官方账号"
-    : provider.name
+  formatServiceProviderName(provider, data.value)
 const providerModels = (id) =>
   data.value.models.filter((item) => item.providerId === id)
 const providerInstances = (id) =>
