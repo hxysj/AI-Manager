@@ -150,7 +150,8 @@ pub(super) fn enrich(log: &Value, pricing: &Value, index: &HashMap<String, Value
     let costs = if let Some(cost) = log["estimatedCostMicros"].as_f64() {
         let currency = store::text(log, "currency");
         let converted = price_to_usd(cost / 1_000_000.0, currency,
-            price_number(pricing.get("exchangeRate"), DEFAULT_EXCHANGE_RATE));
+            log["servicePricing"]["usagePricingSnapshot"]["exchangeRate"].as_f64()
+                .unwrap_or_else(|| price_number(pricing.get("exchangeRate"), DEFAULT_EXCHANGE_RATE)));
         json!({"totalCostUsd":converted})
     } else if complete && !["inputPriceMicros", "outputPriceMicros", "cachedInputPriceMicros"]
         .iter().any(|key| log["servicePricing"][*key].is_number())
@@ -405,6 +406,17 @@ mod tests {
         let claude = merged.iter().find(|log| log["requestId"] == "service:claude-request").unwrap();
         assert_eq!(claude["inputTokens"],90);
         assert_eq!(claude["actualTokens"],120);
+    }
+
+    #[test]
+    fn service_usage_global_price_snapshot_keeps_original_exchange_rate() {
+        let pricing = json!({"exchangeRate":9.0,"items":[]});
+        let log = json!({
+            "estimatedCostMicros":765,"currency":"CNY","inputTokens":100,"outputTokens":10,"cacheReadTokens":20,
+            "servicePricing":{"source":"global","usagePricingSnapshot":{"exchangeRate":7.5}}
+        });
+        let enriched = enrich(&log, &pricing, &HashMap::new());
+        assert!((enriched["totalCostUsd"].as_f64().unwrap() - 0.000102).abs() < 1e-12);
     }
 
     #[test]

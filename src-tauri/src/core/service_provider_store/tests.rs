@@ -994,6 +994,174 @@ fn service_takeover_restores_original_and_detects_external_file_changes() {
 }
 
 #[test]
+fn service_model_pricing_inherits_global_without_overwriting_provider_prices() {
+    let pricing = json!({"exchangeRate":7.5,"items":[
+        {"id":"global","modelId":" Model ","currency":"CNY",
+         "inputCostPerMillion":7.5,"cacheReadCostPerMillion":0.75,"outputCostPerMillion":15.0},
+        {"id":"duplicate","modelId":"model","currency":"USD","inputCostPerMillion":99.0}
+    ]});
+    let model = json!({"upstreamModelId":"MODEL","currency":"USD"});
+    let inherited = model_pricing(&model, &pricing);
+    assert_eq!(inherited["source"], "global");
+    assert_eq!(inherited["currency"], "CNY");
+    assert_eq!(inherited["inputPriceMicros"], 7_500_000.0);
+    assert_eq!(inherited["cachedInputPriceMicros"], 750_000.0);
+    assert_eq!(inherited["outputPriceMicros"], 15_000_000.0);
+    assert_eq!(inherited["usagePricingSnapshot"]["model"]["id"], "global");
+    assert_eq!(inherited["usagePricingSnapshot"]["exchangeRate"], 7.5);
+    assert!(model["inputPriceMicros"].is_null());
+    for price in [0, 1_000_000] {
+        let custom = model_pricing(&json!({"upstreamModelId":"model","currency":"USD","inputPriceMicros":price}), &pricing);
+        assert_eq!(custom["source"], "provider");
+        assert_eq!(custom["currency"], "USD");
+        assert_eq!(custom["inputPriceMicros"], price);
+        assert!(custom["outputPriceMicros"].is_null());
+        assert!(custom["usagePricingSnapshot"].is_null());
+    }
+    assert_eq!(model_pricing(&json!({"upstreamModelId":"unmatched"}), &pricing)["source"], "unknown");
+    assert_eq!(model_pricing(&model, &json!({"items":[]}))["source"], "unknown");
+}
+
+#[test]
+fn service_model_pricing_state_keeps_inherited_values_out_of_saved_models() {
+    let f = Fixture::new();
+    let provider = f.provider();
+    let c = database::open(&f.paths).unwrap();
+    c.execute("UPDATE service_provider_models SET input_price_micros=NULL,cached_input_price_micros=NULL,
+        output_price_micros=NULL WHERE provider_id=?1", [&provider]).unwrap();
+    assert_eq!(state(&f.paths).unwrap()["models"][0]["effectivePricing"]["source"], "unknown");
+    crate::core::usage_store::write_pricing(&f.paths, &json!({"exchangeRate":7.5,"items":[{
+        "id":"global","modelId":"model","currency":"CNY","inputCostPerMillion":7.5,
+        "cacheReadCostPerMillion":0.75,"outputCostPerMillion":15.0
+    }]})).unwrap();
+    let data = state(&f.paths).unwrap();
+    let model = data["models"].as_array().unwrap().iter().find(|model| model["providerId"] == provider).unwrap();
+    assert!(model["inputPriceMicros"].is_null());
+    assert_eq!(model["effectivePricing"]["source"], "global");
+    assert_eq!(model["effectivePricing"]["currency"], "CNY");
+    assert_eq!(model["effectivePricing"]["inputPriceMicros"], 7_500_000.0);
+    save_model(&c, &provider, model).unwrap();
+    let saved = query(&c, "SELECT input_price_micros,cached_input_price_micros,output_price_micros,currency
+        FROM service_provider_models WHERE provider_id=?1", &[&provider]).unwrap();
+    assert!(saved[0]["input_price_micros"].is_null());
+    assert!(saved[0]["cached_input_price_micros"].is_null());
+    assert!(saved[0]["output_price_micros"].is_null());
+    assert_eq!(saved[0]["currency"], "USD");
+}
+
+#[test]
+fn service_ledger_uses_global_price_snapshot_and_preserves_unknown_usage() {
+    let f = Fixture::new();
+    let provider = f.provider();
+    let c = database::open(&f.paths).unwrap();
+    let model = query(&c, "SELECT id FROM service_provider_models WHERE provider_id=?1", &[&provider]).unwrap();
+    let pricing = json!({"exchangeRate":7.5,"items":[{
+        "id":"global","modelId":"model","currency":"CNY","inputCostPerMillion":7.5,
+        "cacheReadCostPerMillion":0.75,"outputCostPerMillion":15.0
+    }]});
+    let snapshot = model_pricing(&json!({"upstreamModelId":"model"}), &pricing);
+    for id in ["priced", "unknown"] {
+        c.execute("INSERT INTO service_gateway_requests(id,generation,protocol_in,request_path,state,created_at)
+            VALUES(?1,0,'responses','/responses','routed',1)", [id]).unwrap();
+        c.execute("INSERT INTO service_gateway_attempts(id,request_id,attempt_no,provider_id,provider_name,credential_id,
+            model_id,upstream_model,protocol_out,state,started_at,price_snapshot_json,currency)
+            VALUES(?1,?1,1,?2,'测试','key',?3,'model','responses','started',1,?4,'CNY')",
+            params![id,provider,model[0]["id"].as_str().unwrap(),snapshot.to_string()]).unwrap();
+    }
+    crate::core::usage_store::write_pricing(&f.paths, &json!({"exchangeRate":9.0,"items":[{
+        "id":"global","modelId":"model","currency":"USD","inputCostPerMillion":99.0
+    }]})).unwrap();
+    let record = json!({"serviceRequestId":"priced","attemptId":"priced","ok":true,"statusCode":200,
+        "measuredInput":100,"measuredOutput":10,"measuredCache":20});
+    service::settle(&f.paths, &record).unwrap();
+    service::settle(&f.paths, &json!({"serviceRequestId":"unknown","attemptId":"unknown","ok":true,"statusCode":200})).unwrap();
+    let mut repeated = record.clone();
+    repeated["measuredInput"] = json!(999);
+    service::settle(&f.paths, &repeated).unwrap();
+    let rows = query(&c, "SELECT id,estimated_cost_micros,price_snapshot_json AS priceJson,currency
+        FROM service_gateway_attempts ORDER BY id", &[]).unwrap();
+    assert_eq!(rows[0]["estimated_cost_micros"], 765);
+    assert_eq!(rows[0]["currency"], "CNY");
+    assert_eq!(rows[0]["price"]["usagePricingSnapshot"]["exchangeRate"], 7.5);
+    assert!(rows[1]["estimated_cost_micros"].is_null());
+    assert_eq!(usage(&c).unwrap()["attempts"]["attemptCount"], 2);
+}
+
+#[test]
+fn service_ledger_backfills_only_complete_unpriced_requests_and_locks_the_snapshot() {
+    let f = Fixture::new();
+    let provider = f.provider();
+    let mut c = database::open(&f.paths).unwrap();
+    let model: String = c.query_row("SELECT id FROM service_provider_models WHERE provider_id=?1",
+        [&provider], |row| row.get(0)).unwrap();
+    let empty = json!({"inputPriceMicros":null,"cachedInputPriceMicros":null,
+        "outputPriceMicros":null,"currency":"USD","audit":"preserved"});
+    for (id, finished, input, cached, cost, snapshot) in [
+        ("historical", Some(2), Some(171775), Some(171008), None, empty.clone()),
+        ("locked", Some(2), Some(171775), Some(171008), Some(0), empty.clone()),
+        ("partial-usage", Some(2), Some(171775), None, None, empty.clone()),
+        ("in-flight", None, Some(171775), Some(171008), None, empty.clone()),
+        ("invalid-cache", Some(2), Some(1), Some(2), None, empty.clone()),
+        ("unknown-model", Some(2), Some(171775), Some(171008), None, empty.clone()),
+        ("partial-price", Some(2), Some(171775), Some(171008), None,
+            json!({"inputPriceMicros":1_000_000,"currency":"CNY"})),
+        ("snapshot", Some(2), Some(100), Some(20), None,
+            json!({"inputPriceMicros":1_000_000,"cachedInputPriceMicros":500_000,
+                "outputPriceMicros":2_000_000,"currency":"CNY"})),
+    ] {
+        c.execute("INSERT INTO service_gateway_requests(id,generation,protocol_in,request_path,state,created_at,finished_at)
+            VALUES(?1,0,'responses','/responses','completed',1,?2)", params![id,finished]).unwrap();
+        c.execute("INSERT INTO service_gateway_attempts(id,request_id,attempt_no,provider_id,provider_name,credential_id,
+            model_id,upstream_model,protocol_out,state,started_at,finished_at,input_tokens,output_tokens,
+            cached_input_tokens,estimated_cost_micros,price_snapshot_json,currency)
+            VALUES(?1,?1,1,?2,'测试','key',?3,?4,'responses','succeeded',1,?5,?6,505,?7,?8,?9,'USD')",
+            params![id,provider,model,if id=="unknown-model" {"missing"} else {"model"},finished,input,cached,cost,snapshot.to_string()]).unwrap();
+    }
+    crate::core::usage_store::write_pricing(&f.paths, &json!({"exchangeRate":7.2,"items":[{
+        "id":"global","modelId":"model","currency":"USD","inputCostPerMillion":5.0,
+        "cacheReadCostPerMillion":0.5,"outputCostPerMillion":30.0
+    }]})).unwrap();
+    // 普通状态刷新同时修复明细和汇总，无需修改原 Usage 表或重新导入日志。
+    let refreshed = state(&f.paths).unwrap();
+    let read = |c: &Connection| query(c, "SELECT id,estimated_cost_micros AS cost,currency,price_snapshot_json AS priceJson
+        FROM service_gateway_attempts ORDER BY id", &[]).unwrap();
+    let rows = read(&c);
+    let historical = rows.iter().find(|row| row["id"] == "historical").unwrap();
+    assert_eq!(historical["cost"], 104489);
+    assert_eq!(historical["price"]["source"], "global");
+    assert_eq!(historical["price"]["audit"], "preserved");
+    assert_eq!(historical["price"]["usagePricingSnapshot"]["exchangeRate"], 7.2);
+    for id in ["partial-usage", "in-flight", "invalid-cache", "unknown-model", "partial-price"] {
+        assert!(rows.iter().find(|row| row["id"] == id).unwrap()["cost"].is_null(), "{id}");
+    }
+    assert_eq!(rows.iter().find(|row| row["id"] == "locked").unwrap()["cost"], 0);
+    let original = rows.iter().find(|row| row["id"] == "snapshot").unwrap();
+    assert_eq!(original["cost"], 1100);
+    assert_eq!(original["currency"], "CNY");
+    assert_eq!(refreshed["usage"]["byProvider"].as_array().unwrap().iter()
+        .map(|group| group["pricedCount"].as_i64().unwrap()).sum::<i64>(), 3);
+    crate::core::usage_store::write_pricing(&f.paths, &json!({"exchangeRate":9.0,"items":[{
+        "id":"global","modelId":"model","currency":"CNY","inputCostPerMillion":99.0,
+        "cacheReadCostPerMillion":99.0,"outputCostPerMillion":99.0
+    }]})).unwrap();
+    backfill_usage_costs(&mut c).unwrap();
+    assert_eq!(read(&c), rows);
+}
+
+#[test]
+fn service_request_cost_preserves_free_and_fractional_prices_without_inventing_usage() {
+    let free = json!({"inputPriceMicros":0,"outputPriceMicros":0});
+    assert_eq!(estimate_request_cost(Some(100), Some(20), Some(0), &free), Some(0));
+    assert_eq!(estimate_request_cost(Some(100), Some(20), None, &free), None);
+    assert_eq!(estimate_request_cost(Some(100), Some(20), Some(101), &free), None);
+    assert_eq!(estimate_request_cost(Some(-1), Some(20), Some(0), &free), None);
+    let fractional = json!({"source":"global","inputPriceMicros":0.5,
+        "cachedInputPriceMicros":0.25,"outputPriceMicros":0.5});
+    assert_eq!(estimate_request_cost(Some(1_000_000), Some(1_000_000), Some(0), &fractional), Some(1));
+    assert_eq!(estimate_request_cost(Some(1), Some(0), Some(0), &fractional), Some(1));
+}
+
+#[test]
 fn service_ledger_settlement_is_once_and_unknown_usage_stays_null() {
     let f = Fixture::new();
     let provider = f.provider();

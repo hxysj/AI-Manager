@@ -854,6 +854,32 @@ assert.ok(richApiHtml.includes('class="service-agent-tag"'))
 assert.ok(!richApiHtml.includes("revoked-fingerprint"))
 assert.ok(!richApiHtml.includes("其他来源 Key"))
 assert.ok(!richApiHtml.includes("other-provider-model"))
+// 全局费用只作为展示投影，服务商编辑仍保留空报价。
+const inheritedApiState = {
+  ...state,
+  models: [{
+    ...state.models[0],
+    inputPriceMicros: null,
+    cachedInputPriceMicros: null,
+    outputPriceMicros: null,
+    currency: "USD",
+    effectivePricing: {
+      source: "global",
+      inputPriceMicros: 7500000,
+      cachedInputPriceMicros: 750000,
+      outputPriceMicros: 15000000,
+      currency: "CNY"
+    }
+  }]
+}
+const inheritedApiHtml = await renderCenter(inheritedApiState, value =>
+  value.openProviderDetail(inheritedApiState.providers[0])
+)
+for (const text of ["继承全局费用", "7.5 CNY", "0.75 CNY", "15 CNY"]) {
+  assert.ok(inheritedApiHtml.includes(text), text)
+}
+assert.ok(!inheritedApiHtml.includes("7.5 USD"))
+assert.equal(inheritedApiState.models[0].inputPriceMicros, null)
 const emptyApiHtml = await renderCenter(
   {
     ...state,

@@ -868,7 +868,8 @@
               可配置
               displayName、contextWindow、catalog、enabled、currency，以及
               inputPriceMicros、cachedInputPriceMicros、outputPriceMicros。
-              价格单位为每百万 Token 的货币微单位，未知填 null。
+              价格单位为每百万 Token 的货币微单位。模型价格全部留空或填 null
+              时继承 Usage 全局费用；0 表示免费。
             </p>
           </template>
           <label class="form-field"
@@ -1672,7 +1673,7 @@ async function editProvider(provider = {}, section = "provider") {
       keyLogicalId: activeKey?.logicalId || "default",
       keyName: activeKey?.name || "默认 Key",
       modelsJson: JSON.stringify(
-        providerModels(provider.id).map((item) => ({
+        providerModels(provider.id).map(({ effectivePricing, ...item }) => ({
           ...item,
           enabled: Boolean(item.enabled)
         })),

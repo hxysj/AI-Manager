@@ -174,7 +174,7 @@
           </thead>
           <tbody class="service-model-body">
             <tr
-              v-for="model in models"
+              v-for="model in displayModels"
               :key="model.id"
               class="service-model-row"
             >
@@ -189,6 +189,11 @@
                   "
                   class="service-model-id"
                   >{{ model.upstreamModelId }}</span
+                >
+                <span
+                  v-if="model.pricing.source === 'global'"
+                  class="service-model-id"
+                  >继承全局费用</span
                 >
               </td>
               <td
@@ -209,9 +214,13 @@
                 v-for="column in priceColumns"
                 :key="column.key"
                 class="service-model-cell"
-                :class="{ 'service-model-unset': model[column.key] == null }"
+                :class="{
+                  'service-model-unset': model.pricing[column.key] == null
+                }"
               >
-                {{ formatPrice(model[column.key], model.currency) }}
+                {{
+                  formatPrice(model.pricing[column.key], model.pricing.currency)
+                }}
               </td>
               <td class="service-model-cell service-model-state">
                 <span
@@ -234,8 +243,8 @@
         </div>
       </div>
       <p class="service-caption service-model-hint">
-        模型与价格在编辑配置中维护，各 Agent 的默认模型和映射在 Agent
-        配置中设置。
+        服务商未配置模型费用时，自动继承 Usage 中的全局模型费用。各 Agent
+        的默认模型和映射在 Agent 配置中设置。
       </p>
     </section>
 
@@ -327,6 +336,14 @@ const priceColumns = [
   { key: "cachedInputPriceMicros", label: "缓存输入" },
   { key: "outputPriceMicros", label: "输出价格" }
 ]
+
+// 展示实际生效价格，编辑仍保留服务商原始报价，避免把继承值保存成覆盖。
+const displayModels = computed(() =>
+  props.models.map((model) => ({
+    ...model,
+    pricing: model.effectivePricing || model
+  }))
+)
 
 // 存储价格为每百万 Tokens 的微货币单位，缺失价格与零价格分别展示。
 function formatPrice(value, currency) {

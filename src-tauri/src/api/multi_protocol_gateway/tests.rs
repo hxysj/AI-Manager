@@ -352,6 +352,35 @@ fn service_desktop_model_rules_resolve_safe_aliases_and_reject_disabled_targets(
 }
 
 #[test]
+fn service_agent_model_selection_overrides_the_initial_model_without_falling_back() {
+    use crate::core::{database, service_provider_store as store};
+    let fixture = Fixture::new();
+    let provider = store::save(&fixture.paths, &json!({
+        "name":"Agent 模型切换","baseUrl":"http://127.0.0.1:1/v1",
+        "models":["initial","selected","disabled"],
+        "bindings":[{"agentType":"codex","enabled":true,"defaultModelName":"initial"},
+            {"agentType":"claude","enabled":true,"defaultModelName":"initial"}]
+    })).unwrap()["id"].as_str().unwrap().to_string();
+    let c = database::open(&fixture.paths).unwrap();
+    let initial: String = c.query_row("SELECT id FROM service_provider_models
+        WHERE provider_id=?1 AND upstream_model_id='initial'", [&provider], |row| row.get(0)).unwrap();
+    c.execute("UPDATE service_provider_models SET enabled=0
+        WHERE provider_id=?1 AND upstream_model_id='disabled'", [&provider]).unwrap();
+    for agent in ["codex", "claude"] {
+        let identity = json!({"providerId":provider,"agentType":agent,"modelId":initial});
+        assert_eq!(service::resolve(&fixture.paths, &identity, "").unwrap().1["upstreamModelId"], "initial");
+        assert_eq!(service::resolve(&fixture.paths, &identity, "selected").unwrap().1["upstreamModelId"], "selected");
+        assert!(service::resolve(&fixture.paths, &identity, "disabled").is_err());
+        assert!(service::resolve(&fixture.paths, &identity, "missing").is_err());
+        // 默认模型失效也不阻止用户切换到其他可用模型。
+        c.execute("UPDATE service_provider_models SET enabled=0 WHERE id=?1", [&initial]).unwrap();
+        assert_eq!(service::resolve(&fixture.paths, &identity, "selected").unwrap().1["upstreamModelId"], "selected");
+        assert!(service::resolve(&fixture.paths, &identity, "").is_err());
+        c.execute("UPDATE service_provider_models SET enabled=1 WHERE id=?1", [&initial]).unwrap();
+    }
+}
+
+#[test]
 fn service_model_fetch_preserves_local_prices_and_rejects_stale_configuration() {
     run(async {
         use crate::core::{database, service_provider_store as store};

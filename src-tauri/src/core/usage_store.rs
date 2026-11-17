@@ -54,6 +54,11 @@ pub(crate) fn migrate_connection(connection: &mut Connection) -> Result<(), Mana
 pub fn read_pricing(paths: &AppPaths) -> Result<Value, ManagerError> {
     initialize(paths)?;
     let connection = open_connection(paths)?;
+    read_pricing_connection(&connection)
+}
+
+// 网关在已有事务内读取全局费用，避免请求入账时重复初始化或打开写连接。
+pub(crate) fn read_pricing_connection(connection: &Connection) -> Result<Value, ManagerError> {
     let exchange_rate = connection
         .query_row(
             "SELECT CAST(value AS REAL) FROM app_metadata WHERE key = 'usage:exchange_rate'",
@@ -62,6 +67,14 @@ pub fn read_pricing(paths: &AppPaths) -> Result<Value, ManagerError> {
         )
         .optional()?
         .unwrap_or(7.2);
+    let exists: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='usage_pricing_items')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !exists {
+        return Ok(json!({"exchangeRate": exchange_rate, "items": []}));
+    }
     let mut statement = connection.prepare(
         "SELECT id, model_id, model_category, currency,
                 input_cost_per_million, output_cost_per_million,

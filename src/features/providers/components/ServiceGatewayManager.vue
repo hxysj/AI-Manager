@@ -2,7 +2,6 @@
   <BaseModal
     class="gateway-modal"
     title="网关与 Agent 管理"
-    description="管理 Agent 配置接管、共享网关调用与诊断记录。"
     @close="$emit('close')"
   >
     <div class="gateway-manager">
@@ -754,7 +753,16 @@ function moveTab(event, id) {
     border-radius: 14px;
   }
   :deep(.base-modal__header) {
-    padding: 24px 28px 18px;
+    align-items: center;
+    padding: 10px 20px;
+  }
+  :deep(.base-modal__header h2) {
+    font-size: var(--font-size-lg);
+    line-height: 1.5;
+  }
+  :deep(.base-modal__close) {
+    width: 30px;
+    height: 30px;
   }
   :deep(.base-modal__content) {
     padding: 0;
@@ -812,7 +820,7 @@ function moveTab(event, id) {
       flex: none;
       align-items: center;
       justify-content: space-between;
-      padding: 0 28px;
+      padding: 0 20px;
       border-bottom: 1px solid var(--color-line);
       .gateway-refresh {
         margin-bottom: 6px;
@@ -854,7 +862,7 @@ function moveTab(event, id) {
       min-height: 0;
       flex-direction: column;
       gap: 16px;
-      padding: 22px 28px;
+      padding: 16px 20px;
       overflow: auto;
       scrollbar-gutter: stable;
       .source-toolbar {

@@ -1,5 +1,5 @@
 use super::*;
-use crate::core::{database, service_provider_store as store};
+use crate::core::{database, service_provider_store as store, usage_store};
 use rusqlite::{params, Connection, TransactionBehavior};
 
 // 转换后的 Messages 使用可回溯的本地 ID，Usage 可与客户端会话精确去重。
@@ -140,6 +140,8 @@ pub(super) fn resolve(
     } else {
         None
     };
+    // 客户端显式选择的模型按原请求解析；实例模型只用于未指定模型的请求。
+    // Desktop 档位和多协议工具仍保留用户主动配置的别名映射。
     let models = store::query(&c, "SELECT id,upstream_model_id AS upstreamModelId FROM service_provider_models
         WHERE provider_id=?1 AND enabled=1 AND id=coalesce(
         (SELECT model_id FROM service_agent_model_routes WHERE provider_id=?1 AND agent_type=?3 AND client_model_name=?2 AND enabled=1),
@@ -371,9 +373,10 @@ pub(super) fn start_attempt(
     if current.first().and_then(|v| v["revision"].as_i64()) != record["providerRevision"].as_i64() {
         return Err(store::fail("服务商配置或授权已变化，请重试请求"));
     }
-    let model=store::query(&tx,"SELECT input_price_micros AS inputPriceMicros,cached_input_price_micros AS cachedInputPriceMicros,
+    let model=store::query(&tx,"SELECT upstream_model_id AS upstreamModelId,input_price_micros AS inputPriceMicros,cached_input_price_micros AS cachedInputPriceMicros,
         output_price_micros AS outputPriceMicros,currency FROM service_provider_models WHERE provider_id=?1 AND id=?2 AND enabled=1",
         &[&target.id,&store::text(record,"modelId")])?.pop().ok_or_else(||store::fail("模型已禁用"))?;
+    let model = store::model_pricing(&model, &usage_store::read_pricing_connection(&tx)?);
     let (credential, name, fingerprint) = if target.kind == TargetKind::CodexAccount {
         if store::account(&tx, &target.id)?["accessToken"] != auth.token {
             return Err(store::fail("账号令牌已轮换，请重试"));
@@ -463,32 +466,7 @@ pub(crate) fn settle(paths: &AppPaths, record: &Value) -> Result<(), ManagerErro
         .pop()
         .unwrap_or(json!({}))["price"]
             .clone();
-        let cost = match (
-            input,
-            output,
-            cached,
-            price["inputPriceMicros"].as_i64(),
-            price["outputPriceMicros"].as_i64(),
-        ) {
-            (Some(i), Some(o), Some(k), Some(pi), Some(po)) if k <= i => {
-                let pc = if k == 0 {
-                    Some(0)
-                } else {
-                    price["cachedInputPriceMicros"].as_i64()
-                };
-                pc.and_then(|pc| {
-                    i64::try_from(
-                        ((i - k) as i128 * pi as i128
-                            + o as i128 * po as i128
-                            + k as i128 * pc as i128
-                            + 999_999)
-                            / 1_000_000,
-                    )
-                    .ok()
-                })
-            }
-            _ => None,
-        };
+        let cost = store::estimate_request_cost(input, output, cached, &price);
         tx.execute("UPDATE service_gateway_attempts SET state=?2,status_code=?3,upstream_request_id=?4,upstream_response_id=?5,
             actual_model=?6,usage_source=?7,input_tokens=?8,output_tokens=?9,cached_input_tokens=?10,
             estimated_cost_micros=?11,error_message=?12,finished_at=?13,reasoning_tokens=?14,service_tier=?15 WHERE id=?1 AND finished_at IS NULL",

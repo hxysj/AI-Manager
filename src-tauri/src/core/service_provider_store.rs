@@ -204,6 +204,7 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
     }
     transaction.commit()?;
     connection.pragma_update(None, "foreign_keys", "ON")?;
+    backfill_usage_costs(&mut connection)?;
     Ok(())
 }
 
@@ -295,9 +296,13 @@ pub fn state(paths: &AppPaths) -> Result<Value, ManagerError> {
         CASE WHEN kind='api' THEN EXISTS(SELECT 1 FROM service_provider_keys k WHERE k.provider_id=p.id AND k.is_active=1 AND k.status='active' AND k.secret_ciphertext<>'')
         ELSE credentials_ciphertext<>'' END AS hasCredential
         FROM service_provider_configs p WHERE deleted_at IS NULL ORDER BY created_at,id", &[])?;
-    let models = query(&c, "SELECT id,provider_id AS providerId,upstream_model_id AS upstreamModelId,display_name AS displayName,
+    let mut models = query(&c, "SELECT id,provider_id AS providerId,upstream_model_id AS upstreamModelId,display_name AS displayName,
         context_window AS contextWindow,catalog_json AS catalogJson,enabled,input_price_micros AS inputPriceMicros,
         cached_input_price_micros AS cachedInputPriceMicros,output_price_micros AS outputPriceMicros,currency FROM service_provider_models", &[])?;
+    let pricing = crate::core::usage_store::read_pricing_connection(&c)?;
+    for model in &mut models {
+        model["effectivePricing"] = model_pricing(model, &pricing);
+    }
     let bindings = query(&c, "SELECT provider_id AS providerId,agent_type AS agentType,enabled,default_model_id AS defaultModelId,options_json AS optionsJson,revision FROM service_provider_agent_bindings", &[])?;
     let keys = query(&c, "SELECT id,provider_id AS providerId,logical_id AS logicalId,name,note,is_current AS isCurrent,is_active AS isActive,status,substr(fingerprint,1,12) AS fingerprint FROM service_provider_keys WHERE is_current=1", &[])?;
     let instances = query(&c, "SELECT id,agent_type AS agentType,name,config_path AS configPath,agent_version AS agentVersion,
@@ -335,6 +340,114 @@ pub fn config(connection: &Connection, provider_id: &str) -> Result<Value, Manag
     query(connection, "SELECT id,name,icon,kind,upstream_protocol AS upstreamProtocol,base_url AS baseUrl,proxy,
         headers_json AS headersJson,note,enabled,revision,deleted_at AS deletedAt FROM service_provider_configs WHERE id=?1", &[&provider_id])?
         .pop().ok_or_else(|| fail("服务商配置不存在"))
+}
+
+// 按模型继承整套全局价格；显式零价和不完整的服务商报价均保留原意，避免混用币种。
+pub(crate) fn model_pricing(model: &Value, pricing: &Value) -> Value {
+    let mut snapshot = json!({
+        "inputPriceMicros": model["inputPriceMicros"],
+        "cachedInputPriceMicros": model["cachedInputPriceMicros"],
+        "outputPriceMicros": model["outputPriceMicros"],
+        "currency": model["currency"].as_str().unwrap_or("USD"),
+        "source": "provider"
+    });
+    if ["inputPriceMicros", "cachedInputPriceMicros", "outputPriceMicros"]
+        .iter().any(|key| model[*key].is_number()) {
+        return snapshot;
+    }
+    snapshot["source"] = json!("unknown");
+    let name = text(model, "upstreamModelId").trim().to_lowercase();
+    let global = pricing["items"].as_array().into_iter().flatten()
+        .find(|item| !name.is_empty() && text(item, "modelId").trim().to_lowercase() == name);
+    if let Some(global) = global {
+        for (local, shared) in [
+            ("inputPriceMicros", "inputCostPerMillion"),
+            ("cachedInputPriceMicros", "cacheReadCostPerMillion"),
+            ("outputPriceMicros", "outputCostPerMillion"),
+        ] {
+            snapshot[local] = json!(global[shared].as_f64().map(|price| price * 1_000_000.0));
+        }
+        snapshot["currency"] = global["currency"].clone();
+        snapshot["source"] = json!("global");
+        snapshot["usagePricingSnapshot"] = json!({
+            "model": global,
+            "exchangeRate": pricing["exchangeRate"]
+        });
+    }
+    snapshot
+}
+
+// 新请求与历史补算共用同一计价规则，缺少用量或单价时继续保留未知。
+pub(crate) fn estimate_request_cost(
+    input: Option<i64>,
+    output: Option<i64>,
+    cached: Option<i64>,
+    price: &Value,
+) -> Option<i64> {
+    let (i, o, k) = (input?, output?, cached?);
+    if i < 0 || o < 0 || k < 0 || k > i {
+        return None;
+    }
+    if price["source"] == "global" {
+        let pi = price["inputPriceMicros"].as_f64()?;
+        let po = price["outputPriceMicros"].as_f64()?;
+        let pc = if k == 0 { 0.0 } else { price["cachedInputPriceMicros"].as_f64()? };
+        if [pi, po, pc].iter().any(|value| !value.is_finite() || *value < 0.0) {
+            return None;
+        }
+        let cost = (((i - k) as f64 * pi + o as f64 * po + k as f64 * pc)
+            / 1_000_000.0).ceil();
+        return (cost.is_finite() && cost >= 0.0 && cost < i64::MAX as f64)
+            .then_some(cost as i64);
+    }
+    let pi = price["inputPriceMicros"].as_i64()?;
+    let po = price["outputPriceMicros"].as_i64()?;
+    let pc = if k == 0 { 0 } else { price["cachedInputPriceMicros"].as_i64()? };
+    if pi < 0 || po < 0 || pc < 0 {
+        return None;
+    }
+    i64::try_from(((i - k) as i128 * pi as i128 + o as i128 * po as i128
+        + k as i128 * pc as i128 + 999_999) / 1_000_000).ok()
+}
+
+// 只补齐已结束且费用未锁定的账本；优先使用请求快照，旧空快照再继承 Usage。
+pub(crate) fn backfill_usage_costs(c: &mut Connection) -> Result<(), ManagerError> {
+    let pending: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM service_gateway_attempts
+        WHERE estimated_cost_micros IS NULL AND finished_at IS NOT NULL
+        AND input_tokens IS NOT NULL AND output_tokens IS NOT NULL AND cached_input_tokens IS NOT NULL)",
+        [], |row| row.get(0))?;
+    if !pending {
+        return Ok(());
+    }
+    let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let pricing = crate::core::usage_store::read_pricing_connection(&tx)?;
+    let rows = query(&tx, "SELECT id,upstream_model AS upstreamModelId,currency,input_tokens AS input,
+        output_tokens AS output,cached_input_tokens AS cached,price_snapshot_json AS priceJson
+        FROM service_gateway_attempts WHERE estimated_cost_micros IS NULL AND finished_at IS NOT NULL
+        AND input_tokens IS NOT NULL AND output_tokens IS NOT NULL AND cached_input_tokens IS NOT NULL", &[])?;
+    for row in rows {
+        let mut snapshot = row["price"].as_object().cloned().unwrap_or_default();
+        if !["inputPriceMicros", "cachedInputPriceMicros", "outputPriceMicros"]
+            .iter().any(|key| snapshot.get(*key).is_some_and(Value::is_number)) {
+            let saved = snapshot.get("usagePricingSnapshot");
+            let historical = saved.filter(|saved| saved["model"].is_object()).map(|saved|
+                json!({"exchangeRate":saved["exchangeRate"],"items":[saved["model"]]}));
+            let inherited = model_pricing(&row, historical.as_ref().unwrap_or(&pricing));
+            snapshot.extend(inherited.as_object().unwrap().clone());
+        }
+        let mut snapshot = Value::Object(snapshot);
+        if let Some(cost) = estimate_request_cost(row["input"].as_i64(), row["output"].as_i64(),
+            row["cached"].as_i64(), &snapshot) {
+            snapshot["backfilledAt"] = json!(now());
+            tx.execute("UPDATE service_gateway_attempts SET estimated_cost_micros=?2,
+                currency=?3,price_snapshot_json=?4 WHERE id=?1
+                AND estimated_cost_micros IS NULL AND finished_at IS NOT NULL",
+                params![text(&row,"id"),cost,snapshot["currency"].as_str().unwrap_or(text(&row,"currency")),
+                    snapshot.to_string()])?;
+        }
+    }
+    tx.commit()?;
+    Ok(())
 }
 
 // 旧官方账号存储 ID 自带 account:，公开账号 ID 与历史设置继续兼容。
