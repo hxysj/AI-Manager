@@ -59,11 +59,8 @@ pub async fn dispatch(
         }
         "import-account" => {
             let provider = store::text(&value, "id");
-            let c = database::open(paths)?;
-            if store::config(&c, provider)?["kind"] != "codex_account" {
-                return Err(store::fail("请选择官方账号服务商"));
-            }
-            codex_account::import_service_account(paths, provider, store::text(&value, "content"))?;
+            return codex_account::import_service_account(
+                paths, provider, store::text(&value, "content"), value["proxy"].as_str());
         }
         "key-select" | "key-revoke" => {
             let mut c = database::open(paths)?;

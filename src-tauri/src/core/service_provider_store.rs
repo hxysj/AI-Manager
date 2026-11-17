@@ -843,6 +843,59 @@ pub fn account(c: &Connection, provider: &str) -> Result<Value, ManagerError> {
     Ok(item)
 }
 
+// 只在授权成功后的事务中调用；复用同一官方身份，保留用户已修改的名称与 Agent 关联。
+pub(crate) fn prepare_official_login(
+    c: &Connection,
+    target: &str,
+    kind: &str,
+    identity: &str,
+    name: &str,
+    proxy: &str,
+) -> Result<String, ManagerError> {
+    if !matches!(kind, "codex_account" | "google_account") || identity.trim().is_empty() {
+        return Err(fail("官方账号身份无效"));
+    }
+    let existing = query(c,
+        "SELECT id,kind,account_id,name,deleted_at FROM service_provider_configs
+        WHERE kind=?1 AND account_id=?2 ORDER BY created_at,id LIMIT 1",
+        &[&kind, &identity])?.pop();
+    let provider = if target.is_empty() {
+        existing.as_ref().map(|row| text(row, "id").to_string()).unwrap_or_default()
+    } else {
+        target.to_string()
+    };
+    let default_name = if kind == "google_account" { "Google 官方账号" } else { "Codex 官方账号" };
+    let name = if name.trim().is_empty() { default_name } else { name.trim() };
+    if provider.is_empty() {
+        let provider = id();
+        let icon = if kind == "google_account" { "google.svg" } else { "codex.svg" };
+        c.execute("INSERT INTO service_provider_configs(id,name,kind,upstream_protocol,proxy,icon,enabled,created_at,updated_at)
+            VALUES(?1,?2,?3,'responses',?4,?5,1,?6,?6)",
+            params![provider,name,kind,proxy,icon,now()])?;
+        return Ok(provider);
+    }
+    let config = config(c, &provider)?;
+    if config["kind"] != kind || !config["deletedAt"].is_null() {
+        return Err(fail("官方账号不存在、类型不匹配或已删除"));
+    }
+    let old_identity: String = c.query_row("SELECT account_id FROM service_provider_configs WHERE id=?1",
+        [&provider], |row| row.get(0))?;
+    if !old_identity.is_empty() && old_identity != identity {
+        return Err(fail("登录账号与待更新的官方账号不一致"));
+    }
+    if existing.as_ref().is_some_and(|row| text(row, "id") != provider) {
+        return Err(fail("此官方账号已存在，请选择已有账号"));
+    }
+    let old_name = text(&config, "name");
+    let automatic_name = old_name.is_empty() || [
+        provider.as_str(), identity, "GPT / Codex 官方账号", "Codex 官方账号",
+        "Google 账号", "Google 官方账号",
+    ].contains(&old_name);
+    c.execute("UPDATE service_provider_configs SET name=?2,proxy=?3,revision=revision+1,updated_at=?4 WHERE id=?1",
+        params![provider,if automatic_name { name } else { old_name },proxy,now()])?;
+    Ok(provider)
+}
+
 pub fn save_account(c: &Connection, provider: &str, value: &Value) -> Result<(), ManagerError> {
     let access = value["access_token"]
         .as_str()

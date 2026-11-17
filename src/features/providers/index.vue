@@ -1842,169 +1842,16 @@
       @close="showGoogleAccountModal = false"
     />
 
-    <BaseModal
+    <CodexAccountLoginModal
       v-if="showCodexLoginModal"
-      class="providers-view__codex-login-modal"
-      :title="codexLoginTitle"
+      :account="{ id: codexAuthUpdateAccountId, proxy: codexProxyDraft }"
+      :pending="pending"
+      :login-state="codexLoginState"
       @close="closeCodexLoginModal"
-    >
-      <section class="providers-view__login-panel">
-        <nav class="providers-view__login-tabs">
-          <button
-            :class="[
-              'providers-view__login-tab',
-              { 'providers-view__login-tab--active': codexLoginTab === 'oauth' }
-            ]"
-            type="button"
-            @click="codexLoginTab = 'oauth'"
-          >
-            <Globe2 :size="13" />
-            OAuth 授权
-          </button>
-          <button
-            :class="[
-              'providers-view__login-tab',
-              { 'providers-view__login-tab--active': codexLoginTab === 'auth' }
-            ]"
-            type="button"
-            @click="codexLoginTab = 'auth'"
-          >
-            <ShieldCheck :size="13" />
-            JSON 数据
-          </button>
-        </nav>
-
-        <label class="providers-view__login-field">
-          <span>代理地址</span>
-          <input
-            v-model.trim="codexProxyDraft"
-            type="text"
-            placeholder="可选，例如：http://127.0.0.1:7890"
-          />
-        </label>
-
-        <template v-if="codexLoginTab === 'oauth'">
-          <p class="providers-view__login-intro">
-            点击浏览器登录后才会启动本地回调服务并生成授权链接。
-          </p>
-          <div
-            v-if="codexLoginState?.message"
-            :class="[
-              'providers-view__login-status',
-              `providers-view__login-status--${codexLoginState.status}`
-            ]"
-          >
-            {{ codexLoginState.message }}
-          </div>
-          <label
-            v-if="codexLoginState?.authUrl"
-            class="providers-view__login-field"
-          >
-            <span>授权链接</span>
-            <div class="providers-view__login-copy-row">
-              <input :value="codexLoginState.authUrl" readonly type="text" />
-              <button
-                type="button"
-                title="复制链接"
-                aria-label="复制链接"
-                @click="copyAuthUrl(codexLoginState.authUrl)"
-              >
-                <Copy :size="16" />
-              </button>
-            </div>
-          </label>
-          <button
-            class="providers-view__login-primary"
-            type="button"
-            :disabled="pending || codexLoginState?.status === 'pending'"
-            @click="startCodexOfficialLogin"
-          >
-            <Globe2 :size="16" />
-            浏览器登录
-          </button>
-          <label
-            v-if="codexLoginState?.authUrl"
-            class="providers-view__login-field"
-          >
-            <span>手动输入回调地址</span>
-            <div class="providers-view__login-callback-row">
-              <input
-                v-model.trim="manualCallbackUrl"
-                type="text"
-                placeholder="粘贴完整回调地址，例如：http://localhost..."
-              />
-              <button
-                type="button"
-                :disabled="!manualCallbackUrl"
-                @click="openExternalLink(manualCallbackUrl)"
-              >
-                <Check :size="15" />
-                我已授权，继续
-              </button>
-            </div>
-          </label>
-          <div
-            v-if="codexLoginState?.authUrl"
-            class="providers-view__login-tip"
-          >
-            完成授权后，此窗口将自动更新
-          </div>
-          <div
-            v-if="codexLoginState?.status === 'pending'"
-            class="providers-view__login-actions"
-          >
-            <button type="button" @click="emit('cancel-codex-official-login')">
-              取消登录
-            </button>
-          </div>
-        </template>
-
-        <template v-else>
-          <p class="providers-view__login-intro">
-            粘贴已有 Codex 登录 JSON 数据，Monkey Thief 会使用 access_token
-            解析并验证账号。
-          </p>
-          <div class="providers-auth-session">
-            <span
-              >在浏览器登录 ChatGPT 后，打开下方地址并复制页面 JSON
-              到这里。</span
-            >
-            <div class="providers-auth-session-row">
-              <a
-                class="providers-auth-session-link"
-                :href="codexSessionUrl"
-                @click.prevent="openExternalLink(codexSessionUrl)"
-                >{{ codexSessionUrl }}</a
-              >
-              <button
-                class="providers-auth-session-copy"
-                type="button"
-                @click="copyAuthUrl(codexSessionUrl)"
-              >
-                <Copy :size="15" />复制地址
-              </button>
-            </div>
-            <small>JSON 包含登录凭据，请勿分享给他人。</small>
-          </div>
-          <label class="providers-view__login-field">
-            <span>JSON 数据</span>
-            <textarea
-              v-model.trim="codexAuthDataDraft"
-              placeholder='{"access_token":"","account_id":"","id_token":"","refresh_token":""}'
-            />
-          </label>
-          <div class="providers-view__login-actions">
-            <button
-              type="button"
-              :disabled="pending || !codexAuthDataDraft"
-              @click="importCodexAuthData"
-            >
-              解析并验证
-            </button>
-          </div>
-        </template>
-      </section>
-    </BaseModal>
+      @login="emit('codex-official-login', $event)"
+      @cancel="emit('cancel-codex-official-login')"
+      @import-auth="emit('codex-auth-json-import', $event)"
+    />
 
     <BaseModal
       v-if="showCodexProxyModal"
@@ -2810,8 +2657,6 @@ import {
   ArrowLeft,
   Ban,
   Check,
-  Copy,
-  Globe2,
   GripVertical,
   Eye,
   EyeOff,
@@ -2839,7 +2684,8 @@ import ProviderDeleteConfirmModal from "./components/ProviderDeleteConfirmModal.
 import TokenCount from "@/components/TokenCount.vue"
 import CodexProxyPanel from "@/features/providers/components/CodexProxyPanel.vue"
 import GoogleAccountModal from "@/features/providers/components/GoogleAccountModal.vue"
-import { accountApi, runtimeApi, systemApi, usageApi } from "@/api"
+import CodexAccountLoginModal from "@/features/providers/components/CodexAccountLoginModal.vue"
+import { accountApi, runtimeApi, usageApi } from "@/api"
 import { googleAccountApi } from "@/api/modules/accounts"
 import { claudeDesktopApi, providerApi } from "@/api/modules/providers"
 import { formatTokenCount } from "@/utils/formatters"
@@ -3070,7 +2916,6 @@ async function fetchClaudeModels() {
 
 const codexModelsPending = ref(false)
 const codexModelCatalog = ref(null)
-const codexSessionUrl = "https://chatgpt.com/api/auth/session"
 
 async function fetchCodexModels() {
   codexModelsPending.value = true
@@ -3181,8 +3026,6 @@ const runtimeDiffEditorRef = ref(null)
 const runtimeConfigContent = ref("")
 const runtimeConfigPath = ref("")
 const runtimeDiffPath = ref("")
-const codexLoginTab = ref("oauth")
-const codexAuthDataDraft = ref("")
 const codexProxyDraft = ref("")
 const codexAuthUpdateAccountId = ref("")
 const codexAccountProxyDrafts = reactive({})
@@ -3219,7 +3062,6 @@ const apiKeyManagerDraft = reactive({
   apiKeys: [],
   activeApiKeyId: ""
 })
-const manualCallbackUrl = ref("")
 const countdownNow = ref(Date.now())
 let countdownTimer = null
 let runtimeDiffEditor = null
@@ -3459,10 +3301,6 @@ const runtimeDiffDescription = computed(() => {
 
 const runtimeConfigDescription = computed(() => {
   return runtimeConfigPath.value || "当前没有 CLI 配置文件路径"
-})
-
-const codexLoginTitle = computed(() => {
-  return codexAuthUpdateAccountId.value ? "更新认证信息" : "添加 Codex 账号"
 })
 
 const configPreviewMap = computed(() => {
@@ -3906,9 +3744,6 @@ function openCodexLoginModal(account = null) {
   showCodexLoginModal.value = true
   closeCodexAccountDetail()
   closeProviderDetail()
-  codexLoginTab.value = "oauth"
-  manualCallbackUrl.value = ""
-  codexAuthDataDraft.value = ""
   codexAuthUpdateAccountId.value = account?.id || ""
   codexProxyDraft.value = account?.proxy || ""
 }
@@ -3923,38 +3758,6 @@ function closeCodexLoginModal() {
   closeCodexAccountDetail()
   closeProviderDetail()
   emit("cancel-codex-official-login")
-}
-
-function startCodexOfficialLogin() {
-  emit("codex-official-login", {
-    accountId: codexAuthUpdateAccountId.value,
-    proxy: codexProxyDraft.value
-  })
-}
-
-async function copyAuthUrl(url) {
-  try {
-    await navigator.clipboard.writeText(url || "")
-    createMessage.success("链接已复制。")
-  } catch (error) {
-    createMessage.error(error.message || String(error))
-  }
-}
-
-async function openExternalLink(url) {
-  try {
-    await systemApi.openExternal({ url })
-  } catch (error) {
-    createMessage.error(error.message || String(error))
-  }
-}
-
-function importCodexAuthData() {
-  emit("codex-auth-json-import", {
-    accountId: codexAuthUpdateAccountId.value,
-    content: codexAuthDataDraft.value,
-    proxy: codexProxyDraft.value
-  })
 }
 
 function enableCodexAccount(account) {
@@ -5093,13 +4896,6 @@ watch(
     })
   },
   { deep: true, immediate: true }
-)
-
-watch(
-  () => props.codexLoginState,
-  () => {
-    manualCallbackUrl.value = ""
-  }
 )
 
 watch(
@@ -6777,39 +6573,6 @@ watch(
     }
   }
 
-  &__codex-login-modal {
-    :deep(.base-modal__panel) {
-      width: 560px;
-      border: 1px solid var(--color-line);
-      border-radius: 16px;
-      box-shadow: 0 24px 70px rgba(15, 23, 42, 0.26);
-    }
-
-    :deep(.base-modal__header) {
-      align-items: center;
-      padding: 22px 26px 20px;
-      border-bottom: 1px solid var(--color-line);
-    }
-
-    :deep(.base-modal__header h2) {
-      color: var(--color-text);
-      font-size: var(--font-size-xl);
-    }
-
-    :deep(.base-modal__close) {
-      width: 28px;
-      height: 28px;
-      border: 0;
-      background: transparent;
-      color: var(--color-text-muted);
-      font-size: var(--font-size-xl);
-    }
-
-    :deep(.base-modal__content) {
-      padding: 18px 26px 24px;
-    }
-  }
-
   &__codex-proxy-modal {
     :deep(.base-modal__panel) {
       width: 440px;
@@ -7405,38 +7168,6 @@ watch(
     gap: 14px;
   }
 
-  &__login-tabs {
-    display: flex;
-    gap: 4px;
-    padding: 4px;
-    border: 1px solid var(--color-line);
-    border-radius: 10px;
-    background: var(--color-primary-soft);
-  }
-
-  &__login-tab {
-    display: inline-flex;
-    flex: 1;
-    align-items: center;
-    justify-content: center;
-    gap: 5px;
-    height: 30px;
-    padding: 0 6px;
-    border: 0;
-    border-radius: 7px;
-    background: transparent;
-    color: var(--color-text-muted);
-    cursor: pointer;
-    font-size: var(--font-size-xs);
-    line-height: 0.72rem;
-    white-space: nowrap;
-  }
-
-  &__login-tab--active {
-    background: var(--color-primary-solid);
-    color: #ffffff;
-  }
-
   &__login-intro {
     margin: 10px 0 0;
     color: var(--color-text-muted);
@@ -7561,37 +7292,6 @@ watch(
       }
     }
   }
-  .providers-auth-session {
-    display: flex;
-    flex-direction: column;
-    gap: 7px;
-    color: var(--color-text-muted);
-    font-size: var(--font-size-sm);
-    .providers-auth-session-row {
-      display: flex;
-      align-items: center;
-      gap: 8px;
-      .providers-auth-session-link {
-        flex: 1;
-        min-width: 0;
-        color: var(--color-primary);
-        overflow-wrap: anywhere;
-        text-decoration: underline;
-      }
-      .providers-auth-session-copy {
-        display: inline-flex;
-        align-items: center;
-        gap: 5px;
-        padding: 6px 9px;
-        border: 1px solid var(--color-line);
-        border-radius: 6px;
-        background: var(--color-panel);
-        color: inherit;
-        white-space: nowrap;
-        cursor: pointer;
-      }
-    }
-  }
 
   &__login-field {
     display: flex;
@@ -7602,99 +7302,17 @@ watch(
       color: var(--color-text-muted);
       font-size: var(--font-size-sm);
     }
-  }
 
-  &__login-copy-row,
-  &__login-callback-row {
-    display: flex;
-    gap: 8px;
-  }
-
-  &__login-copy-row input,
-  &__login-callback-row input,
-  &__login-field input,
-  &__login-field textarea,
-  &__login-tip {
-    min-width: 0;
-    padding: 0 12px;
-    border: 1px solid var(--color-line);
-    border-radius: 10px;
-    background: var(--color-panel-soft);
-    color: var(--color-text-muted);
-    font-size: var(--font-size-sm);
-  }
-
-  &__login-copy-row input,
-  &__login-callback-row input,
-  &__login-field input,
-  &__login-tip {
-    height: 36px;
-  }
-
-  &__login-field textarea {
-    height: 160px;
-    padding: 12px;
-    line-height: 1.55;
-    resize: none;
-  }
-
-  &__login-copy-row input,
-  &__login-callback-row input {
-    flex: 1;
-  }
-
-  &__login-copy-row button,
-  &__login-callback-row button {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    height: 36px;
-    border: 1px solid var(--color-line);
-    border-radius: 10px;
-    background: var(--color-panel);
-    color: var(--color-text-muted);
-    cursor: pointer;
-  }
-
-  &__login-copy-row button {
-    width: 44px;
-    padding: 0;
-  }
-
-  &__login-primary {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    height: 38px;
-    border: 0;
-    border-radius: 10px;
-    background: linear-gradient(90deg, #1f66f2, #10a5aa);
-    color: #ffffff;
-    cursor: pointer;
-  }
-
-  &__login-primary:disabled {
-    cursor: not-allowed;
-    opacity: 0.52;
-  }
-
-  &__login-callback-row button {
-    flex: none;
-    gap: 6px;
-    padding: 0 13px;
-    color: var(--color-text-muted);
-
-    &:disabled {
-      cursor: not-allowed;
-      opacity: 0.52;
+    input {
+      min-width: 0;
+      height: 36px;
+      padding: 0 12px;
+      border: 1px solid var(--color-line);
+      border-radius: 10px;
+      background: var(--color-panel-soft);
+      color: var(--color-text-muted);
+      font-size: var(--font-size-sm);
     }
-  }
-
-  &__login-tip {
-    display: flex;
-    align-items: center;
-    color: var(--color-text-muted);
   }
 
   &__login-actions {
@@ -7714,30 +7332,6 @@ watch(
     button:disabled {
       cursor: not-allowed;
       opacity: 0.52;
-    }
-  }
-
-  &__login-status {
-    padding: 9px 11px;
-    border-radius: 8px;
-    font-size: var(--font-size-sm);
-
-    &--success {
-      border: 1px solid var(--color-success-line);
-      background: var(--color-success-soft);
-      color: var(--color-success);
-    }
-
-    &--failed {
-      border: 1px solid var(--color-danger-line);
-      background: var(--color-danger-soft);
-      color: var(--color-danger);
-    }
-
-    &--cancelled {
-      border: 1px solid var(--color-warning-line);
-      background: var(--color-warning-soft);
-      color: var(--color-warning);
     }
   }
 }

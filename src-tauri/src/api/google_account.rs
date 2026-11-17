@@ -70,9 +70,6 @@ impl GoogleLogin {
         let target = payload["providerId"].as_str().unwrap_or("").to_string();
         let service_mode = store::active(paths)?;
         let mode_generation = store::generation(&database::open(paths)?)?;
-        if service_mode && target.is_empty() {
-            return Err(error("请先新建 Google 账号配置"));
-        }
         if !target.is_empty() {
             find_account(paths, &target)?;
         }
@@ -119,17 +116,24 @@ impl GoogleLogin {
                     return Err(error("登录期间运行模式已变化，请重新登录"));
                 }
                 let old = if service_mode {
-                    let provider = find_account(&paths, &target)?;
-                    let existing_subject = provider["google"]["subject"].as_str().unwrap_or("");
-                    if !existing_subject.is_empty() && existing_subject != subject {
-                        return Err(error("登录账号与待更新的 Google 账号不一致"));
+                    let account_id = if target.is_empty() {
+                        store::query(&database::open(&paths)?,
+                            "SELECT id FROM service_provider_configs WHERE kind='google_account' AND account_id=?1",
+                            &[&subject])?.pop().map(|row|store::text(&row,"id").to_string()).unwrap_or_default()
+                    } else { target.clone() };
+                    if account_id.is_empty() { None } else {
+                        let provider = find_account(&paths, &account_id)?;
+                        let existing_subject = provider["google"]["subject"].as_str().unwrap_or("");
+                        if !existing_subject.is_empty() && existing_subject != subject {
+                            return Err(error("登录账号与待更新的 Google 账号不一致"));
+                        }
+                        Some(provider)
                     }
-                    Some(provider)
                 } else {
                     provider_store::read_providers(&paths)?.into_iter().find(|item| item["type"] == "google-account" && item["google"]["subject"] == subject)
                 };
                 let id = old.as_ref().and_then(|item| item["id"].as_str()).map(str::to_string)
-                    .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+                    .unwrap_or_else(|| if service_mode { String::new() } else { uuid::Uuid::new_v4().to_string() });
                 if !target.is_empty() && target != id { return Err(error("登录账号与待更新的 Google 账号不一致")); }
                 if tokens["refresh_token"].as_str().unwrap_or("").is_empty() {
                     if let Ok(previous) = read_tokens(&paths, &id) {
@@ -153,10 +157,10 @@ impl GoogleLogin {
                 provider["google"] = json!({"subject": subject, "email": info["email"], "name": info["name"], "picture": info["picture"],
                     "proxy": proxy_url, "port": port, "status": "ready", "models": [], "message": ""});
                 // 先持久化授权，再获取额度；额度接口失败不丢失刚获得的 refresh_token。
-                save_login(&paths, &provider, &tokens, mode_generation, service_mode)?;
-                let warning = refresh(&paths, &id).await.err().map(|error| error.to_string());
+                let id = save_login(&paths, &provider, &tokens, mode_generation, service_mode)?;
+                let warning = if service_mode { None } else { refresh(&paths, &id).await.err().map(|error| error.to_string()) };
                 Ok::<_, ManagerError>(json!({"status": "success", "providerId": id,
-                    "message": warning.unwrap_or_else(|| "Google 登录完成，已获取模型与额度".into())}))
+                    "message": warning.unwrap_or_else(|| if service_mode { "Google 登录完成".into() } else { "Google 登录完成，已获取模型与额度".into() })}))
             }.await;
             *login_state.lock().await = match result {
                 Ok(state) => state,
@@ -231,7 +235,7 @@ pub(crate) fn find_account(paths: &AppPaths, id: &str) -> Result<Value, ManagerE
     Ok(provider)
 }
 
-fn save_login(paths: &AppPaths, provider: &Value, tokens: &Value, generation: i64, service: bool) -> Result<(), ManagerError> {
+fn save_login(paths: &AppPaths, provider: &Value, tokens: &Value, generation: i64, service: bool) -> Result<String, ManagerError> {
     if !service { provider_store::initialize(paths)?; }
     let id = provider["id"].as_str().unwrap();
     let mut connection = database::open(paths)?;
@@ -240,15 +244,13 @@ fn save_login(paths: &AppPaths, provider: &Value, tokens: &Value, generation: i6
         return Err(error("登录期间运行模式已变化，请重新登录"));
     }
     if service {
-        let config = store::config(&transaction, id)?;
-        if config["kind"] != "google_account" || !config["deletedAt"].is_null() {
-            return Err(error("Google 账号已删除"));
-        }
-        store::save_google_credentials(&transaction, id, &provider["google"], tokens)?;
-        transaction.execute("UPDATE service_provider_configs SET revision=revision+1,updated_at=?2 WHERE id=?1",
-            params![id,store::now()])?;
+        let name = provider["google"]["email"].as_str().filter(|name|!name.trim().is_empty())
+            .or(provider["google"]["name"].as_str()).unwrap_or("Google 官方账号");
+        let id = store::prepare_official_login(&transaction, id, "google_account",
+            store::text(&provider["google"],"subject"), name, store::text(&provider["google"],"proxy"))?;
+        store::save_google_credentials(&transaction, &id, &provider["google"], tokens)?;
         transaction.commit()?;
-        return Ok(());
+        return Ok(id);
     }
     provider_store::upsert_provider(&transaction, provider)?;
     let oauth = json!(runtime_provider::encrypt_provider_key(&tokens.to_string())?);
@@ -265,7 +267,7 @@ fn save_login(paths: &AppPaths, provider: &Value, tokens: &Value, generation: i6
         provider_store::set_key(&transaction, id, Some(&token))?;
     }
     transaction.commit()?;
-    Ok(())
+    Ok(id.to_string())
 }
 
 fn read_tokens(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> {
@@ -661,6 +663,35 @@ fn error(message: &str) -> ManagerError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn service_google_login_creates_named_account_and_rolls_back_invalid_authorization() {
+        let root = std::env::temp_dir().join(format!("google-service-login-test-{}",uuid::Uuid::new_v4()));
+        let paths = crate::core::paths::resolve_app_paths(&root);
+        crate::api::service_provider::switch_backend(&paths,"service").unwrap();
+        let c = database::open(&paths).unwrap();
+        let generation = store::generation(&c).unwrap();
+        let mut provider = json!({"id":"","google":{"subject":"new-google-subject","email":"google@example.test",
+            "name":"Google 用户","port":34567,"proxy":"http://127.0.0.1:7890"}});
+        let tokens = json!({"access_token":"private-access","refresh_token":"private-refresh","expires_at":9999999999i64});
+        assert!(save_login(&paths,&provider,&json!({"access_token":"invalid"}),generation,true).is_err());
+        assert!(save_login(&paths,&provider,&tokens,generation-1,true).is_err());
+        assert_eq!(store::query(&c,"SELECT count(*) AS total FROM service_provider_configs",&[]).unwrap()[0]["total"],0);
+        let id=save_login(&paths,&provider,&tokens,generation,true).unwrap();
+        assert_eq!(store::config(&c,&id).unwrap()["name"],"google@example.test");
+        assert_eq!(store::config(&c,&id).unwrap()["proxy"],"http://127.0.0.1:7890");
+        assert_eq!(store::google_tokens(&c,&id).unwrap(),tokens);
+        assert_eq!(save_login(&paths,&provider,&tokens,generation,true).unwrap(),id);
+        assert_eq!(store::query(&c,"SELECT count(*) AS total FROM service_provider_configs",&[]).unwrap()[0]["total"],1);
+        provider["id"]=json!(id);
+        provider["google"]["subject"]=json!("wrong-google-account");
+        assert!(save_login(&paths,&provider,&tokens,generation,true).is_err());
+        assert_eq!(store::google_provider(&c,&id).unwrap()["google"]["subject"],"new-google-subject");
+        assert!(!store::table_exists(&c,"providers").unwrap());
+        assert!(!store::table_exists(&c,"provider_keys").unwrap());
+        drop(c);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn service_google_login_persists_only_new_tables_and_rejects_stale_mode() {

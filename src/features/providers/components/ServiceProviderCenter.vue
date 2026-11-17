@@ -126,12 +126,6 @@
           取消登录
         </button>
       </p>
-      <p v-if="googleLoginState?.status === 'pending'" class="notice">
-        Google 登录进行中：{{ googleLoginState.message }}
-        <button class="btn" :disabled="busy" @click="cancelGoogleLogin">
-          取消登录
-        </button>
-      </p>
       <article
         v-for="provider in visibleProviders"
         :key="provider.id"
@@ -364,17 +358,8 @@
               data.backend !== 'service'
             "
             @refresh="refreshQuota(detailProvider)"
-            @login="
-              detailProvider.kind === 'google_account'
-                ? startGoogleLogin(detailProvider)
-                : perform('login', {
-                    accountId: detailProvider.id,
-                    proxy: detailProvider.proxy
-                  })
-            "
-            @import="
-              ((accountProvider = detailProvider.id), (accountContent = ''))
-            "
+            @login="openOfficialLogin(detailProvider)"
+            @import="openOfficialLogin(detailProvider, 'auth')"
             @manage="openGatewayManager(detailProvider)"
             @edit="editProvider(detailProvider)"
           />
@@ -685,6 +670,25 @@
       </div>
     </BaseModal>
 
+    <CodexAccountLoginModal
+      v-if="officialLogin?.kind === 'codex_account'"
+      :account="officialLogin.provider"
+      :initial-tab="officialLogin.tab"
+      :pending="busy"
+      :login-state="officialLoginState"
+      @login="startOfficialLogin"
+      @cancel="cancelOfficialLogin"
+      @import-auth="importOfficialAccount"
+      @close="closeOfficialLogin"
+    />
+    <GoogleAccountModal
+      v-if="officialLogin?.kind === 'google_account'"
+      :provider="officialLogin.provider"
+      service-mode
+      @created="completeOfficialLogin"
+      @close="officialLogin = null"
+    />
+
     <BaseModal
       v-if="showGatewayManager"
       title="网关与 Agent 管理"
@@ -973,8 +977,12 @@
                 :disabled="Boolean(form.id)"
               >
                 <option value="api">OpenAI 兼容服务商</option>
-                <option value="codex_account">Codex 官方账号</option>
-                <option value="google_account">Google 官方账号</option>
+                <option v-if="form.id" value="codex_account">
+                  Codex 官方账号
+                </option>
+                <option v-if="form.id" value="google_account">
+                  Google 官方账号
+                </option>
               </select>
               <ChevronDown
                 class="provider-select-arrow"
@@ -1340,29 +1348,6 @@
       </div>
     </BaseModal>
     <BaseModal
-      v-if="accountProvider"
-      title="导入官方账号"
-      description="粘贴官方 auth.json，凭据会加密写入新表。"
-      @close="accountProvider = ''"
-    >
-      <div class="provider-form">
-        <textarea
-          v-model="accountContent"
-          class="input code-input"
-          rows="12"
-          autocomplete="off"
-          spellcheck="false"
-        ></textarea
-        ><button
-          class="btn btn-primary"
-          :disabled="busy || !accountContent.trim()"
-          @click="importAccount"
-        >
-          导入账号
-        </button>
-      </div>
-    </BaseModal>
-    <BaseModal
       v-if="deleteProvider"
       title="删除服务商"
       :description="`将软删除 ${deleteProvider.name}。使用中的实例需要先解除接管，统计和旧表记录会保留。`"
@@ -1429,6 +1414,8 @@ import BaseModal from "@/components/BaseModal.vue"
 import ProviderApiKeyInput from "./ProviderApiKeyInput.vue"
 import ProviderIconPicker from "./ProviderIconPicker.vue"
 import ProviderModelListEditor from "./ProviderModelListEditor.vue"
+import CodexAccountLoginModal from "./CodexAccountLoginModal.vue"
+import GoogleAccountModal from "./GoogleAccountModal.vue"
 import ServiceAgentModelFields from "./ServiceAgentModelFields.vue"
 import ServiceOfficialAccountOverview from "./ServiceOfficialAccountOverview.vue"
 import ServiceProviderOverview from "./ServiceProviderOverview.vue"
@@ -1454,13 +1441,12 @@ const data = ref({
 const busy = ref(false)
 const providerTab = ref("agents")
 const showCreateOptions = ref(false)
-const googleLoginState = ref(null)
+const officialLogin = ref(null)
+const officialLoginState = ref(null)
 const refreshingQuotaIds = ref(new Set())
-let googleLoginTimer
-let googleLoginRequest = 0
+let officialLoginRequest = 0
 let officialQuotaTask
 let disposed = false
-let savedProviderId = ""
 const createSources = [
   {
     kind: "api",
@@ -1600,8 +1586,6 @@ const draftModelNames = computed(() =>
     .join("\n")
 )
 const applyForm = ref(null)
-const accountProvider = ref("")
-const accountContent = ref("")
 const deleteProvider = ref(null)
 const backup = ref(null)
 const createdToken = ref(null)
@@ -1665,20 +1649,19 @@ watch(
 watch(providerTab, (tab) => {
   if (tab === "codex_account") refreshOfficialQuotas()
 })
-onMounted(async () => {
-  await refresh()
-  if (disposed) return
-  try {
-    const request = googleLoginRequest
-    const result = await serviceProviderApi.invoke("google-login-state")
-    if (disposed || request !== googleLoginRequest) return
-    googleLoginState.value = result
-    if (googleLoginState.value?.status === "pending")
-      googleLoginTimer = setTimeout(() => pollGoogleLogin(request), 1500)
-  } catch (error) {
-    createMessage.error(error?.message || String(error))
+onMounted(refresh)
+watch(
+  () => props.loginState,
+  (value) => {
+    if (
+      officialLogin.value?.kind !== "codex_account" ||
+      !officialLoginState.value
+    )
+      return
+    officialLoginState.value = value
+    if (value?.status === "success" && !busy.value) completeOfficialLogin()
   }
-})
+)
 const agentLabel = (id) =>
   agents.find((item) => item.id === id)?.label || id || "未鉴权"
 const agentVersion = (id) =>
@@ -1853,7 +1836,6 @@ async function perform(action, payload, notify = true) {
   busy.value = true
   try {
     const result = await serviceProviderApi.invoke(action, payload)
-    if (action === "save") savedProviderId = result.id || ""
     if (action === "issue-token") createdToken.value = result
     data.value = await serviceProviderApi.invoke("state")
     if (notify) createMessage.success("操作已完成")
@@ -1873,70 +1855,98 @@ async function perform(action, payload, notify = true) {
 
 async function createSource(source) {
   showCreateOptions.value = false
-  await editProvider({
-    kind: source.kind,
-    name: source.kind === "api" ? "" : source.label,
-    icon: source.icon
-  })
+  if (source.kind === "api")
+    await editProvider({ kind: "api", icon: source.icon })
+  else openOfficialLogin(source)
 }
 
-// 登录流程沿用已有 OAuth 实现，新模式通过独立入口存取新表。
-async function startGoogleLogin(provider) {
+function openOfficialLogin(provider, tab = "oauth") {
+  if (busy.value) return
+  showCreateOptions.value = false
+  detailProviderId.value = ""
+  form.value = null
+  officialLoginState.value = null
+  officialLogin.value = {
+    kind: provider.kind,
+    provider: provider.id ? provider : null,
+    tab
+  }
+}
+
+async function startOfficialLogin(payload) {
   if (busy.value) return
   busy.value = true
-  const request = ++googleLoginRequest
-  clearTimeout(googleLoginTimer)
+  const request = ++officialLoginRequest
+  officialLoginState.value = { status: "starting" }
   try {
-    const result = await serviceProviderApi.invoke("google-login", {
-      providerId: provider.id,
-      proxy: provider.proxy
-    })
-    if (disposed || request !== googleLoginRequest) return
-    googleLoginState.value = result
-    if (result?.status === "pending")
-      googleLoginTimer = setTimeout(() => pollGoogleLogin(request), 1500)
-  } catch (error) {
-    createMessage.error(error?.message || String(error))
-  } finally {
-    busy.value = false
-  }
-}
-
-async function pollGoogleLogin(request = googleLoginRequest) {
-  if (disposed || request !== googleLoginRequest) return
-  try {
-    const result = await serviceProviderApi.invoke("google-login-state")
-    if (disposed || request !== googleLoginRequest) return
-    googleLoginState.value = result
-    if (result.status === "pending") {
-      googleLoginTimer = setTimeout(() => pollGoogleLogin(request), 1500)
+    const result = await serviceProviderApi.invoke("login", payload)
+    if (disposed || request !== officialLoginRequest) {
+      await serviceProviderApi.invoke("cancel-login")
       return
     }
-    clearTimeout(googleLoginTimer)
-    if (result.status === "success") {
-      await refresh()
-      createMessage.success(result.message || "Google 登录完成")
-    } else if (result.status === "failed") {
-      createMessage.error(result.message || "Google 登录失败")
-    }
+    if (officialLogin.value && !["success", "failed", "cancelled"].includes(officialLoginState.value?.status))
+      officialLoginState.value = result
   } catch (error) {
-    clearTimeout(googleLoginTimer)
-    createMessage.error(error?.message || String(error))
+    if (request === officialLoginRequest)
+      officialLoginState.value = {
+        status: "failed",
+        message: error?.message || String(error)
+      }
+  } finally {
+    busy.value = false
+    if (officialLoginState.value?.status === "success")
+      await completeOfficialLogin()
   }
 }
 
-async function cancelGoogleLogin() {
-  if (await perform("google-cancel-login")) {
-    googleLoginRequest += 1
-    clearTimeout(googleLoginTimer)
-    googleLoginState.value = null
+async function cancelOfficialLogin() {
+  if (busy.value) return false
+  officialLoginRequest += 1
+  if (await perform("cancel-login", undefined, false)) {
+    officialLoginState.value = null
+    return true
   }
+  return false
+}
+
+async function closeOfficialLogin() {
+  if (busy.value) return
+  if (
+    officialLoginState.value?.status === "pending" &&
+    !(await cancelOfficialLogin())
+  )
+    return
+  officialLogin.value = null
+}
+
+async function completeOfficialLogin() {
+  officialLogin.value = null
+  officialLoginState.value = null
+  providerTab.value = "codex_account"
+  await refresh()
+  createMessage.success("官方账号已保存，名称已根据登录信息自动生成")
+}
+
+async function importOfficialAccount(payload) {
+  if (
+    await perform(
+      "import-account",
+      {
+        id: payload.accountId,
+        proxy: payload.proxy,
+        content: payload.content
+      },
+      false
+    )
+  )
+    await completeOfficialLogin()
 }
 
 onUnmounted(() => {
   disposed = true
-  googleLoginRequest += 1
-  clearTimeout(googleLoginTimer)
+  officialLoginRequest += 1
+  if (officialLoginState.value?.status === "pending")
+    serviceProviderApi.invoke("cancel-login").catch(() => {})
 })
 
 async function editProvider(provider = {}, section = "provider") {
@@ -2048,6 +2058,12 @@ async function selectAgentProvider() {
     (item) => item.id === agentProviderId.value
   )
   if (!provider?.enabled || !provider.hasCredential) return
+  if (provider.kind !== "api" && !providerModels(provider.id).length) {
+    if (!(await perform("fetch-models", {
+      providerId: provider.id,
+      agentVersion: agentVersion("codex")
+    }, false))) return
+  }
   await editProvider(provider, "agent")
   if (form.value) {
     const binding = form.value.bindings[agentBindingIndex.value]
@@ -2204,7 +2220,6 @@ async function fetchEditorModels() {
 
 async function saveProvider() {
   try {
-    const startLogin = !form.value.id && form.value.kind !== "api"
     const kind = form.value.kind
     const models = parseDraftModels()
     for (const binding of form.value.bindings) {
@@ -2255,18 +2270,6 @@ async function saveProvider() {
     if (await perform("save", value)) {
       form.value = null
       providerTab.value = kind === "api" ? "api" : "codex_account"
-      if (startLogin && savedProviderId) {
-        detailProviderId.value = savedProviderId
-        detailTab.value = "overview"
-        if (kind === "google_account")
-          await startGoogleLogin({ id: savedProviderId, proxy: value.proxy })
-        else
-          await perform(
-            "login",
-            { accountId: savedProviderId, proxy: value.proxy },
-            false
-          )
-      }
     }
   } catch (error) {
     createMessage.error(error?.message || String(error))
@@ -2322,18 +2325,6 @@ function updateAgent() {
 
 async function applyProvider() {
   if (await perform("activate", applyForm.value)) closeApply()
-}
-
-async function importAccount() {
-  if (
-    await perform("import-account", {
-      id: accountProvider.value,
-      content: accountContent.value
-    })
-  ) {
-    accountProvider.value = ""
-    accountContent.value = ""
-  }
 }
 
 async function removeProvider() {

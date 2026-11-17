@@ -628,7 +628,10 @@ impl ManagerState {
                     &self.state["cliTargets"], payload).await;
             }
             if action == "cancel-login" {
-                return codex_account::cancel_login(&self.paths, &self.codex_login_cache).await;
+                let result = codex_account::cancel_login(&self.paths, &self.codex_login_cache).await?;
+                app.emit("state:changed", &result)
+                    .map_err(|error| ManagerError::System(error.to_string()))?;
+                return Ok(result);
             }
             if matches!(action, "google-login" | "google-login-state" | "google-cancel-login") {
                 if !crate::core::service_provider_store::active(&self.paths)? {

@@ -25,6 +25,9 @@ const files = [
   "src/components/AppSidebar.vue",
   "src/components/QuickSwitchPanel.vue",
   "src/features/providers/components/ServiceProviderCenter.vue",
+  "src/features/providers/index.vue",
+  "src/features/providers/components/CodexAccountLoginModal.vue",
+  "src/features/providers/components/GoogleAccountModal.vue",
   "src/features/providers/components/ProviderIconPicker.vue",
   "src/features/providers/components/ProviderModelListEditor.vue",
   "src/features/providers/components/ServiceAgentModelFields.vue",
@@ -81,7 +84,7 @@ for (const filename of files) {
       { format: "cjs" }
     ).code
   } else if (
-    /ProviderIconPicker|ProviderModelListEditor|ServiceAgentModelFields|ServiceOfficialAccountOverview|ServiceProviderOverview/.test(
+    /ProviderIconPicker|ProviderModelListEditor|ServiceAgentModelFields|ServiceOfficialAccountOverview|ServiceProviderOverview|CodexAccountLoginModal|GoogleAccountModal/.test(
       filename
     )
   ) {
@@ -207,8 +210,10 @@ let failSave = false
 let detailOverride = {}
 let quotaHandler
 let googleStateHandler
+let loginHandler
 const invoke = async (action, payload) => {
   calls.push({ action, payload })
+  if (action === "login" && loginHandler) return loginHandler(payload)
   if (action === "refresh-quota" && quotaHandler) return quotaHandler(payload)
   if (action === "google-login-state" && googleStateHandler)
     return googleStateHandler()
@@ -239,7 +244,7 @@ const invoke = async (action, payload) => {
         ...state.models,
         {
           id: "fetched",
-          providerId: "p",
+          providerId: payload.providerId,
           upstreamModelId: "fetched-model",
           enabled: 1
         }
@@ -265,6 +270,9 @@ const invoke = async (action, payload) => {
   if (action === "save") return { id: payload.id || `new-${payload.kind}` }
   if (action === "google-login")
     return { status: "pending", message: "等待授权" }
+  if (action === "login")
+    return { status: "pending", authUrl: "https://auth.example.test/authorize" }
+  if (action === "import-account") return { id: payload.id || "new-official" }
   return {}
 }
 const localRequire = (name) => {
@@ -273,6 +281,18 @@ const localRequire = (name) => {
     return editorModules.get(name.split("/").pop())
   if (name === "@/api/modules/service-providers")
     return { serviceProviderApi: { invoke } }
+  if (name === "@/api/modules/accounts")
+    return {
+      googleAccountApi: {
+        login: (payload) => invoke("legacy-google-login", payload),
+        state: () => invoke("legacy-google-state"),
+        cancel: () => invoke("legacy-google-cancel")
+      }
+    }
+  if (name === "@/api/modules/system")
+    return {
+      systemApi: { openExternal: (payload) => invoke("open-external", payload) }
+    }
   if (name === "@/utils/formatters") return formatterModule.exports
   if (name === "@/utils/message")
     return {
@@ -1463,38 +1483,115 @@ await bindings.saveProvider()
 const created = calls.find((item) => item.action === "save").payload
 assert.equal(created.models[0].upstreamModelId, "brand-new-model")
 assert.ok(created.bindings.every((item) => !item.enabled))
-await bindings.editProvider()
-bindings.form.value.kind = "codex_account"
-bindings.form.value.name = "新官方账号"
-bindings.form.value.apiKey = "previous-api-draft"
+// 官方账号直接进入独立登录面板，开始授权前不创建记录。
 calls.length = 0
-await bindings.saveProvider()
-assert.equal(calls.find((item) => item.action === "save").payload.apiKey, "")
+await bindings.createSource(
+  bindings.createSources.find((item) => item.kind === "codex_account")
+)
+assert.equal(bindings.form.value, null)
+assert.equal(bindings.officialLogin.value.kind, "codex_account")
+assert.equal(bindings.officialLogin.value.provider, null)
+assert.ok(
+  !calls.some((item) =>
+    ["save", "login", "import-account"].includes(item.action)
+  )
+)
+const codexLoginHtml = await renderCenter(state, (value) =>
+  value.openOfficialLogin({ kind: "codex_account" })
+)
+assert.ok(
+  codexLoginHtml.includes("OAuth 授权") && codexLoginHtml.includes("浏览器登录")
+)
+assert.ok(codexLoginHtml.includes("JSON 数据"))
+assert.ok(!codexLoginHtml.includes("provider-form"))
+await bindings.startOfficialLogin({
+  accountId: "",
+  proxy: "http://127.0.0.1:7890"
+})
 assert.deepEqual(calls.find((item) => item.action === "login").payload, {
-  accountId: "new-codex_account",
+  accountId: "",
+  proxy: "http://127.0.0.1:7890"
+})
+assert.equal(bindings.officialLoginState.value.status, "pending")
+await bindings.closeOfficialLogin()
+assert.ok(calls.some((item) => item.action === "cancel-login"))
+assert.equal(bindings.officialLogin.value, null)
+assert.ok(!calls.some((item) => item.action === "save"))
+bindings.openOfficialLogin(official, "auth")
+assert.equal(bindings.officialLogin.value.provider.id, official.id)
+assert.equal(bindings.officialLogin.value.tab, "auth")
+await bindings.importOfficialAccount({
+  accountId: official.id,
+  content: '{"tokens":{}}',
   proxy: ""
 })
+assert.deepEqual(
+  calls.find((item) => item.action === "import-account").payload,
+  {
+    id: official.id,
+    content: '{"tokens":{}}',
+    proxy: ""
+  }
+)
+assert.equal(bindings.officialLogin.value, null)
 await bindings.createSource(
   bindings.createSources.find((item) => item.kind === "google_account")
 )
+assert.equal(bindings.form.value, null)
+assert.equal(bindings.officialLogin.value.kind, "google_account")
+const googleLoginHtml = await renderCenter(state, (value) =>
+  value.openOfficialLogin({ kind: "google_account" })
+)
+assert.ok(googleLoginHtml.includes("登录 Google 账号"))
+assert.ok(!googleLoginHtml.includes("provider-form"))
 calls.length = 0
-await bindings.saveProvider()
+const GoogleLogin = editorModules.get("GoogleAccountModal.vue").default
+let googleBindings
+const googleEvents = []
+await renderToString(
+  createSSRApp({
+    setup(props, context) {
+      googleBindings = GoogleLogin.setup(
+        { serviceMode: true, provider: null },
+        {
+          ...context,
+          emit: (...args) => googleEvents.push(args)
+        }
+      )
+      return () => null
+    }
+  })
+)
+await googleBindings.login()
 assert.deepEqual(calls.find((item) => item.action === "google-login").payload, {
-  providerId: "new-google_account",
+  providerId: undefined,
   proxy: ""
 })
-assert.equal(bindings.googleLoginState.value.status, "pending")
+assert.equal(googleBindings.loginState.value.status, "pending")
+assert.ok(
+  !calls.some(
+    (item) => item.action.startsWith("legacy-google-") || item.action === "save"
+  )
+)
 let releaseGoogleState
 googleStateHandler = () =>
   new Promise((resolve) => {
     releaseGoogleState = resolve
   })
-const pendingGooglePoll = bindings.pollGoogleLogin()
-await bindings.cancelGoogleLogin()
+const pendingGooglePoll = googleBindings.poll()
+await googleBindings.cancel()
 releaseGoogleState({ status: "pending" })
 await pendingGooglePoll
 googleStateHandler = undefined
-assert.equal(bindings.googleLoginState.value, null)
+assert.notEqual(googleBindings.loginState.value.status, "pending")
+googleStateHandler = async () => ({
+  status: "success",
+  providerId: "auto-google"
+})
+await googleBindings.poll()
+assert.deepEqual(googleEvents.at(-1), ["created", "auto-google"])
+googleStateHandler = undefined
+await bindings.closeOfficialLogin()
 await bindings.openToolConfig(state.providers[0])
 assert.equal(bindings.agentConfig.value.id, "gateway")
 await bindings.saveAgentConfig()
@@ -1587,6 +1684,13 @@ await liveBindings.refresh()
 await liveBindings.openAgentConfig(cliTargets[0])
 liveBindings.agentProviderId.value = official.id
 await liveBindings.selectAgentProvider()
+assert.ok(
+  calls.some(
+    (item) =>
+      item.action === "fetch-models" && item.payload.providerId === official.id
+  )
+)
+assert.equal(liveBindings.agentBinding.value.defaultModelName, "fetched-model")
 liveBindings.closeAgentConfig()
 assert.ok(!calls.some((item) => item.action === "refresh-quota"))
 let releaseQuota
@@ -1638,6 +1742,44 @@ assert.deepEqual(
 )
 quotaHandler = undefined
 state = previousState
+
+// 后端成功事件可先于 IPC 返回；完成后关闭面板并更新官方列表。
+const loginProps = reactive({
+  initialState: state,
+  cliTargets,
+  runtimeConfigSchemas,
+  loginState: null
+})
+let eventLoginBindings
+const eventLoginApp = testRenderer.createApp({
+  setup(_, context) {
+    eventLoginBindings = Center.setup(loginProps, context)
+    return () => null
+  }
+})
+eventLoginApp.mount({})
+await settle()
+eventLoginBindings.openOfficialLogin({ kind: "codex_account" })
+let finishLogin
+loginHandler = () =>
+  new Promise((resolve) => {
+    finishLogin = resolve
+  })
+const startingLogin = eventLoginBindings.startOfficialLogin({
+  accountId: "",
+  proxy: ""
+})
+loginProps.loginState = { status: "success", providerId: "auto-codex" }
+await settle()
+assert.equal(eventLoginBindings.officialLoginState.value.status, "success")
+finishLogin({ status: "pending" })
+await startingLogin
+await settle()
+assert.equal(eventLoginBindings.officialLogin.value, null)
+assert.equal(eventLoginBindings.providerTab.value, "codex_account")
+assert.equal(eventLoginBindings.busy.value, false)
+loginHandler = undefined
+eventLoginApp.unmount()
 
 // 模式入口位于系统设置；等待同步时阻止重复点击，失败保持旧模式，成功后显示后端新状态。
 const settingsModule = { exports: {} }

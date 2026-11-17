@@ -32,6 +32,8 @@ const localRequire = (name) => {
   if (name.endsWith("/ProviderModelListEditor.vue")) {
     return { default: ModelListEditor, __esModule: true }
   }
+  if (name.endsWith("/CodexAccountLoginModal.vue"))
+    return { default: CodexLogin, __esModule: true }
   if (name === "@/components/BaseModal.vue") {
     return {
       default: {
@@ -57,6 +59,12 @@ const localRequire = (name) => {
       usageApi: api
     }
   if (name === "@/api/modules/accounts") return { googleAccountApi: api }
+  if (name === "@/api/modules/system")
+    return {
+      systemApi: {
+        openExternal: async (payload) => openedUrls.push(payload.url)
+      }
+    }
   if (name === "@/api/modules/providers")
     return { claudeDesktopApi: api, providerApi }
   if (name === "@/utils/message")
@@ -106,6 +114,9 @@ function loadComponent(filename) {
 }
 const ModelListEditor = loadComponent(
   "src/features/providers/components/ProviderModelListEditor.vue"
+)
+const CodexLogin = loadComponent(
+  "src/features/providers/components/CodexAccountLoginModal.vue"
 )
 const Providers = loadComponent("src/features/providers/index.vue")
 const props = {
@@ -258,18 +269,14 @@ assert.equal(bindings.draft.syncModelList, false)
 
 let authBindings
 const Auth = {
-  ...Providers,
+  ...CodexLogin,
   setup(props, context) {
-    authBindings = Providers.setup(props, context)
-    authBindings.showCodexLoginModal.value = true
-    authBindings.codexLoginTab.value = "json"
+    authBindings = CodexLogin.setup(props, context)
     return authBindings
   }
 }
 const authApp = createSSRApp(Auth, {
-  ...props,
-  cliTargets: [{ id: "codex", name: "Codex", installed: true }],
-  runtimeConfigSchemas: { codex: schema }
+  initialTab: "auth"
 })
 authApp.component("ElInput", { render: () => null })
 authApp.config.errorHandler = (error) => failures.push(error)
@@ -277,8 +284,8 @@ const authHtml = await renderToString(authApp)
 assert.ok(authHtml.includes('href="https://chatgpt.com/api/auth/session"'))
 assert.ok(authHtml.includes("复制地址"))
 assert.equal(openedUrls.length, 0)
-await authBindings.openExternalLink(authBindings.codexSessionUrl)
-await authBindings.copyAuthUrl(authBindings.codexSessionUrl)
+await authBindings.openExternalLink(authBindings.sessionUrl)
+await authBindings.copyAuthUrl(authBindings.sessionUrl)
 assert.deepEqual(openedUrls, ["https://chatgpt.com/api/auth/session"])
 assert.deepEqual(copiedUrls, ["https://chatgpt.com/api/auth/session"])
 assert.deepEqual(failures, [])
@@ -461,16 +468,25 @@ for (const cli of ["claude", "codex"]) {
     cliTargets: [{ id: cli, name: cli, installed: true }],
     runtimeConfigSchemas: { [cli]: schema },
     providers: [disabledProvider],
-    onSaveProvider: payload => saves.push(payload),
-    onDeleteProvider: id => deletions.push(id)
+    onSaveProvider: (payload) => saves.push(payload),
+    onDeleteProvider: (id) => deletions.push(id)
   })
   app.component("ElInput", { render: () => null })
-  app.config.errorHandler = error => failures.push(error)
+  app.config.errorHandler = (error) => failures.push(error)
   const html = await renderToString(app)
-  for (const label of ["查看详情", "编辑 Provider", "删除 Provider", "管理 API Key"]) {
+  for (const label of [
+    "查看详情",
+    "编辑 Provider",
+    "删除 Provider",
+    "管理 API Key"
+  ]) {
     assert.ok(html.includes(`aria-label="${label}"`))
   }
-  assert.ok(!html.includes(`aria-label="启动 ${cli === "claude" ? "Claude" : "Codex"} 实例"`))
+  assert.ok(
+    !html.includes(
+      `aria-label="启动 ${cli === "claude" ? "Claude" : "Codex"} 实例"`
+    )
+  )
   disabledBindings.openProviderDetail(disabledProvider)
   assert.equal(disabledBindings.showProviderDrawer.value, true)
   assert.equal(disabledBindings.providerDetail.value.id, disabledProvider.id)
@@ -505,10 +521,10 @@ const accountApp = createSSRApp(DisabledAccounts, {
   cliTargets: [{ id: "codex", name: "Codex", installed: true }],
   runtimeConfigSchemas: { codex: schema },
   codexAccounts: [disabledAccount],
-  onCodexAccountDelete: payload => accountDeletions.push(payload)
+  onCodexAccountDelete: (payload) => accountDeletions.push(payload)
 })
 accountApp.component("ElInput", { render: () => null })
-accountApp.config.errorHandler = error => failures.push(error)
+accountApp.config.errorHandler = (error) => failures.push(error)
 const accountHtml = await renderToString(accountApp)
 for (const label of ["查看详情", "编辑代理", "删除账号"]) {
   assert.ok(accountHtml.includes(`aria-label="${label}"`))
@@ -534,24 +550,29 @@ const viewer = createSSRApp(ClaudeModelViewer, claudeApp._props)
 viewer.component("ElInput", { render: () => null })
 viewer.provide(ID_INJECTION_KEY, { prefix: 3, current: 0 })
 viewer.provide(ZINDEX_INJECTION_KEY, { current: 0 })
-viewer.config.errorHandler = error => failures.push(error)
+viewer.config.errorHandler = (error) => failures.push(error)
 const viewerHtml = await renderToString(viewer)
 assert.ok(viewerHtml.includes('class="provider-model-item"'))
 assert.ok(viewerHtml.includes('class="provider-model-name"'))
 assert.ok(!viewerHtml.includes('class="provider-model-remove"'))
 assert.ok(!viewerHtml.includes('class="provider-model-input"'))
 assert.ok(!viewerHtml.includes("同步模型列表"))
-const emptyViewerHtml = await renderToString(createSSRApp(ModelListEditor, {
-  modelValue: "",
-  readonly: true
-}))
+const emptyViewerHtml = await renderToString(
+  createSSRApp(ModelListEditor, {
+    modelValue: "",
+    readonly: true
+  })
+)
 assert.ok(emptyViewerHtml.includes("暂无上游模型"))
 assert.ok(!emptyViewerHtml.includes('class="provider-model-add"'))
 const readonlyEvents = []
-const readonlyBindings = ModelListEditor.setup(reactive({
-  readonly: true,
-  modelValue: "saved-model"
-}), { expose() {}, emit: (...args) => readonlyEvents.push(args) })
+const readonlyBindings = ModelListEditor.setup(
+  reactive({
+    readonly: true,
+    modelValue: "saved-model"
+  }),
+  { expose() {}, emit: (...args) => readonlyEvents.push(args) }
+)
 readonlyBindings.modelInput.value = "new-model"
 readonlyBindings.addModels()
 readonlyBindings.removeModel("saved-model")

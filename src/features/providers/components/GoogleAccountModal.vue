@@ -1,7 +1,11 @@
 <template>
   <BaseModal
     title="Google 账号"
-    description="登录后查看模型额度，选择 Codex 使用的模型。"
+    :description="
+      serviceMode
+        ? '通过浏览器授权，账号名称根据登录信息自动生成。'
+        : '登录后查看模型额度，选择 Codex 使用的模型。'
+    "
     @close="close"
   >
     <section class="google-account">
@@ -54,7 +58,7 @@
           取消授权
         </button>
         <button
-          v-if="account"
+          v-if="account && !serviceMode"
           class="google-button"
           :disabled="busy || waiting || account.enabled === false"
           @click="refresh"
@@ -94,7 +98,7 @@
         }}
       </p>
 
-      <template v-if="account">
+      <template v-if="account && !serviceMode">
         <div v-if="account.google?.quotaGroups?.length" class="google-groups">
           <div class="google-model-heading">
             <span data-emphasis>共享额度</span>
@@ -222,12 +226,23 @@ import { RefreshCw } from "lucide-vue-next"
 import BaseModal from "@/components/BaseModal.vue"
 import AiIcon from "@/components/AiIcon.vue"
 import { googleAccountApi } from "@/api/modules/accounts"
+import { serviceProviderApi } from "@/api/modules/service-providers"
 import { createMessage } from "@/utils/message"
 
-const props = defineProps({ provider: { type: Object, default: null } })
+const props = defineProps({
+  provider: { type: Object, default: null },
+  serviceMode: { type: Boolean, default: false }
+})
 const emit = defineEmits(["close", "created"])
+const api = props.serviceMode
+  ? {
+      login: (payload) => serviceProviderApi.invoke("google-login", payload),
+      state: () => serviceProviderApi.invoke("google-login-state"),
+      cancel: () => serviceProviderApi.invoke("google-cancel-login")
+    }
+  : googleAccountApi
 const account = ref(props.provider)
-const proxy = ref(props.provider?.google?.proxy || "")
+const proxy = ref(props.provider?.proxy || props.provider?.google?.proxy || "")
 const model = ref(props.provider?.runtimeConfig?.mainModel || "")
 const busy = ref(false)
 const loginState = ref({})
@@ -247,6 +262,7 @@ const planLabel = computed(
 )
 let pollTimer = null
 let stopped = false
+let loginRequest = 0
 
 watch(
   () => props.provider,
@@ -267,49 +283,63 @@ async function run(action) {
   message.value = ""
   try {
     await action()
+    return true
   } catch (error) {
     failed.value = true
     message.value = error.message || String(error)
+    return false
   } finally {
     busy.value = false
   }
 }
 
 // 串行轮询授权状态，关闭弹窗后停止监听，避免重复轮询或遗留授权服务。
-async function poll() {
-  if (stopped) return
+async function poll(request = loginRequest) {
+  if (stopped || request !== loginRequest) return
   try {
-    const result = await googleAccountApi.state()
-    if (stopped) return
+    const result = await api.state()
+    if (stopped || request !== loginRequest) return
     loginState.value = result || {}
     message.value = result?.message || ""
     failed.value = result?.status === "failed"
-    if (result?.status === "success" && result.provider) {
-      applyAccount(result.provider)
+    if (
+      result?.status === "success" &&
+      (props.serviceMode || result.provider)
+    ) {
+      if (!props.serviceMode) applyAccount(result.provider)
       emit("created", result.providerId)
     }
   } catch (error) {
     message.value = error.message || String(error)
     failed.value = true
   }
-  if (!stopped && waiting.value) pollTimer = setTimeout(poll, 1000)
+  if (!stopped && request === loginRequest && waiting.value)
+    pollTimer = setTimeout(() => poll(request), 1000)
 }
 
 function login() {
   return run(async () => {
-    loginState.value = await googleAccountApi.login({
+    const request = ++loginRequest
+    clearTimeout(pollTimer)
+    const result = await api.login({
       providerId: account.value?.id,
       proxy: proxy.value
     })
+    if (stopped || request !== loginRequest) {
+      await api.cancel()
+      return
+    }
+    loginState.value = result
     message.value = loginState.value.message
-    pollTimer = setTimeout(poll, 1000)
+    if (waiting.value) pollTimer = setTimeout(() => poll(request), 1000)
   })
 }
 
 function cancel() {
+  loginRequest += 1
   return run(async () => {
     clearTimeout(pollTimer)
-    loginState.value = await googleAccountApi.cancel()
+    loginState.value = await api.cancel()
     message.value = loginState.value.message
   })
 }
@@ -376,14 +406,16 @@ function resetLabel(value) {
 }
 
 async function close() {
-  if (waiting.value) await cancel()
+  if (busy.value) return
+  if (waiting.value && !(await cancel())) return
   emit("close")
 }
 
 onBeforeUnmount(() => {
   stopped = true
+  loginRequest += 1
   clearTimeout(pollTimer)
-  if (waiting.value) googleAccountApi.cancel().catch(() => {})
+  if (waiting.value) api.cancel().catch(() => {})
 })
 </script>
 

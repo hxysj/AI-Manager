@@ -34,6 +34,7 @@ const MISSING_REFRESH_TOKEN_REASON: &str = "missing_refresh_token";
 #[derive(Clone)]
 pub struct CodexLoginCache {
     inner: Arc<Mutex<CodexLoginInner>>,
+    listener_task: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
 }
 
 #[derive(Clone, Debug)]
@@ -69,6 +70,7 @@ impl CodexLoginCache {
                 state: None,
                 listener_active: false,
             })),
+            listener_task: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -93,6 +95,14 @@ impl CodexLoginCache {
 
     async fn finish_listener(&self) {
         self.inner.lock().await.listener_active = false;
+    }
+
+    async fn stop_listener(&self) {
+        if let Some(task) = self.listener_task.lock().await.take() {
+            task.abort();
+            let _ = task.await;
+        }
+        self.finish_listener().await;
     }
 }
 
@@ -124,7 +134,7 @@ pub async fn start_login(
 
     let target_account_id = string_value(payload.get("accountId"));
     let service_mode = crate::core::service_provider_store::active(paths)?;
-    if service_mode {
+    if service_mode && !target_account_id.is_empty() {
         let config = crate::core::service_provider_store::config(&crate::core::database::open(paths)?, &target_account_id)?;
         if config["kind"] != "codex_account" || !config["deletedAt"].is_null() {
             return Err(ManagerError::System("请选择配置中心中的官方账号服务商".into()));
@@ -170,7 +180,7 @@ pub async fn start_login(
         cli_targets: cli_targets.clone(),
     };
 
-    tauri::async_runtime::spawn(async move {
+    let task = tokio::spawn(async move {
         let callback_context = context.clone();
 
         if let Err(error) = run_callback_server(context).await {
@@ -178,14 +188,20 @@ pub async fn start_login(
             eprintln!("{error}");
         }
     });
+    *login_cache.listener_task.lock().await = Some(task);
 
-    app.opener()
+    let message = if app.opener()
         .open_url(auth_url.clone(), None::<&str>)
-        .map_err(|error| ManagerError::System(format!("打开 Codex 授权链接失败：{}", error)))?;
+        .is_err() {
+        "浏览器未能自动打开，请复制授权链接后打开"
+    } else {
+        "请在浏览器完成 Codex 授权"
+    };
 
     Ok(json!({
       "authUrl": auth_url,
       "redirectUri": OAUTH_REDIRECT_URI,
+      "message": message,
       "status": "pending"
     }))
 }
@@ -211,7 +227,7 @@ pub async fn cancel_login(
         }),
     );
     login_cache.set_state(Some(next_state)).await;
-    login_cache.finish_listener().await;
+    login_cache.stop_listener().await;
     login_cache.set_state(None).await;
     Ok(state_patch(paths, login_cache).await?)
 }
@@ -504,14 +520,39 @@ pub(crate) async fn service_proxy_auth(paths: &AppPaths, provider_id: &str) -> R
         "tokenGeneration":account["token_generation"]}))
 }
 
-pub(crate) fn import_service_account(paths:&AppPaths,provider:&str,content:&str)->Result<(),ManagerError>{
+pub(crate) fn import_service_account(paths:&AppPaths,provider:&str,content:&str,proxy:Option<&str>)->Result<Value,ManagerError>{
+    use crate::core::{database,service_provider_store as store};
+    let generation=store::generation(&database::open(paths)?)?;
     let data:Value=serde_json::from_str(content)?;
     let (tokens,claims)=create_tokens_from_auth_data(&data)?;
     let identity=extract_account_id(&claims);
     let identity=if identity.is_empty(){data["tokens"]["account_id"].as_str().or(data["account_id"].as_str()).unwrap_or("").to_string()}else{identity};
-    crate::core::service_provider_store::save_account(&crate::core::database::open(paths)?,provider,&json!({
+    let proxy=match proxy {
+        Some(proxy)=>proxy.to_string(),
+        None if !provider.is_empty()=>store::text(&store::config(&database::open(paths)?,provider)?,"proxy").to_string(),
+        None=>String::new(),
+    };
+    let id=save_service_login(paths,provider,&json!({
         "account_id":identity,"email":extract_email(&claims),"access_token":tokens.access_token,
-        "refresh_token":tokens.refresh_token,"id_token":tokens.id_token,"expires_at":tokens.expires_at}))
+        "name":claims["name"],"refresh_token":tokens.refresh_token,"id_token":tokens.id_token,"expires_at":tokens.expires_at}),
+        &proxy,generation)?;
+    Ok(json!({"id":id}))
+}
+
+fn save_service_login(paths:&AppPaths,target:&str,value:&Value,proxy:&str,generation:i64)->Result<String,ManagerError>{
+    use crate::core::{database,service_provider_store as store};
+    let mut connection=database::open(paths)?;
+    let tx=connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let mode:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM app_metadata WHERE key=?1 AND value='service')",
+        [store::MODE_KEY],|row|row.get(0))?;
+    if !mode || store::generation(&tx)?!=generation {
+        return Err(ManagerError::System("运行模式已变化，请重新登录".into()));
+    }
+    let name=first_string(value.get("email"),value.get("name"),"Codex 官方账号");
+    let provider=store::prepare_official_login(&tx,target,"codex_account",store::text(value,"account_id"),&name,proxy)?;
+    store::save_account(&tx,&provider,value)?;
+    tx.commit()?;
+    Ok(provider)
 }
 
 pub(crate) async fn refresh_service_quota(paths:&AppPaths,provider:&str)->Result<Value,ManagerError>{
@@ -692,27 +733,16 @@ async fn complete_login(
     ))?;
     let account_id = extract_account_id(&claims);
     if login_state["serviceMode"]==true {
-        let provider=string_value(login_state.get("targetAccountId"));
+        let target=string_value(login_state.get("targetAccountId"));
         let latest=context.cache.state().await;
         if latest.as_ref().is_none_or(|v|v["status"]!="pending" || v["state"]!=login_state["state"]) {
             return Err(ManagerError::System("登录已取消".into()));
         }
-        {
-            let mut connection=crate::core::database::open(&context.paths)?;
-            let tx=connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let mode:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM app_metadata WHERE key=?1 AND value='service')",
-                [crate::core::service_provider_store::MODE_KEY],|r|r.get(0))?;
-            if !mode || Some(crate::core::service_provider_store::generation(&tx)?)!=login_state["modeGeneration"].as_i64(){
-                return Err(ManagerError::System("运行模式已变化，请重新登录".into()));
-            }
-            let config=crate::core::service_provider_store::config(&tx,&provider)?;
-            if config["kind"]!="codex_account" || !config["deletedAt"].is_null(){return Err(ManagerError::System("账号配置已删除".into()));}
-            crate::core::service_provider_store::save_account(&tx,&provider,&json!({"account_id":account_id,
-                "email":extract_email(&claims),"access_token":tokens.access_token,"refresh_token":tokens.refresh_token,
-                "id_token":tokens.id_token,"expires_at":tokens.expires_at}))?;
-            tx.commit()?;
-        }
-        context.cache.set_state(Some(merge_object(login_state,json!({"status":"success","message":"官方账号已保存到服务商配置中心"})))).await;
+        let provider=save_service_login(&context.paths,&target,&json!({"account_id":account_id,
+            "email":extract_email(&claims),"name":claims["name"],"access_token":tokens.access_token,
+            "refresh_token":tokens.refresh_token,"id_token":tokens.id_token,"expires_at":tokens.expires_at}),
+            &string_value(login_state.get("proxy")),login_state["modeGeneration"].as_i64().unwrap_or(-1))?;
+        context.cache.set_state(Some(merge_object(login_state,json!({"status":"success","providerId":provider,"message":"官方账号已保存到服务商配置中心"})))).await;
         context.cache.finish_listener().await;
         context.app.emit("state:changed",state_patch(&context.paths,&context.cache).await?)
             .map_err(|e|ManagerError::System(e.to_string()))?;
@@ -1636,6 +1666,7 @@ fn public_login_state(state: Option<Value>) -> Value {
       "status": state["status"],
       "authUrl": state["authUrl"],
       "redirectUri": state["redirectUri"],
+      "providerId": state["providerId"],
       "message": state.get("message").cloned().unwrap_or_else(|| json!("")),
       "account": state.get("account").cloned().unwrap_or(Value::Null)
     })
@@ -2032,6 +2063,97 @@ mod tests {
         test(&paths);
         assert_eq!(root.parent(), Some(temp_root.as_path()));
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn service_login_creates_named_account_after_authorization_and_reuses_identity() {
+        use crate::core::{database,service_provider_store as store};
+        with_account_paths(|paths| {
+            crate::api::service_provider::switch_backend(paths,"service").unwrap();
+            let c=database::open(paths).unwrap();
+            let generation=store::generation(&c).unwrap();
+            let auth=json!({"account_id":"official-identity","email":"work@example.test",
+                "access_token":"private-access","refresh_token":"private-refresh","expires_at":9999999999u64});
+            let id=save_service_login(paths,"",&auth,"http://127.0.0.1:7890",generation).unwrap();
+            let config=store::config(&c,&id).unwrap();
+            assert_eq!(config["name"],"work@example.test");
+            assert_eq!(config["kind"],"codex_account");
+            assert_eq!(config["proxy"],"http://127.0.0.1:7890");
+            assert_eq!(store::account(&c,&id).unwrap()["accessToken"],"private-access");
+            assert_eq!(save_service_login(paths,"",&auth,"",generation).unwrap(),id);
+            c.execute("UPDATE service_provider_configs SET name='我的工作账号' WHERE id=?1",[&id]).unwrap();
+            assert_eq!(save_service_login(paths,&id,&auth,"",generation).unwrap(),id);
+            assert_eq!(store::config(&c,&id).unwrap()["name"],"我的工作账号");
+            assert_eq!(store::query(&c,"SELECT count(*) AS total FROM service_provider_configs",&[]).unwrap()[0]["total"],1);
+            let wrong=json!({"account_id":"another-account","email":"another@example.test","access_token":"other"});
+            assert!(save_service_login(paths,&id,&wrong,"",generation).is_err());
+            assert_eq!(store::account(&c,&id).unwrap()["accessToken"],"private-access");
+            assert!(!store::table_exists(&c,"codex_accounts").unwrap());
+            assert!(!store::table_exists(&c,"providers").unwrap());
+        });
+    }
+
+    #[test]
+    fn service_login_rolls_back_invalid_tokens_and_rejects_stale_or_deleted_targets() {
+        use crate::core::{database,service_provider_store as store};
+        with_account_paths(|paths| {
+            crate::api::service_provider::switch_backend(paths,"service").unwrap();
+            let c=database::open(paths).unwrap();
+            let generation=store::generation(&c).unwrap();
+            let invalid=json!({"account_id":"invalid","email":"invalid@example.test"});
+            assert!(save_service_login(paths,"",&invalid,"",generation).is_err());
+            let auth=json!({"account_id":"identity","email":"test@example.test","access_token":"secret"});
+            assert!(save_service_login(paths,"",&auth,"",generation-1).is_err());
+            assert_eq!(store::query(&c,"SELECT count(*) AS total FROM service_provider_configs",&[]).unwrap()[0]["total"],0);
+            let id=save_service_login(paths,"",&auth,"",generation).unwrap();
+            c.execute("UPDATE service_provider_configs SET deleted_at=1 WHERE id=?1",[&id]).unwrap();
+            assert!(save_service_login(paths,&id,&auth,"",generation).is_err());
+            assert!(save_service_login(paths,"",&auth,"",generation).is_err());
+            assert_eq!(store::query(&c,"SELECT count(*) AS total FROM service_provider_configs",&[]).unwrap()[0]["total"],1);
+        });
+    }
+
+    #[test]
+    fn service_json_import_creates_named_account_without_provider_draft() {
+        use crate::core::{database,service_provider_store as store};
+        with_account_paths(|paths| {
+            crate::api::service_provider::switch_backend(paths,"service").unwrap();
+            let claims=json!({"email":"import@example.test","sub":"import-identity","exp":9999999999u64});
+            let token=format!("e30.{}.test",base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(claims.to_string()));
+            let content=json!({"tokens":{"access_token":token,"refresh_token":"refresh","account_id":"import-identity"}}).to_string();
+            let result=import_service_account(paths,"",&content,Some("http://127.0.0.1:7890")).unwrap();
+            let c=database::open(paths).unwrap();
+            let id=store::text(&result,"id");
+            assert_eq!(store::config(&c,id).unwrap()["name"],"import@example.test");
+            assert_eq!(store::config(&c,id).unwrap()["proxy"],"http://127.0.0.1:7890");
+            assert_eq!(import_service_account(paths,"",&content,None).unwrap()["id"],id);
+            assert_eq!(store::query(&c,"SELECT count(*) AS total FROM service_provider_configs",&[]).unwrap()[0]["total"],1);
+        });
+    }
+
+    #[test]
+    fn service_login_cancel_releases_callback_listener_without_creating_an_account() {
+        use crate::core::{database,service_provider_store as store};
+        tauri::async_runtime::block_on(async {
+            let root=std::env::temp_dir().join(format!("codex-account-test-{}",uuid::Uuid::new_v4()));
+            let paths=resolve_app_paths(&root);
+            crate::api::service_provider::switch_backend(&paths,"service").unwrap();
+            let cache=CodexLoginCache::new();
+            let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address=listener.local_addr().unwrap();
+            cache.set_state(Some(json!({"status":"pending"}))).await;
+            *cache.listener_task.lock().await=Some(tokio::spawn(async move {
+                let _=listener.accept().await;
+            }));
+            cancel_login(&paths,&cache).await.unwrap();
+            let released=TcpListener::bind(address).await.unwrap();
+            assert!(cache.state().await.is_none());
+            assert!(!cache.inner.lock().await.listener_active);
+            assert_eq!(store::query(&database::open(&paths).unwrap(),
+                "SELECT count(*) AS total FROM service_provider_configs",&[]).unwrap()[0]["total"],0);
+            drop(released);
+            std::fs::remove_dir_all(root).unwrap();
+        });
     }
 
     fn cached_account() -> Value {
