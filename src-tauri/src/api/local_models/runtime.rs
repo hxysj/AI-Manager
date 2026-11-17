@@ -8,7 +8,7 @@ use std::{
     process::Stdio,
     time::Duration,
 };
-use tokio::{io::AsyncReadExt, process::Command};
+use tokio::{io::AsyncReadExt, process::{Child, Command}, sync::OwnedMutexGuard, task::JoinHandle};
 
 // 固定使用官方支持 MiniCPM-OCR 的版本，并校验官方发布包的 SHA-256。
 const RUNTIME: &str = "llama-b11901-bin-win-cpu-x64";
@@ -17,8 +17,6 @@ const ARCHIVE_SHA256: &str = "039951745399d7c1228b1e882d6e41b24d393f1795e3a6e176
 pub(super) const SUPPORTED: bool = cfg!(all(target_os = "windows", target_arch = "x86_64"));
 const MAX_EXTRACTED_BYTES: u64 = 256 * 1024 * 1024;
 const INFERENCE_ARGS: &[&str] = &[
-    "--ctx-size",
-    "8192",
     "--parallel",
     "1",
     "--n-gpu-layers",
@@ -30,14 +28,48 @@ const INFERENCE_ARGS: &[&str] = &[
     "--no-webui",
 ];
 
+// 一轮助手调用复用同一个本地服务，工具续答不重复加载权重；结束后先回收进程再释放文件访问锁。
+pub(crate) struct LocalModelSession {
+    pub base_url: String,
+    pub token: String,
+    child: Option<Child>,
+    logs: Option<JoinHandle<String>>,
+    pub(super) lease: Option<OwnedMutexGuard<()>>,
+}
+
+impl LocalModelSession {
+    async fn shutdown(mut self) -> String {
+        let mut child = self.child.take().unwrap();
+        let _ = child.kill().await;
+        let _ = child.wait().await;
+        self.logs.take().unwrap().await.unwrap_or_default()
+    }
+}
+
+impl Drop for LocalModelSession {
+    fn drop(&mut self) {
+        if let Some(mut child) = self.child.take() {
+            let logs = self.logs.take();
+            let lease = self.lease.take();
+            tokio::spawn(async move {
+                let _ = child.kill().await;
+                let _ = child.wait().await;
+                if let Some(logs) = logs { let _ = logs.await; }
+                drop(lease);
+            });
+        }
+    }
+}
+
 pub(super) fn validation_profile(model: &ModelDefinition) -> String {
     let mut digest = Sha256::new();
     digest.update(ARCHIVE_SHA256);
-    digest.update(INFERENCE_ARGS.join("\0"));
-    if model.capability == "ocr" {
+    digest.update(format!("--ctx-size\0{}\0{}", model.context_window, INFERENCE_ARGS.join("\0")));
+    if model.supports("ocr") {
         digest.update(include_bytes!("ocr-probe.png"));
     } else {
-        digest.update(super::translation::prompt("Hello, world!", "en", "zh").unwrap());
+        let payload = super::translation_payload(model, "Hello, world!", "en", "zh").unwrap();
+        digest.update(payload["prompt"].as_str().map(str::to_owned).unwrap_or_else(|| payload.to_string()));
     }
     // 仅存指纹，不把计算机名或 CPU 标识写入模型记录。
     digest.update(std::env::var("COMPUTERNAME").unwrap_or_default());
@@ -55,10 +87,10 @@ pub(super) async fn validate(
 ) -> Result<(), ManagerError> {
     use base64::Engine;
     let image = base64::engine::general_purpose::STANDARD.encode(include_bytes!("ocr-probe.png"));
-    let payload = if model.capability == "ocr" {
+    let payload = if model.supports("ocr") {
         json!({"prompt": "识别图片中的文字，只输出原文。", "image": format!("data:image/png;base64,{image}")})
     } else {
-        json!({"prompt": super::translation::prompt("Hello, world!", "en", "zh")?})
+        super::translation_payload(model, "Hello, world!", "en", "zh")?
     };
     let result = tokio::time::timeout(
         Duration::from_secs(180),
@@ -69,10 +101,25 @@ pub(super) async fn validate(
     if let Some(error) = result["error"].as_str() {
         return Err(failure(error));
     }
-    if model.capability == "translation" {
+    if model.supports("translation") {
         let text = result["text"].as_str().unwrap_or("");
         if !text.contains("你好") || !text.contains("世界") {
             return Err(failure("模型已加载，但基础翻译校验没有返回预期译文"));
+        }
+        if model.supports("assistant") {
+            let session = start(paths, directory, model).await?;
+            let response: Value = reqwest::Client::builder().no_proxy().build().map_err(failure)?
+                .post(format!("{}/v1/chat/completions", session.base_url)).bearer_auth(&session.token)
+                .json(&json!({"model":model.id,"messages":[{"role":"user","content":"Call echo with value ping."}],
+                    "tools":[{"type":"function","function":{"name":"echo","parameters":{"type":"object","properties":{"value":{"type":"string"}},"required":["value"]}}}],
+                    "tool_choice":{"type":"function","function":{"name":"echo"}},"temperature":0,"max_tokens":128,
+                    "chat_template_kwargs":{"enable_thinking":false}}))
+                .send().await.map_err(failure)?.json().await.map_err(failure)?;
+            let _ = session.shutdown().await;
+            let call = &response["choices"][0]["message"]["tool_calls"][0];
+            if call["function"]["name"] != "echo" || call["id"].as_str().is_none_or(str::is_empty) {
+                return Err(failure("模型已加载，但助手工具调用校验未通过"));
+            }
         }
         return Ok(());
     }
@@ -199,6 +246,17 @@ pub(super) async fn generate(
     model: &ModelDefinition,
     payload: Value,
 ) -> Result<Value, ManagerError> {
+    let session = start(paths, directory, model).await?;
+    let result = completion(&reqwest::Client::builder().no_proxy().build().map_err(failure)?, &session.base_url, &session.token, model, payload).await;
+    let logs = session.shutdown().await;
+    result.map_err(|error| if logs.is_empty() { error } else { failure(format!("{error}\n{logs}")) })
+}
+
+pub(super) async fn start(
+    paths: &AppPaths,
+    directory: &Path,
+    model: &ModelDefinition,
+) -> Result<LocalModelSession, ManagerError> {
     let executable = executable(paths).await?;
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
     let port = listener.local_addr()?.port();
@@ -209,7 +267,7 @@ pub(super) async fn generate(
     command
         .args(["--model"])
         .arg(directory.join(model.requirements.files[0].name));
-    if model.capability == "ocr" {
+    if model.supports("ocr") {
         command
             .args(["--mmproj"])
             .arg(directory.join(model.requirements.files[1].name));
@@ -225,6 +283,7 @@ pub(super) async fn generate(
             "--api-key",
             &key,
         ])
+        .args(["--ctx-size", &model.context_window.to_string()])
         .args(INFERENCE_ARGS)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -251,6 +310,9 @@ pub(super) async fn generate(
         }
         String::from_utf8_lossy(&tail).into_owned()
     });
+    let mut session = LocalModelSession {
+        base_url, token: key, child: Some(child), logs: Some(logs), lease: None,
+    };
     let client = reqwest::Client::builder()
         .no_proxy()
         .build()
@@ -258,12 +320,12 @@ pub(super) async fn generate(
     let result = async {
         let started = tokio::time::Instant::now();
         loop {
-            if child.try_wait()?.is_some() {
+            if session.child.as_mut().unwrap().try_wait()?.is_some() {
                 return Err(failure("本地模型加载失败"));
             }
             if client
-                .get(format!("{base_url}/health"))
-                .bearer_auth(&key)
+                .get(format!("{}/health", session.base_url))
+                .bearer_auth(&session.token)
                 .send()
                 .await
                 .is_ok_and(|response| response.status().is_success())
@@ -275,19 +337,14 @@ pub(super) async fn generate(
             }
             tokio::time::sleep(Duration::from_millis(250)).await;
         }
-        completion(&client, &base_url, &key, model, payload).await
+        Ok::<_, ManagerError>(())
     }
     .await;
-    let _ = child.kill().await;
-    let _ = child.wait().await;
-    let logs = logs.await.unwrap_or_default();
-    result.map_err(|error| {
-        if logs.is_empty() {
-            error
-        } else {
-            failure(format!("{error}\n{logs}"))
-        }
-    })
+    if let Err(error) = result {
+        let logs = session.shutdown().await;
+        return Err(if logs.is_empty() { error } else { failure(format!("{error}\n{logs}")) });
+    }
+    Ok(session)
 }
 
 async fn completion(
@@ -297,7 +354,7 @@ async fn completion(
     model: &ModelDefinition,
     payload: Value,
 ) -> Result<Value, ManagerError> {
-    let content = if model.capability == "ocr" {
+    let content = if model.supports("ocr") {
         json!([
             {"type": "text", "text": payload["prompt"]},
             {"type": "image_url", "image_url": {"url": payload["image"]}}
@@ -310,7 +367,7 @@ async fn completion(
         .bearer_auth(key)
         .json(&json!({
             "model": model.id,
-            "messages": [{"role": "user", "content": content}],
+            "messages": payload.get("messages").cloned().unwrap_or_else(||json!([{"role": "user", "content": content}])),
             "temperature": 0,
             "max_tokens": 4096,
             "stream": false,
@@ -325,7 +382,7 @@ async fn completion(
     let error = if !status.is_success() {
         Some(format!(
             "本地模型{}失败（HTTP {}）：{}",
-            if model.capability == "ocr" {
+            if model.supports("ocr") {
                 "识别"
             } else {
                 "翻译"
@@ -337,7 +394,7 @@ async fn completion(
         ))
     } else if body["choices"][0]["finish_reason"] != "stop" {
         Some(
-            if model.capability == "ocr" {
+            if model.supports("ocr") {
                 "本地模型未完成识别，请缩小截图范围后重试"
             } else {
                 "本地模型未完成翻译，请缩短文本后重试"
@@ -351,7 +408,7 @@ async fn completion(
     } else {
         None
     };
-    if model.capability == "ocr" {
+    if model.supports("ocr") {
         if let Some(error) = &error {
             return Err(failure(error));
         }
@@ -513,7 +570,7 @@ mod tests {
             &super::super::catalog::LMT,
             &second_translation,
         ] {
-            let ocr = model.capability == "ocr";
+            let ocr = model.supports("ocr");
             let (url, server) = response(
                 json!({"choices": [{
                     "message": {"content": "模型测试结果"}, "finish_reason": "stop"

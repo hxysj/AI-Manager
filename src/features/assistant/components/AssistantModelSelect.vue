@@ -46,6 +46,7 @@ import { Box } from "lucide-vue-next"
 import { ElOption, ElOptionGroup, ElSelect } from "element-plus"
 import "element-plus/es/components/select/style/css"
 import { settingsApi } from "@/api"
+import { useAssistantLocalModels } from "@/features/assistant/local-models"
 const props = defineProps({
   settings: { type: Object, required: true },
   providers: { type: Array, default: () => [] },
@@ -57,6 +58,10 @@ const props = defineProps({
 const emit = defineEmits(["change", "saving", "error"])
 const settings = computed(() => props.settings)
 const modelSaving = ref(false)
+const { localModels, localModelsError } = useAssistantLocalModels()
+watch(localModelsError, (error) => {
+  if (error) emit("error", error)
+})
 let disposed = false
 let selectionVersion = 0
 watch(
@@ -73,6 +78,12 @@ watch(
 // 选择值同时包含来源和模型，同名模型在不同 Provider 下仍可准确切换。
 const modelGroups = computed(() =>
   [
+    {
+      targetId: "local",
+      label: "本地模型",
+      disabled: !localModels.value.length,
+      names: localModels.value.map((model) => model.id)
+    },
     ...props.providers.map((provider) => ({
       targetId: provider.id,
       label: `${provider.name} · ${provider.cli === "claude" ? "Claude" : "Codex"} Provider`,
@@ -106,7 +117,10 @@ const modelGroups = computed(() =>
       ...new Set(
         [
           ...group.names,
-          group.targetId === settings.value.targetId ? settings.value.model : ""
+          group.targetId !== "local" &&
+          group.targetId === settings.value.targetId
+            ? settings.value.model
+            : ""
         ].filter(Boolean)
       )
     ].map((model) => ({
@@ -147,6 +161,12 @@ async function selectModel(value) {
     targetId === settings.value.targetId
       ? { model }
       : { targetId, model, protocol: "auto" }
+  if (targetId === "local") {
+    const installed = localModels.value.find((item) => item.id === model)
+    if (!installed) return emit("error", "请先下载所选本地助手模型。")
+    patch.protocol = "chat"
+    patch.contextWindow = installed.contextWindow
+  }
   const version = selectionVersion
   modelSaving.value = true
   emit("saving", true)

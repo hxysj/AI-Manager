@@ -90,7 +90,11 @@
               filterable
               :allow-create="!local"
               default-first-option
-              :disabled="pending || !modelValue.targetId || local"
+              :disabled="
+                pending ||
+                !modelValue.targetId ||
+                (local && !localModels.length)
+              "
               @update:model-value="$emit('save', { model: $event })"
             >
               <el-option
@@ -133,16 +137,16 @@
           </span>
         </label>
         <p
-          v-if="shortcutError || desktopStatus.error"
+          v-if="shortcutError || desktopStatus.error || localModelsError"
           class="assistant-extension-error"
           role="alert"
         >
-          {{ shortcutError || desktopStatus.error }}
+          {{ shortcutError || desktopStatus.error || localModelsError }}
         </p>
         <p class="assistant-extension-hint">
           {{
             local
-              ? "本地助手模型待添加；当前 OCR 和专用翻译模型不用于通用对话。"
+              ? "使用已下载的本地助手模型，支持离线对话和软件内工具调用，任务结束后释放模型。"
               : "选择支持工具调用的模型，修改后自动保存。只在发送消息时调用模型服务。"
           }}
         </p>
@@ -230,6 +234,7 @@ import "element-plus/es/components/select/style/css"
 import BaseModal from "@/components/BaseModal.vue"
 import { assistantApi } from "@/api"
 import { shortcutFromEvent } from "@/utils/shortcuts"
+import { useAssistantLocalModels } from "@/features/assistant/local-models"
 
 const props = defineProps({
   modelValue: { type: Object, required: true },
@@ -240,6 +245,7 @@ const props = defineProps({
   openRequest: { type: Number, default: 0 }
 })
 const emit = defineEmits(["save"])
+const { localModels, localModelsError } = useAssistantLocalModels()
 // 数字设置通过浏览器校验后按字段保存，避免覆盖正在编辑的其他设置。
 function saveContextNumber(event, key) {
   if (!event.target.reportValidity()) return
@@ -310,7 +316,9 @@ const targetGroups = computed(() => [
   },
   {
     label: "本地运行",
-    items: [{ id: "local", name: "本地模型（助手模型待添加）" }]
+    items: [
+      { id: "local", name: "本地助手模型", disabled: !localModels.value.length }
+    ]
   }
 ])
 const protocolOptions = computed(() => [
@@ -326,7 +334,7 @@ const protocolOptions = computed(() => [
 ])
 const modelOptions = computed(() =>
   local.value
-    ? []
+    ? localModels.value.map((model) => model.id)
     : [
         ...new Set(
           [
@@ -358,6 +366,17 @@ const invalidTarget = computed(
     )
 )
 function selectTarget(targetId) {
+  if (targetId === "local") {
+    const model = localModels.value[0]
+    if (!model) return
+    emit("save", {
+      targetId,
+      model: model.id,
+      protocol: "chat",
+      contextWindow: model.contextWindow
+    })
+    return
+  }
   emit("save", {
     targetId,
     model:

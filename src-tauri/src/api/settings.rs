@@ -24,6 +24,9 @@ pub async fn save_settings(
     );
     if payload["agents"].get("assistant").is_some() {
         crate::api::screenshot::parse_shortcut(&next_settings.agents.assistant.shortcut)?;
+        if next_settings.agents.assistant.enabled && next_settings.agents.assistant.target_id == "local" {
+            crate::api::local_models::assistant_target_info(paths, &next_settings.agents.assistant.model)?;
+        }
     }
     if payload
         .get("agents")

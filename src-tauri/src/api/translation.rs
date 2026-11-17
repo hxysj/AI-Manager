@@ -133,7 +133,7 @@ async fn translate_local(
     let source = payload["sourceLanguage"]
         .as_str()
         .unwrap_or(&settings.source_language);
-    let plan = local_models::translation_plan(text, source, target)?;
+    let plan = local_models::translation_plan(&settings.model, text, source, target)?;
     let mut translated = text.to_string();
     history["requestCount"] = json!(0);
     history["usageKnown"] = json!(true);

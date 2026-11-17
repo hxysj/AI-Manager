@@ -30,6 +30,7 @@ pub struct AssistantContext {
     pub resource_dir: PathBuf,
     pub cli_targets: Value,
     pub settings: AssistantSettings,
+    pub local_models: crate::api::local_models::LocalModelService,
 }
 
 struct AssistantRuntime {
@@ -351,6 +352,9 @@ impl AssistantService {
                 if !compress && ((message.is_empty() && images.is_empty()) || message.chars().count() > 30_000) {
                     return Err(ManagerError::System("请输入消息或粘贴图片，文字最多 30000 个字符".into()));
                 }
+                if context.settings.target_id == "local" && !images.is_empty() {
+                    return Err(ManagerError::System("当前本地助手模型仅支持文本，请移除图片后重试".into()));
+                }
                 if context.settings.target_id.is_empty() || context.settings.model.is_empty() {
                     return Err(ManagerError::System("请先选择模型来源和模型".into()));
                 }
@@ -400,10 +404,18 @@ impl AssistantService {
                             service.emit_state(&app).await;
                             id
                         } else { thread_id };
-                        let target = proxy::prepare_assistant_target(
-                            &context.paths, &context.cli_targets, &context.settings,
-                        ).await?;
+                        let target = match futures_util::future::select(
+                            Box::pin(cancel.cancelled()),
+                            Box::pin(proxy::prepare_assistant_target(&context.paths, &context.cli_targets, &context.settings, &context.local_models)),
+                        ).await {
+                            futures_util::future::Either::Left(_) => return Ok(json!({"cancelled":true})),
+                            futures_util::future::Either::Right((result, _)) => result?,
+                        };
                         let api = target.info["api"].clone();
+                        let mut settings = context.settings.clone();
+                        if settings.target_id == "local" {
+                            settings.context_window = settings.context_window.min(target.info["contextWindow"].as_u64().unwrap());
+                        }
                         if cancel.is_cancelled() {
                             return Ok(json!({"cancelled": true}));
                         }
@@ -413,7 +425,7 @@ impl AssistantService {
                             "targetId": context.settings.target_id, "model": context.settings.model,
                             "baseURL": proxy.base_url, "token": proxy.token, "api": api,
                             "surface": if desktop { "desktop" } else { "panel" },
-                            "settings": context.settings
+                            "settings": settings
                         })).await
                     }.await;
                     {

@@ -77,6 +77,7 @@ const history = [
 const emit = (event) => {
   for (const callback of listeners) callback(event)
 }
+let installedAssistantModels = []
 const assistantApi = {
   catalog: async () => ({
     tools: JSON.parse(
@@ -352,7 +353,20 @@ async function compile(filename) {
       { format: "cjs" }
     ).code
   )(
-    (name) => {
+    function resolveModule(name) {
+      if (name === "@/features/assistant/local-models") {
+        const imported = { exports: {} }
+        new Function(
+          "require",
+          "module",
+          "exports",
+          transformSync(
+            readFileSync("src/features/assistant/local-models.js", "utf8"),
+            { format: "cjs" }
+          ).code
+        )(resolveModule, imported, imported.exports)
+        return imported.exports
+      }
       if (markdownModules[name]) return markdownModules[name]
       if (realComponents.has(name))
         return { default: realComponents.get(name), __esModule: true }
@@ -374,7 +388,7 @@ async function compile(filename) {
           localModelsApi: {
             installed: async (capability) => {
               assert.equal(capability, "assistant")
-              return { models: [] }
+              return { models: installedAssistantModels }
             }
           }
         }
@@ -939,8 +953,55 @@ assert.deepEqual(savedPatches.at(-1), {
 assert.equal(config.state.protocolOptions.at(-1).id, "messages")
 config.state.selectTarget("local")
 await tick()
+assert.equal(config.state.local, false, "没有已安装模型时不能切到本地来源")
+installedAssistantModels = [
+  { id: "qwen3.5-0.8b", name: "Qwen3.5-0.8B", contextWindow: 32768 }
+]
+for (const callback of localListeners) await callback()
+await tick()
+config.state.selectTarget("local")
+await tick()
 assert.equal(config.state.local, true)
-assert.deepEqual(config.state.modelOptions, [])
+assert.deepEqual(config.state.modelOptions, ["qwen3.5-0.8b"])
+assert.deepEqual(savedPatches.at(-1), {
+  targetId: "local",
+  model: "qwen3.5-0.8b",
+  protocol: "chat",
+  contextWindow: 32768
+})
+// 对话入口也只接受已安装模型，删除模型后不能通过自定义名称绕过。
+const localSelection = []
+const localModelView = mount(ModelSelect, {
+  settings: {
+    targetId: "codex-provider",
+    model: "agent-model",
+    protocol: "auto"
+  },
+  providers: [
+    {
+      id: "codex-provider",
+      name: "API",
+      cli: "codex",
+      runtimeConfig: { mainModel: "agent-model" }
+    }
+  ],
+  onChange: (value) => localSelection.push(value)
+})
+await tick()
+await localModelView.state.selectModel(
+  JSON.stringify(["local", "qwen3.5-0.8b"])
+)
+assert.equal(localSelection.at(-1).targetId, "local")
+assert.equal(localSelection.at(-1).contextWindow, 32768)
+installedAssistantModels = []
+for (const callback of localListeners) await callback()
+await tick()
+assert.equal(
+  localModelView.state.modelGroups.find((group) => group.targetId === "local")
+    .disabled,
+  true
+)
+localModelView.unmount()
 config.state.selectTarget("account:test")
 await tick()
 assert.deepEqual(

@@ -74,6 +74,7 @@ pub(crate) struct LlmTarget {
     low_reasoning: bool,
     service_instance: Option<(AppPaths,String)>,
     _legacy_request: Option<crate::core::service_provider_store::LegacyRequest>,
+    _local_session: Option<crate::api::local_models::LocalModelSession>,
 }
 
 pub(crate) fn translation_target_info(
@@ -139,13 +140,24 @@ pub(crate) async fn prepare_assistant_target(
     paths: &AppPaths,
     cli_targets: &Value,
     settings: &crate::core::settings::AssistantSettings,
+    local_models: &crate::api::local_models::LocalModelService,
 ) -> Result<LlmTarget, ManagerError> {
+    if settings.target_id == "local" {
+        let info = crate::api::local_models::assistant_target_info(paths, &settings.model)?;
+        let session = local_models.start_assistant(paths, &settings.model).await?;
+        let mut headers = HeaderMap::new();
+        headers.insert("content-type", HeaderValue::from_static("application/json"));
+        headers.insert("authorization", HeaderValue::from_str(&format!("Bearer {}", session.token)).map_err(|error| ManagerError::System(error.to_string()))?);
+        return Ok(LlmTarget {
+            info, client: reqwest::Client::builder().no_proxy().build().map_err(|error| ManagerError::System(error.to_string()))?,
+            upstream_url: format!("{}/v1/chat/completions", session.base_url), headers,
+            key_id: String::new(), api_key: String::new(), low_reasoning: false,
+            service_instance: None, _legacy_request: None, _local_session: Some(session),
+        });
+    }
     if crate::core::service_provider_store::active(paths)? {
         let api=match settings.protocol.as_str(){""|"auto"=>"responses","responses"|"chat"|"messages"=>settings.protocol.as_str(),_=>return Err(ManagerError::System("API 协议无效".into()))};
         return prepare_service_target(paths,&settings.target_id,&settings.model,api);
-    }
-    if settings.target_id == "local" {
-        return Err(ManagerError::System("本地助手模型尚未提供；当前 OCR 和翻译模型不支持通用对话及工具调用".into()));
     }
     let provider = if is_account_target(&settings.target_id) {
         None
@@ -243,6 +255,7 @@ async fn prepare_text_target(
         low_reasoning: false,
         service_instance: None,
         _legacy_request: Some(legacy_request),
+        _local_session: None,
     })
 }
 
@@ -261,6 +274,7 @@ fn prepare_service_target(paths:&AppPaths,target_id:&str,model:&str,api:&str)->R
         headers,key_id:String::new(),api_key:String::new(),low_reasoning:false,
         service_instance:Some((paths.clone(),session["instanceId"].as_str().unwrap_or("").to_string())),
         _legacy_request:None,
+        _local_session:None,
     })
 }
 
@@ -2666,7 +2680,7 @@ mod tests {
                     target_id: "provider-active".into(), model: "assistant-model".into(), protocol: protocol.into(),
                     ..Default::default()
                 };
-                let target = super::prepare_assistant_target(&paths, &json!([]), &settings).await.unwrap();
+                let target = super::prepare_assistant_target(&paths, &json!([]), &settings, &crate::api::local_models::LocalModelService::default()).await.unwrap();
                 assert_eq!(target.info["api"], api);
                 let proxy = crate::api::llm_proxy::LlmProxy::start_assistant(paths.clone(), target).await.unwrap();
                 let client = reqwest::Client::new();

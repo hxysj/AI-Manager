@@ -75,7 +75,20 @@ async function loadComponent(filename) {
       { format: "cjs" }
     ).code
   )(
-    (name) => {
+    function resolveModule(name) {
+      if (name === "@/features/assistant/local-models") {
+        const imported = { exports: {} }
+        new Function(
+          "require",
+          "module",
+          "exports",
+          transformSync(
+            readFileSync("src/features/assistant/local-models.js", "utf8"),
+            { format: "cjs" }
+          ).code
+        )(resolveModule, imported, imported.exports)
+        return imported.exports
+      }
       if (name === "@/api")
         return {
           appApi: {
@@ -101,6 +114,7 @@ async function loadComponent(filename) {
         return {
           localModelsApi: {
             installed: async (capability) => {
+              if (capability === "assistant") return { models: [] }
               assert.equal(capability, "translation")
               if (translationModelsFailure)
                 throw new Error("模拟翻译模型读取失败")
@@ -753,14 +767,19 @@ await finish(assistantRequestIndex)
 await saveAssistant
 assert.equal(server.agents.assistant.model, "agent-model")
 assert.equal(server.agents.assistant.enabled, false)
-const shortcutInput = () => find(
-  assistantSettings.root,
-  item => item.props["aria-label"] === "唤出输入框快捷键"
-)[0]
+const shortcutInput = () =>
+  find(
+    assistantSettings.root,
+    (item) => item.props["aria-label"] === "唤出输入框快捷键"
+  )[0]
 assert.equal(shortcutInput().props.value, "Ctrl+Alt+Space")
 assistantRequestIndex = calls.length
 shortcutInput().props.onKeydown({
-  key: "a", code: "KeyA", ctrlKey: true, shiftKey: true, preventDefault() {}
+  key: "a",
+  code: "KeyA",
+  ctrlKey: true,
+  shiftKey: true,
+  preventDefault() {}
 })
 await tick()
 assert.deepEqual(calls[assistantRequestIndex].patch, {
@@ -773,18 +792,29 @@ const invalidShortcutIndex = calls.length
 shortcutInput().props.onKeydown({ key: "Escape", preventDefault() {} })
 await tick()
 assert.equal(calls.length, invalidShortcutIndex)
-assert.match(find(assistantSettings.root, item => item.props.role === "alert")
-  .map(item => item.text).join(""), /请使用字母/)
+assert.match(
+  find(assistantSettings.root, (item) => item.props.role === "alert")
+    .map((item) => item.text)
+    .join(""),
+  /请使用字母/
+)
 shortcutInput().props.onKeydown({
-  key: "a", ctrlKey: true, shiftKey: true, preventDefault() {}
+  key: "a",
+  ctrlKey: true,
+  shiftKey: true,
+  preventDefault() {}
 })
 await tick()
 if (calls.length > invalidShortcutIndex) await finish(invalidShortcutIndex)
 assistantDesktopStatus = { error: "助手快捷键已被占用，请更换快捷键" }
-await Promise.all([...assistantStatusListeners].map(callback => callback()))
+await Promise.all([...assistantStatusListeners].map((callback) => callback()))
 await tick()
-assert.match(find(assistantSettings.root, item => item.props.role === "alert")
-  .map(item => item.text).join(""), /已被占用/)
+assert.match(
+  find(assistantSettings.root, (item) => item.props.role === "alert")
+    .map((item) => item.text)
+    .join(""),
+  /已被占用/
+)
 assistantSettings.unmount()
 assert.equal(assistantStatusListeners.size, 0)
 assert.deepEqual(runtimeErrors, [])

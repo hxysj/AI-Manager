@@ -61,6 +61,7 @@ impl AppState {
             resource_dir: manager.resource_dir.clone(),
             cli_targets: manager.state["cliTargets"].clone(),
             settings: manager.app_settings.agents.assistant.clone(),
+            local_models: self.local_models.clone(),
         }
     }
 

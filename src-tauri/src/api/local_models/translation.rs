@@ -74,7 +74,7 @@ pub(super) fn languages() -> Value {
         .collect::<Vec<_>>())
 }
 
-fn language(
+pub(super) fn language(
     value: &str,
 ) -> Result<&'static (&'static str, &'static str, &'static str, &'static str), ManagerError> {
     LANGUAGES

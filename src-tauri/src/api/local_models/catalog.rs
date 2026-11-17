@@ -15,9 +15,16 @@ pub(super) struct ModelDefinition {
     pub name: &'static str,
     pub publisher: &'static str,
     pub description: &'static str,
-    pub capability: &'static str,
+    pub capabilities: &'static [&'static str],
+    pub context_window: u64,
     pub requirements: ModelRequirements,
     pub sources: &'static [ModelSource],
+}
+
+impl ModelDefinition {
+    pub fn supports(&self, capability: &str) -> bool {
+        self.capabilities.contains(&capability)
+    }
 }
 
 pub(super) const OCR: ModelDefinition = ModelDefinition {
@@ -26,7 +33,8 @@ pub(super) const OCR: ModelDefinition = ModelDefinition {
     name: "MiniCPM-OCR 1.0",
     publisher: "OpenBMB / 面壁智能",
     description: "中英文文档识别，支持文字、表格、公式和图表。",
-    capability: "ocr",
+    capabilities: &["ocr"],
+    context_window: 8192,
     requirements: ModelRequirements {
         os: "windows",
         arch: "x86_64",
@@ -75,7 +83,8 @@ pub(super) const LMT: ModelDefinition = ModelDefinition {
     name: "LMT-60-0.6B",
     publisher: "NiuTrans / 东北大学 · mradermacher 社区量化",
     description: "专用本地翻译模型，覆盖 60 种语言、234 个中英中心翻译方向。",
-    capability: "translation",
+    capabilities: &["translation"],
+    context_window: 8192,
     requirements: ModelRequirements {
         os: "windows",
         arch: "x86_64",
@@ -107,7 +116,45 @@ pub(super) const LMT: ModelDefinition = ModelDefinition {
     ],
 };
 
-pub(super) const MODELS: &[ModelDefinition] = &[OCR, LMT];
+// 原模型与社区量化权重分别核对官方模型卡和量化仓库 API，固定版本与文件校验值。
+pub(super) const QWEN: ModelDefinition = ModelDefinition {
+    id: "qwen3.5-0.8b",
+    revision: "f36b1ea49a332ede8fe5f389bbf5b3575ef71f48",
+    name: "Qwen3.5-0.8B",
+    publisher: "Qwen / 通义千问 · bartowski 社区量化",
+    description: "轻量通用模型，支持离线翻译、AI 助手对话和工具调用。",
+    capabilities: &["translation", "assistant"],
+    context_window: 32768,
+    requirements: ModelRequirements {
+        os: "windows",
+        arch: "x86_64",
+        platform_name: "Windows x64 · CPU 推理",
+        memory_requirement: Some(MemoryRequirement {
+            available_bytes: 579_615_840 + (384 + 768) * 1024 * 1024,
+            estimated: true,
+            source: "CPU / 上下文 32768；Q4_K_M 权重 + 384 MiB 全注意力 KV 缓存 + 768 MiB 循环状态、计算缓冲和余量",
+        }),
+        files: &[ModelFile {
+            name: "Qwen_Qwen3.5-0.8B-Q4_K_M.gguf",
+            bytes: 579_615_840,
+            sha256: "fb044e93939a70469c905781334f5de1e6c8b608ced6cbc8c9249bd4127d9526",
+        }],
+    },
+    sources: &[
+        ModelSource {
+            id: "hf-mirror",
+            name: "HF Mirror（社区量化镜像）",
+            base: "https://hf-mirror.com/bartowski/Qwen_Qwen3.5-0.8B-GGUF/resolve/f36b1ea49a332ede8fe5f389bbf5b3575ef71f48",
+        },
+        ModelSource {
+            id: "huggingface",
+            name: "Hugging Face（社区量化）",
+            base: "https://huggingface.co/bartowski/Qwen_Qwen3.5-0.8B-GGUF/resolve/f36b1ea49a332ede8fe5f389bbf5b3575ef71f48",
+        },
+    ],
+};
+
+pub(super) const MODELS: &[ModelDefinition] = &[OCR, LMT, QWEN];
 
 pub(super) fn find(id: &str) -> Result<&'static ModelDefinition, super::ManagerError> {
     MODELS
