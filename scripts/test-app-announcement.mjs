@@ -101,6 +101,9 @@ function loadComponent(filename) {
   ).code
   const localRequire = (name) => {
     if (name === "@/api") return new Proxy({}, { get: () => api })
+    // 服务商接口拆分后仍使用原生夹具，公告验证不访问真实应用配置。
+    if (name === "@/api/modules/service-providers")
+      return { serviceProviderApi: api }
     if (name === "@/utils/global-loading")
       return {
         useGlobalLoading: () => ({
