@@ -306,7 +306,137 @@ fn service_agent_configuration_switches_one_source_and_restores_all_old_director
 }
 
 #[test]
-fn service_disable_revokes_access_preserves_rules_and_restores_or_reports_conflicts() {
+fn service_agent_configuration_keeps_other_agents_authorized() {
+    let f = Fixture::new();
+    let provider = f.provider();
+    service_provider::switch_backend(&f.paths, "service").unwrap();
+    let codex = f.root.join("codex");
+    let claude = f.root.join("claude");
+    let targets = json!([
+        {"id":"codex","installed":true,"configPath":codex},
+        {"id":"claude","installed":true,"configPath":claude},
+        {"id":"claude-desktop","installed":true}
+    ]);
+    let c = database::open(&f.paths).unwrap();
+    let model: String = c.query_row("SELECT id FROM service_provider_models WHERE provider_id=?1",
+        [&provider], |row| row.get(0)).unwrap();
+    let mut configuration = config(&c, &provider).unwrap();
+    configuration["bindings"] = json!([{"agentType":"claude-desktop","enabled":true,"defaultModelName":"model"}]);
+    save(&f.paths, &configuration).unwrap();
+    let instance = service_provider::activate(&f.paths, &targets,
+        &json!({"agentType":"claude","providerId":provider,"modelId":model})).unwrap();
+    let claude_before = std::fs::read_to_string(claude.join("settings.json")).unwrap();
+    let claude_token = serde_json::from_str::<Value>(&claude_before).unwrap()["env"]["ANTHROPIC_AUTH_TOKEN"].as_str().unwrap().to_string();
+    service_provider::configure_agent(&f.paths, &targets,
+        &json!({"agentType":"codex","providerId":provider,"revision":config(&c,&provider).unwrap()["revision"],
+            "defaultModelName":"model","options":{"syncModelList":false}})).unwrap();
+    assert!(service::authorize(&c, &claude_token).is_ok());
+    assert_eq!(std::fs::read_to_string(claude.join("settings.json")).unwrap(), claude_before);
+    assert_eq!(query(&c,"SELECT status,sync_status FROM service_agent_instances WHERE id=?1",
+        &[&text(&instance,"instanceId")]).unwrap()[0],json!({"status":"active","sync_status":"synced"}));
+    let codex_before = std::fs::read_to_string(codex.join("config.toml")).unwrap();
+    let codex_token = toml_edit::de::from_str::<Value>(&codex_before).unwrap()["model_providers"]["ai_manager_service"]["experimental_bearer_token"].as_str().unwrap().to_string();
+    // 在临时目录模拟 Desktop 的接管账本，避免测试触碰本机 Desktop 配置。
+    let desktop_path = f.root.join("desktop.json");
+    let desktop_original = json!({"deploymentMode":"official","preferences":{"keep":true}}).to_string();
+    let desktop_applied = json!({"deploymentMode":"3p","preferences":{"keep":true}}).to_string();
+    std::fs::write(&desktop_path, &desktop_applied).unwrap();
+    c.execute("INSERT INTO service_agent_instances(id,agent_type,name,config_path,client_protocol,provider_id,model_id,status,sync_status,created_at,updated_at)
+        VALUES('desktop','claude-desktop','测试 Desktop',?1,'messages',?2,?3,'active','synced',1,1)",
+        params![desktop_path.to_string_lossy(),provider,model]).unwrap();
+    c.execute("INSERT INTO service_gateway_tokens(id,token_hash,token_prefix,instance_id,created_at)
+        VALUES('desktop-token',?1,'desktop','desktop',1)",[hash("desktop-secret")]).unwrap();
+    c.execute("INSERT INTO service_managed_files(id,operation_id,instance_id,file_path,before_exists,before_sha256,before_ciphertext,
+        after_sha256,after_ciphertext,managed_fields_json,write_status,created_at,updated_at)
+        VALUES('desktop-file','desktop-operation','desktop',?1,1,?2,?3,?4,?5,'{}','written',1,1)",
+        params![desktop_path.to_string_lossy(),hash(&desktop_original),encrypt_provider_key(&desktop_original).unwrap(),
+            hash(&desktop_applied),encrypt_provider_key(&desktop_applied).unwrap()]).unwrap();
+    service_provider::configure_agent(&f.paths, &targets,
+        &json!({"agentType":"claude-desktop","providerId":""})).unwrap();
+    assert_eq!(std::fs::read_to_string(&desktop_path).unwrap(), desktop_original);
+    assert!(service::authorize(&c, "desktop-secret").is_err());
+    assert!(service::authorize(&c, &codex_token).is_ok());
+    assert!(service::authorize(&c, &claude_token).is_ok());
+    service_provider::configure_agent(&f.paths, &targets,
+        &json!({"agentType":"claude","providerId":""})).unwrap();
+    assert!(service::authorize(&c, &codex_token).is_ok());
+    assert_eq!(std::fs::read_to_string(codex.join("config.toml")).unwrap(), codex_before);
+    service_provider::configure_agent(&f.paths, &targets,
+        &json!({"agentType":"codex","providerId":""})).unwrap();
+}
+
+#[test]
+fn service_detach_preserves_client_edits_and_preflights_before_revoking_tokens() {
+    let f = Fixture::new();
+    let provider = f.provider();
+    service_provider::switch_backend(&f.paths, "service").unwrap();
+    let c = database::open(&f.paths).unwrap();
+    let model: String = c.query_row("SELECT id FROM service_provider_models WHERE provider_id=?1",
+        [&provider], |row| row.get(0)).unwrap();
+    let directory = f.root.join("client");
+    std::fs::create_dir_all(&directory).unwrap();
+    let original = "model = 'old'\nmodel_provider = 'original'\n[features]\nkeep = true\n";
+    std::fs::write(directory.join("config.toml"), original).unwrap();
+    let instance = service_provider::activate(&f.paths, &json!([]),
+        &json!({"agentType":"codex","providerId":provider,"modelId":model,"configPath":directory})).unwrap();
+    let applied = std::fs::read_to_string(directory.join("config.toml")).unwrap();
+    let token = toml_edit::de::from_str::<Value>(&applied).unwrap()["model_providers"]["ai_manager_service"]["experimental_bearer_token"].as_str().unwrap().to_string();
+    let catalog = std::fs::read(directory.join(".ai_manager_service_models.json")).unwrap();
+    std::fs::write(directory.join("config.toml"), "model = [invalid").unwrap();
+    assert!(service_provider::detach(&f.paths, text(&instance,"instanceId")).is_err());
+    assert!(service::authorize(&c, &token).is_ok());
+    assert_eq!(std::fs::read(directory.join(".ai_manager_service_models.json")).unwrap(), catalog);
+    // 模拟用户已切换到其他来源，同时客户端写入项目和插件设置。
+    let edited = applied.replace("model_provider = \"ai_manager_service\"", "model_provider = 'external'")
+        .replace("model = \"model\"", "model = 'user-model'");
+    std::fs::write(directory.join("config.toml"), format!("{edited}\n# 客户端新增配置\n[projects.'D:/new-project']\ntrust_level = 'trusted'\n[plugins]\nenabled = true\n")).unwrap();
+    service_provider::detach(&f.paths, text(&instance,"instanceId")).unwrap();
+    let restored = std::fs::read_to_string(directory.join("config.toml")).unwrap();
+    let value = toml_edit::de::from_str::<Value>(&restored).unwrap();
+    assert_eq!(value["model_provider"], "external");
+    assert_eq!(value["model"], "user-model");
+    assert_eq!(value["projects"]["D:/new-project"]["trust_level"], "trusted");
+    assert_eq!(value["plugins"]["enabled"], true);
+    assert_eq!(value["features"]["keep"], true);
+    assert!(restored.contains("# 客户端新增配置"));
+    assert!(value.get("model_providers").is_none());
+    assert!(!directory.join(".ai_manager_service_models.json").exists());
+    assert!(service::authorize(&c, &token).is_err());
+    service_provider::switch_backend(&f.paths, "legacy").unwrap();
+}
+
+#[test]
+fn service_detach_merges_json_and_preserves_deleted_files() {
+    let f = Fixture::new();
+    let provider = f.provider();
+    service_provider::switch_backend(&f.paths, "service").unwrap();
+    let c = database::open(&f.paths).unwrap();
+    let model: String = c.query_row("SELECT id FROM service_provider_models WHERE provider_id=?1",
+        [&provider], |row| row.get(0)).unwrap();
+    let directory = f.root.join("claude");
+    std::fs::create_dir_all(&directory).unwrap();
+    let original = json!({"env":{"USER_VAR":"keep","ANTHROPIC_API_KEY":"original-key"},"permissions":{"allow":["Read"]}});
+    std::fs::write(directory.join("settings.json"), original.to_string()).unwrap();
+    let value = json!({"agentType":"claude","providerId":provider,"modelId":model,"configPath":directory});
+    let instance = service_provider::activate(&f.paths, &json!([]), &value).unwrap();
+    let mut edited: Value = serde_json::from_str(&std::fs::read_to_string(directory.join("settings.json")).unwrap()).unwrap();
+    edited["env"]["USER_VAR"] = json!("updated");
+    edited["env"]["ADDED"] = json!("keep-added");
+    edited["model"] = json!("user-model");
+    edited["permissions"]["allow"] = json!(["Read", "Edit"]);
+    std::fs::write(directory.join("settings.json"), edited.to_string()).unwrap();
+    service_provider::detach(&f.paths, text(&instance,"instanceId")).unwrap();
+    let restored: Value = serde_json::from_str(&std::fs::read_to_string(directory.join("settings.json")).unwrap()).unwrap();
+    assert_eq!(restored, json!({"env":{"USER_VAR":"updated","ADDED":"keep-added","ANTHROPIC_API_KEY":"original-key"},
+        "model":"user-model","permissions":{"allow":["Read","Edit"]}}));
+    let instance = service_provider::activate(&f.paths, &json!([]), &value).unwrap();
+    std::fs::remove_file(directory.join("settings.json")).unwrap();
+    service_provider::detach(&f.paths, text(&instance,"instanceId")).unwrap();
+    assert!(!directory.join("settings.json").exists());
+}
+
+#[test]
+fn service_disable_revokes_access_preserves_rules_and_external_changes() {
     let f = Fixture::new();
     let provider = f.provider();
     service_provider::switch_backend(&f.paths, "service").unwrap();
@@ -341,11 +471,11 @@ fn service_disable_revokes_access_preserves_rules_and_restores_or_reports_confli
     std::fs::write(dir.join("config.toml"), "model = \"external-edit\"\n").unwrap();
     let mut disabled = config(&c,&provider).unwrap();
     disabled["enabled"] = json!(false);
-    assert!(tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(
-        service_provider::dispatch(&f.paths,&json!([]),"save",disabled)).is_err());
+    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(
+        service_provider::dispatch(&f.paths,&json!([]),"save",disabled)).unwrap();
     assert_eq!(config(&c,&provider).unwrap()["enabled"],0);
     assert_eq!(std::fs::read_to_string(dir.join("config.toml")).unwrap(), "model = \"external-edit\"\n");
-    assert_eq!(query(&c,"SELECT sync_status FROM service_agent_instances WHERE provider_id=?1",&[&provider]).unwrap()[0]["sync_status"],"conflict");
+    assert_eq!(query(&c,"SELECT sync_status FROM service_agent_instances WHERE agent_type='codex'",&[]).unwrap()[0]["sync_status"],"restored");
     assert_eq!(query(&c,"SELECT options_json AS optionsJson FROM service_provider_agent_bindings
         WHERE provider_id=?1 AND agent_type='codex'",&[&provider]).unwrap()[0]["options"]["syncModelList"],false);
 }
@@ -928,7 +1058,7 @@ fn service_icons_save_preserves_omitted_field_and_accepts_custom_or_empty_icon()
 }
 
 #[test]
-fn service_takeover_restores_original_and_detects_external_file_changes() {
+fn service_takeover_restores_original_and_preserves_external_file_changes() {
     let f = Fixture::new();
     let provider = f.provider();
     service_provider::switch_backend(&f.paths, "service").unwrap();
@@ -977,12 +1107,17 @@ fn service_takeover_restores_original_and_detects_external_file_changes() {
         format!("{applied}# 用户修改\n"),
     )
     .unwrap();
-    assert!(service_provider::switch_backend(&f.paths, "legacy").is_err());
-    assert!(active(&f.paths).unwrap());
+    service_provider::switch_backend(&f.paths, "legacy").unwrap();
+    assert!(!active(&f.paths).unwrap());
     assert!(std::fs::read_to_string(directory.join("config.toml"))
         .unwrap()
         .contains("# 用户修改"));
-    std::fs::write(directory.join("config.toml"), applied).unwrap();
+    let restored = std::fs::read_to_string(directory.join("config.toml")).unwrap();
+    assert_eq!(toml_edit::de::from_str::<Value>(&restored).unwrap(), toml_edit::de::from_str::<Value>(original).unwrap());
+    assert!(!directory.join(".ai_manager_service_models.json").exists());
+    service_provider::switch_backend(&f.paths, "service").unwrap();
+    std::fs::write(directory.join("config.toml"), original).unwrap();
+    service_provider::activate(&f.paths, &json!([]), &value).unwrap();
     service_provider::detach(&f.paths, text(&instance, "instanceId")).unwrap();
     assert_eq!(
         std::fs::read_to_string(directory.join("config.toml")).unwrap(),

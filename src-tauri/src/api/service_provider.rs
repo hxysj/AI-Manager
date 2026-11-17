@@ -203,7 +203,7 @@ pub(crate) fn configure_agent(
         }
         return store::state(paths);
     }
-    let mut config = store::config(&c, provider)?;
+    let config = store::config(&c, provider)?;
     if config["enabled"] != 1 || !config["deletedAt"].is_null() {
         return Err(store::fail("服务商已禁用或删除"));
     }
@@ -221,11 +221,24 @@ pub(crate) fn configure_agent(
     if let Some(target) = target.filter(|_| agent != "claude-desktop") {
         normalized(Path::new(store::text(target, "configPath")))?;
     }
-    // 先验证新来源，再保存此 Agent 的规则，目录、密钥及其他 Agent 参数均沿用。
-    config["enabled"] = json!(true);
-    config["bindings"] = json!([{"agentType":agent,"enabled":true,
-        "defaultModelName":model,"options":value["options"]}]);
-    store::save(paths, &config)?;
+    // Agent 规则独立更新，不能走服务商整体保存，否则其他 Agent 也会失去同步状态。
+    let mut c = database::open(paths)?;
+    let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    if tx.execute("UPDATE service_provider_configs SET revision=revision+1,updated_at=?3
+        WHERE id=?1 AND revision=?2 AND enabled=1 AND deleted_at IS NULL",
+        params![provider, value["revision"].as_i64(), store::now()])? != 1 {
+        return Err(store::fail("配置已被修改，请重新打开 Agent 配置"));
+    }
+    tx.execute("INSERT INTO service_provider_agent_bindings(provider_id,agent_type,enabled,default_model_id,options_json,updated_at)
+        VALUES(?1,?2,1,(SELECT id FROM service_provider_models WHERE provider_id=?1 AND upstream_model_id=?3 AND enabled=1),?4,?5)
+        ON CONFLICT(provider_id,agent_type) DO UPDATE SET enabled=1,default_model_id=excluded.default_model_id,
+        options_json=excluded.options_json,revision=revision+1,updated_at=excluded.updated_at",
+        params![provider, agent, model, value["options"].to_string(), store::now()])?;
+    tx.execute("UPDATE service_agent_instances SET sync_status='pending',last_error='Agent 配置已更新，请重新应用'
+        WHERE provider_id=?1 AND agent_type=?2 AND status='active'
+        AND EXISTS(SELECT 1 FROM service_managed_files f WHERE f.instance_id=service_agent_instances.id AND f.restore_status<>'restored')",
+        params![provider, agent])?;
+    tx.commit()?;
     if agent == "gateway" {
         return store::state(paths);
     }
@@ -668,20 +681,118 @@ pub(crate) fn activate(
     Ok(json!({"instanceId":instance,"baseUrl":base_url}))
 }
 
+// 以接管前后快照确定撤回范围；客户端后续修改过的值保留，不再按整文件哈希拒绝恢复。
+fn restoration_changes(before: Option<&Value>, after: Option<&Value>, current: Option<&Value>) -> Vec<Vec<String>> {
+    if before == after {
+        return Vec::new();
+    }
+    if current == after && !(before.is_some_and(Value::is_object) && after.is_some_and(Value::is_object)) {
+        return vec![Vec::new()];
+    }
+    let Some(after) = after.and_then(Value::as_object) else { return Vec::new() };
+    let Some(current) = current.and_then(Value::as_object) else { return Vec::new() };
+    if before.is_some_and(|value| !value.is_object()) {
+        return Vec::new();
+    }
+    let before = before.and_then(Value::as_object);
+    let keys = after.keys().chain(before.into_iter().flat_map(|map| map.keys()))
+        .collect::<std::collections::BTreeSet<_>>();
+    let mut changes = Vec::new();
+    for key in keys {
+        for mut path in restoration_changes(before.and_then(|map| map.get(key)), after.get(key), current.get(key)) {
+            path.insert(0, key.clone());
+            changes.push(path);
+        }
+    }
+    changes
+}
+
+fn restored_content(path: &Path, before: Option<&str>, after: &str, current: Option<&str>) -> Result<Option<String>, ManagerError> {
+    if current == before {
+        return Ok(current.map(str::to_owned));
+    }
+    if current == Some(after) {
+        return Ok(before.map(str::to_owned));
+    }
+    // 文件已被外部删除，不重新创建旧配置。
+    let Some(current) = current else { return Ok(None) };
+    if path.extension().is_some_and(|extension| extension == "toml") {
+        let parse = |text: &str| text.parse::<toml_edit::DocumentMut>()
+            .map_err(|_| store::fail("配置不是有效 TOML，请修复语法后重试恢复"));
+        let before_doc = parse(before.unwrap_or(""))?;
+        let after_doc = parse(after)?;
+        let mut current_doc = parse(current)?;
+        let value = |doc: &toml_edit::DocumentMut| toml_edit::de::from_document::<Value>(doc.clone())
+            .map_err(|_| store::fail("无法读取 TOML 配置字段"));
+        let changes = restoration_changes(Some(&value(&before_doc)?), Some(&value(&after_doc)?), Some(&value(&current_doc)?));
+        if changes.is_empty() {
+            return Ok(Some(current.to_string()));
+        }
+        for path in changes {
+            let mut original = Some(before_doc.as_item());
+            for key in &path {
+                original = original.and_then(|item| item.get(key));
+            }
+            if path.is_empty() {
+                return Ok(before.map(str::to_owned));
+            }
+            let mut parent = current_doc.as_item_mut();
+            for key in &path[..path.len() - 1] {
+                parent = &mut parent[key];
+            }
+            let key = path.last().unwrap();
+            if let Some(original) = original {
+                parent[key] = original.clone();
+            } else {
+                parent.as_table_like_mut().unwrap().remove(key);
+            }
+        }
+        return Ok(if before.is_none() && current_doc.as_table().is_empty() {
+            None
+        } else {
+            Some(current_doc.to_string())
+        });
+    }
+    let mut current_value: Value = serde_json::from_str(current)?;
+    let before_value: Value = serde_json::from_str(before.unwrap_or("{}"))?;
+    let after_value: Value = serde_json::from_str(after)?;
+    let changes = restoration_changes(Some(&before_value), Some(&after_value), Some(&current_value));
+    if changes.is_empty() {
+        return Ok(Some(current.to_string()));
+    }
+    for path in changes {
+        if path.is_empty() {
+            return Ok(before.map(str::to_owned));
+        }
+        let mut original = Some(&before_value);
+        let mut parent = &mut current_value;
+        for key in &path[..path.len() - 1] {
+            original = original.and_then(|value| value.get(key));
+            parent = &mut parent[key];
+        }
+        let key = path.last().unwrap();
+        if let Some(value) = original.and_then(|value| value.get(key)) {
+            parent[key] = value.clone();
+        } else {
+            parent.as_object_mut().unwrap().remove(key);
+        }
+    }
+    Ok(if before.is_none() && current_value.as_object().is_some_and(|map| map.is_empty()) {
+        None
+    } else {
+        Some(format!("{}\n", serde_json::to_string_pretty(&current_value)?))
+    })
+}
+
 pub(crate) fn detach(paths: &AppPaths, instance: &str) -> Result<(), ManagerError> {
     let mut c = database::open(paths)?;
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
     // 与网关入站共用写事务，检查在途请求和撤销 Token 之间不能再插入请求。
     if tx.query_row("SELECT EXISTS(SELECT 1 FROM service_gateway_requests WHERE instance_id=?1 AND finished_at IS NULL)",
         [instance],|r|r.get::<_,bool>(0))?{return Err(store::fail("该实例仍有请求进行中，请结束请求后重试"));}
-    tx.execute("UPDATE service_gateway_tokens SET status='revoked',revoked_at=?2 WHERE instance_id=?1 AND status='active'",params![instance,store::now()])?;
-    tx.execute(
-        "UPDATE service_agent_instances SET status='error',sync_status='pending' WHERE id=?1",
-        [instance],
-    )?;
-    tx.commit()?;
-    let files=store::query(&c,"SELECT * FROM service_managed_files WHERE instance_id=?1 AND restore_status<>'restored' ORDER BY created_at DESC",&[&instance])?;
+    let files=store::query(&tx,"SELECT * FROM service_managed_files WHERE instance_id=?1 AND restore_status<>'restored' ORDER BY created_at DESC",&[&instance])?;
     let mut conflicts = Vec::new();
+    let mut prepared = Vec::new();
     for file in files {
         let path = Path::new(store::text(&file, "file_path"));
         let result = (|| {
@@ -693,39 +804,59 @@ pub(crate) fn detach(paths: &AppPaths, instance: &str) -> Result<(), ManagerErro
             } else {
                 None
             };
-            if current.as_deref() == original {
-                Ok(())
-            } else if current.as_ref().map(|v| store::hash(v)).as_deref()
-                == Some(store::text(&file, "after_sha256"))
-            {
-                if original.is_some() {
-                    claude_desktop::atomic_write(path, before.as_bytes())
-                } else {
-                    std::fs::remove_file(path).map_err(ManagerError::from)
-                }
-            } else {
-                Err(store::fail("文件被外部修改，请手动对照备份处理后重试"))
-            }
+            let after = runtime_provider::decrypt_provider_key(store::text(&file, "after_ciphertext"))?;
+            let restored = restored_content(path, original, &after, current.as_deref())?;
+            Ok::<_, ManagerError>((current, restored))
         })();
         match result {
-            Ok(()) => {
-                c.execute("UPDATE service_managed_files SET restore_status='restored',error_message='',updated_at=?2 WHERE id=?1",params![file["id"].as_str(),store::now()])?;
+            Ok((current, restored)) => {
+                prepared.push((file.clone(), current, restored));
             }
             Err(e) => {
                 conflicts.push(format!("{}：{e}", path.display()));
-                c.execute("UPDATE service_managed_files SET restore_status='conflict',error_message=?2,updated_at=?3 WHERE id=?1",params![file["id"].as_str(),e.to_string(),store::now()])?;
+                tx.execute("UPDATE service_managed_files SET restore_status='conflict',error_message=?2,updated_at=?3 WHERE id=?1",params![file["id"].as_str(),e.to_string(),store::now()])?;
             }
         }
     }
+    // 所有文件先生成恢复方案，确认可恢复后才写入；事务期间网关不能插入新请求。
+    if conflicts.is_empty() {
+        for (file, current, restored) in prepared {
+            let path = Path::new(store::text(&file, "file_path"));
+            let result = (|| {
+                if read_file(path)? != current {
+                    return Err(store::fail("恢复期间配置文件已变化，请重试"));
+                }
+                if current != restored {
+                    if let Some(content) = restored {
+                        claude_desktop::atomic_write(path, content.as_bytes())?;
+                    } else if current.is_some() {
+                        std::fs::remove_file(path)?;
+                    }
+                }
+                Ok::<_, ManagerError>(())
+            })();
+            if let Err(error) = result {
+                conflicts.push(format!("{}：{error}", path.display()));
+                tx.execute("UPDATE service_managed_files SET restore_status='conflict',error_message=?2,updated_at=?3 WHERE id=?1",
+                    params![file["id"].as_str(), error.to_string(), store::now()])?;
+                break;
+            }
+            tx.execute("UPDATE service_managed_files SET restore_status='restored',error_message='',updated_at=?2 WHERE id=?1",
+                params![file["id"].as_str(), store::now()])?;
+        }
+    }
     if !conflicts.is_empty() {
-        c.execute(
-            "UPDATE service_agent_instances SET sync_status='conflict',last_error=?2 WHERE id=?1",
+        tx.execute(
+            "UPDATE service_agent_instances SET sync_status=CASE WHEN status='active' THEN sync_status ELSE 'conflict' END,last_error=?2 WHERE id=?1",
             params![instance, conflicts.join("；")],
         )?;
+        tx.commit()?;
         return Err(store::fail(conflicts.join("；")));
     }
-    c.execute("UPDATE service_agent_instances SET status='detached',sync_status='restored',provider_id=NULL,model_id=NULL,
+    tx.execute("UPDATE service_gateway_tokens SET status='revoked',revoked_at=?2 WHERE instance_id=?1 AND status='active'",params![instance,store::now()])?;
+    tx.execute("UPDATE service_agent_instances SET status='detached',sync_status='restored',provider_id=NULL,model_id=NULL,
         last_error='',revision=revision+1,updated_at=?2 WHERE id=?1",params![instance,store::now()])?;
+    tx.commit()?;
     Ok(())
 }
 
@@ -803,7 +934,7 @@ pub(crate) fn recover(paths: &AppPaths) -> Result<(), ManagerError> {
     )?;
     for instance in store::query(&c,"SELECT DISTINCT i.id FROM service_agent_instances i JOIN service_managed_files f ON f.instance_id=i.id
         WHERE (i.status='error' OR f.write_status='prepared') AND f.restore_status<>'restored'",&[])?{
-        // 中断的接管只恢复自身写入的文件，外部修改继续保持冲突供用户处理。
+        // 中断的接管按快照撤回自身改动，保留客户端后续修改。
         let _=detach(paths,store::text(&instance,"id"));
     }
     Ok(())
