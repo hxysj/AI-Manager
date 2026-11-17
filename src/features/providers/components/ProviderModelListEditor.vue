@@ -5,6 +5,7 @@
       class="provider-model-toolbar"
     >
       <div class="provider-model-heading">
+        <slot name="title-icon"></slot>
         <span class="provider-model-title">{{ title }}</span>
         <span class="provider-model-count">{{ models.length }} 个</span>
       </div>
@@ -66,9 +67,41 @@
         tabindex="0"
       >
         <ul v-if="models.length" class="provider-model-list">
-          <li v-for="model in models" :key="model" class="provider-model-item">
-            <Box class="provider-model-icon" :size="14" />
-            <span class="provider-model-name" :title="model">{{ model }}</span>
+          <li
+            v-for="model in models"
+            :key="model"
+            class="provider-model-item"
+            :class="{
+              'provider-model-selectable': readonly && selectable,
+              'provider-model-selected':
+                readonly && selectable && selectedModel === model
+            }"
+          >
+            <button
+              v-if="readonly && selectable"
+              class="provider-model-select"
+              type="button"
+              :disabled="disabled || loading"
+              :aria-label="`使用 ${model} 作为默认模型`"
+              :aria-pressed="selectedModel === model"
+              @click="selectModel(model)"
+            >
+              <Box class="provider-model-icon" :size="16" />
+              <span class="provider-model-name" :title="model">{{
+                model
+              }}</span>
+              <Check
+                v-if="selectedModel === model"
+                class="provider-model-check"
+                :size="16"
+              />
+            </button>
+            <template v-else>
+              <Box class="provider-model-icon" :size="14" />
+              <span class="provider-model-name" :title="model">{{
+                model
+              }}</span>
+            </template>
             <button
               v-if="!readonly"
               class="provider-model-remove"
@@ -173,6 +206,8 @@ const props = defineProps({
   readonly: { type: Boolean, default: false },
   // 引用服务商目录时只展示标题、数量与同步开关，保留原只读弹窗的默认外观。
   showReadonlySummary: { type: Boolean, default: false },
+  selectable: { type: Boolean, default: false },
+  selectedModel: { type: String, default: "" },
   emptyHint: { type: String, default: "" },
   maxHeight: { type: [String, Number], default: "176px" },
   disabled: { type: Boolean, default: false },
@@ -181,12 +216,26 @@ const props = defineProps({
 const emit = defineEmits([
   "update:modelValue",
   "update:syncModelList",
+  "update:selectedModel",
   "fetch",
   "reset"
 ])
 const bulkEditing = ref(false)
 const modelInput = ref("")
 const models = computed(() => parseModels(props.modelValue))
+
+// 引用目录只切换默认模型，不修改服务商保存的模型列表。
+function selectModel(model) {
+  if (
+    !props.readonly ||
+    !props.selectable ||
+    props.disabled ||
+    props.loading ||
+    !models.value.includes(model)
+  )
+    return
+  emit("update:selectedModel", model)
+}
 
 // 与 Codex 保存规则一致，保留首次出现的模型名和顺序。
 function parseModels(value) {
@@ -355,6 +404,54 @@ function resetModels() {
           padding: 0 6px 0 10px;
           border-radius: 6px;
           background: var(--color-panel-soft);
+
+          &.provider-model-selectable {
+            height: 44px;
+            padding: 0;
+            border: 1px solid var(--color-line);
+            background: var(--color-panel);
+          }
+
+          &.provider-model-selected {
+            border-color: var(--color-primary);
+            background: var(--color-primary-soft);
+          }
+
+          .provider-model-select {
+            display: flex;
+            width: 100%;
+            min-width: 0;
+            height: 100%;
+            align-items: center;
+            gap: 10px;
+            padding: 0 12px;
+            border: 0;
+            border-radius: inherit;
+            background: transparent;
+            color: var(--color-text);
+            font: inherit;
+            text-align: left;
+            cursor: pointer;
+
+            &:hover:not(:disabled) {
+              background: var(--color-primary-soft);
+            }
+
+            &:focus-visible {
+              outline: 2px solid var(--color-primary);
+              outline-offset: 2px;
+            }
+
+            &:disabled {
+              opacity: 0.5;
+              cursor: not-allowed;
+            }
+
+            .provider-model-check {
+              flex: none;
+              color: var(--color-primary);
+            }
+          }
 
           .provider-model-icon {
             flex: none;

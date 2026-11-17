@@ -12,6 +12,14 @@ import { createRenderer, createSSRApp, h, nextTick, reactive } from "vue"
 import { renderToString } from "@vue/server-renderer"
 
 const require = createRequire(import.meta.url)
+const formatterModule = { exports: {} }
+new Function(
+  "module",
+  "exports",
+  transformSync(readFileSync("src/utils/formatters.js", "utf8"), {
+    format: "cjs"
+  }).code
+)(formatterModule, formatterModule.exports)
 const files = [
   "src/App.vue",
   "src/components/AppSidebar.vue",
@@ -20,6 +28,8 @@ const files = [
   "src/features/providers/components/ProviderIconPicker.vue",
   "src/features/providers/components/ProviderModelListEditor.vue",
   "src/features/providers/components/ServiceAgentModelFields.vue",
+  "src/features/providers/components/ServiceOfficialAccountOverview.vue",
+  "src/features/providers/components/ServiceProviderOverview.vue",
   "src/features/tools/index.vue",
   "src/features/assistant/components/AssistantModelSelect.vue",
   "src/features/settings/components/TranslationAgentSettings.vue",
@@ -71,7 +81,7 @@ for (const filename of files) {
       { format: "cjs" }
     ).code
   } else if (
-    /ProviderIconPicker|ProviderModelListEditor|ServiceAgentModelFields/.test(
+    /ProviderIconPicker|ProviderModelListEditor|ServiceAgentModelFields|ServiceOfficialAccountOverview|ServiceProviderOverview/.test(
       filename
     )
   ) {
@@ -200,7 +210,8 @@ let googleStateHandler
 const invoke = async (action, payload) => {
   calls.push({ action, payload })
   if (action === "refresh-quota" && quotaHandler) return quotaHandler(payload)
-  if (action === "google-login-state" && googleStateHandler) return googleStateHandler()
+  if (action === "google-login-state" && googleStateHandler)
+    return googleStateHandler()
   if (["save", "configure-agent"].includes(action) && failSave)
     throw new Error("配置已被修改，请刷新后重试")
   if (action === "state") {
@@ -262,6 +273,7 @@ const localRequire = (name) => {
     return editorModules.get(name.split("/").pop())
   if (name === "@/api/modules/service-providers")
     return { serviceProviderApi: { invoke } }
+  if (name === "@/utils/formatters") return formatterModule.exports
   if (name === "@/utils/message")
     return {
       createMessage: {
@@ -487,6 +499,287 @@ const officialDetailHtml = await renderCenter(listState, (value) => {
 assert.ok(officialDetailHtml.includes("使用官方模型列表"))
 assert.ok(!officialDetailHtml.includes("获取模型"))
 assert.ok(!officialDetailHtml.includes("尚未配置模型"))
+// 官方详情使用公开账号资料，零额度和未知额度必须明确区分。
+const accountDetails = {
+  ...listState,
+  providers: [
+    {
+      ...official,
+      createdAt: 1794873600000,
+      updatedAt: 1794960000000,
+      note: "团队工作账号"
+    }
+  ],
+  accounts: [
+    {
+      ...listState.accounts[0],
+      accountId: "official-account-id",
+      expiresAt: 1795046400000,
+      quota: {
+        plan_type: "plus",
+        rate_limit: {
+          primary_window: {
+            used_percent: 25,
+            limit_window_seconds: 18000,
+            reset_at: 4102444800
+          },
+          secondary_window: { used_percent: 100, limit_window_seconds: 604800 }
+        }
+      }
+    }
+  ],
+  instances: [
+    {
+      id: "official-codex",
+      providerId: official.id,
+      agentType: "codex",
+      configPath: "D:/official-codex",
+      status: "active",
+      syncStatus: "synced"
+    }
+  ]
+}
+const richOfficialHtml = await renderCenter(accountDetails, (value) => {
+  value.openProviderDetail(official)
+})
+for (const text of [
+  "official-account-id",
+  "Plus",
+  "75%",
+  "0%",
+  "5 小时额度",
+  "7 天额度",
+  "2100",
+  "访问令牌到期",
+  "创建时间",
+  "团队工作账号",
+  "官方未提供重置时间",
+  "官方额度与网关请求用量独立统计"
+])
+  assert.ok(richOfficialHtml.includes(text), text)
+assert.ok(richOfficialHtml.includes('class="official-agent-tag"'))
+assert.ok(!richOfficialHtml.includes("quota-json"))
+const waitingOfficialHtml = await renderCenter(
+  {
+    ...listState,
+    providers: [{ ...official, hasCredential: 0 }],
+    accounts: []
+  },
+  (value) => value.openProviderDetail(official)
+)
+assert.ok(waitingOfficialHtml.includes("登录后查看官方额度"))
+assert.ok(waitingOfficialHtml.includes("套餐待获取"))
+assert.ok(!waitingOfficialHtml.includes("official-quota-number"))
+const unknownQuotaHtml = await renderCenter(
+  {
+    ...listState,
+    accounts: [
+      {
+        providerId: official.id,
+        quota: {
+          rate_limit: { primary_window: { limit_window_seconds: 18000 } }
+        }
+      }
+    ]
+  },
+  (value) => value.openProviderDetail(official)
+)
+assert.ok(unknownQuotaHtml.includes('aria-valuetext="额度未知"'))
+assert.ok(!unknownQuotaHtml.includes('aria-valuenow="0"'))
+const googleOfficial = {
+  ...official,
+  id: "google-official",
+  name: "Google 工作账号",
+  kind: "google_account"
+}
+const googleDetailHtml = await renderCenter(
+  {
+    ...listState,
+    providers: [googleOfficial],
+    googleAccounts: [
+      {
+        providerId: googleOfficial.id,
+        email: "google@example.test",
+        subject: "google-subject-id",
+        metadata: {
+          plan: "g1-pro-tier",
+          project: "cloud-project-id",
+          status: "reauth_required",
+          message: "Google 授权已失效，请重新登录",
+          updatedAt: 1794960000000,
+          quotaGroups: [
+            {
+              displayName: "共享分组",
+              buckets: [
+                {
+                  window: "WINDOW_5H",
+                  remainingFraction: 0,
+                  resetTime: "2100-01-01T00:00:00Z"
+                },
+                { window: "WINDOW_WEEKLY", remainingFraction: null }
+              ]
+            }
+          ]
+        }
+      }
+    ]
+  },
+  (value) => {
+    value.openProviderDetail(googleOfficial)
+    value.refreshingQuotaIds.value.add(googleOfficial.id)
+  }
+)
+for (const text of [
+  "google@example.test",
+  "google-subject-id",
+  "Google AI Pro",
+  "cloud-project-id",
+  "需重新登录",
+  "Google 授权已失效",
+  "共享分组 · 5 小时额度",
+  "共享分组 · 周额度",
+  "0%",
+  "官方未返回数值",
+  "刷新中"
+])
+  assert.ok(googleDetailHtml.includes(text), text)
+assert.ok(googleDetailHtml.includes('aria-valuenow="0"'))
+assert.ok(googleDetailHtml.includes('aria-valuetext="额度未知"'))
+assert.ok(!googleDetailHtml.includes("导入 auth.json"))
+assert.ok(!googleDetailHtml.includes("获取模型"))
+const apiDetailHtml = await renderCenter(state, (value) => {
+  value.openProviderDetail(state.providers[0])
+})
+assert.ok(apiDetailHtml.includes("OpenAI 兼容服务商"))
+assert.ok(apiDetailHtml.includes("https://example.test/v1"))
+assert.ok(
+  apiDetailHtml.includes("获取模型") && apiDetailHtml.includes("测试模型")
+)
+assert.ok(!apiDetailHtml.includes("official-overview"))
+// 服务商概览按当前来源展示目录与 Key，未知价格不能显示成免费。
+const richApiState = {
+  ...state,
+  providers: [
+    {
+      ...state.providers[0],
+      upstreamProtocol: "chat",
+      createdAt: 1794873600000,
+      updatedAt: 1794960000000,
+      note: "研发团队共享服务商"
+    }
+  ],
+  models: [
+    {
+      ...state.models[0],
+      contextWindow: 131072,
+      inputPriceMicros: 0,
+      cachedInputPriceMicros: null,
+      outputPriceMicros: 2000000,
+      currency: "USD"
+    },
+    {
+      id: "disabled-model",
+      providerId: "p",
+      upstreamModelId: "disabled-model-id",
+      displayName: "停用模型",
+      enabled: 0,
+      inputPriceMicros: 3500000,
+      currency: "CNY"
+    },
+    {
+      id: "other-model",
+      providerId: "other",
+      upstreamModelId: "other-provider-model",
+      enabled: 1
+    }
+  ],
+  keys: [
+    {
+      id: "revoked",
+      providerId: "p",
+      name: "已撤销 Key",
+      status: "revoked",
+      isActive: 1,
+      fingerprint: "revoked-fingerprint"
+    },
+    {
+      id: "primary",
+      providerId: "p",
+      name: "生产 Key",
+      status: "active",
+      isActive: 1,
+      fingerprint: "primary-fingerprint"
+    },
+    {
+      id: "backup",
+      providerId: "p",
+      name: "备用 Key",
+      status: "active",
+      isActive: 0
+    },
+    {
+      id: "other",
+      providerId: "other",
+      name: "其他来源 Key",
+      status: "active",
+      isActive: 1
+    }
+  ],
+  instances: [
+    {
+      id: "api-codex",
+      providerId: "p",
+      agentType: "codex",
+      configPath: "D:/api-codex",
+      status: "active",
+      syncStatus: "synced"
+    }
+  ]
+}
+const richApiHtml = await renderCenter(richApiState, (value) => {
+  value.openProviderDetail(richApiState.providers[0])
+})
+for (const text of [
+  "Chat Completions",
+  "连接配置",
+  "凭据与使用",
+  "生产 Key",
+  "primary-fingerprint",
+  "2 / 3 个",
+  "131072 Tokens",
+  "0 USD",
+  "2 USD",
+  "3.5 CNY",
+  "未配置",
+  "停用模型",
+  "disabled-model-id",
+  "每 100 万 Tokens",
+  "研发团队共享服务商"
+])
+  assert.ok(richApiHtml.includes(text), text)
+assert.ok(richApiHtml.includes('class="service-agent-tag"'))
+assert.ok(!richApiHtml.includes("revoked-fingerprint"))
+assert.ok(!richApiHtml.includes("其他来源 Key"))
+assert.ok(!richApiHtml.includes("other-provider-model"))
+const emptyApiHtml = await renderCenter(
+  {
+    ...state,
+    providers: [{ ...state.providers[0], hasCredential: 0, enabled: 0 }],
+    models: [],
+    keys: [],
+    instances: []
+  },
+  (value) => value.openProviderDetail(state.providers[0])
+)
+for (const text of [
+  "待配置 API Key",
+  "尚未配置模型",
+  "暂无 Agent 使用",
+  "0 / 0 个",
+  "已停用"
+])
+  assert.ok(emptyApiHtml.includes(text), text)
+assert.ok(!emptyApiHtml.includes('class="service-model-table"'))
 const customIcon = "data:image/png;base64,aWNvbg=="
 const customIconHtml = await renderCenter(
   {
@@ -515,6 +808,118 @@ const keysHtml = await renderCenter(state, (value) => {
 })
 assert.ok(
   keysHtml.includes("添加 / 更新 Key") && keysHtml.includes("尚未添加 API Key")
+)
+// Key 列表只展示当前来源，撤销和不可读取的凭据不能被误标为使用中。
+const detailKeysHtml = await renderCenter(
+  {
+    ...richApiState,
+    keys: [
+      ...richApiState.keys,
+      {
+        id: "unreadable",
+        providerId: "p",
+        name: "待重新录入 Key",
+        status: "unreadable",
+        isActive: 0
+      }
+    ]
+  },
+  (value) => value.openProviderDetail(state.providers[0], "keys")
+)
+const keyRows = [
+  ...detailKeysHtml.matchAll(
+    /<tr[^>]*class="detail-key-row[^"]*"[^>]*>[\s\S]*?<\/tr>/g
+  )
+].map((match) => match[0])
+for (const name of ["生产 Key", "已撤销 Key", "待重新录入 Key"]) {
+  const row = keyRows.find((item) => item.includes(name))
+  assert.ok(
+    /<button[^>]*disabled[^>]*>[\s\S]*?使用此 Key/.test(row),
+    `${name} 不可重复启用或选择无效凭据`
+  )
+}
+assert.ok(
+  !/<button[^>]*disabled[^>]*>[\s\S]*?使用此 Key/.test(
+    keyRows.find((item) => item.includes("备用 Key"))
+  )
+)
+const revokedRow = keyRows.find((item) => item.includes("已撤销 Key"))
+assert.ok(revokedRow.includes("已撤销") && !revokedRow.includes("使用中"))
+assert.ok(detailKeysHtml.includes("无法读取"))
+assert.ok(!detailKeysHtml.includes("其他来源 Key"))
+assert.equal(
+  keyRows.filter((item) => item.includes("detail-key-current")).length,
+  1
+)
+// 关联页继续只读真实活动实例，补充协议、同步时间与冲突信息。
+const detailAgentsHtml = await renderCenter(
+  {
+    ...state,
+    instances: [
+      {
+        id: "detail-active",
+        name: "本地开发实例",
+        providerId: "p",
+        agentType: "codex",
+        configPath: "D:/detail-codex",
+        clientProtocol: "responses",
+        status: "active",
+        syncStatus: "synced",
+        lastSyncedAt: 1794873600000
+      },
+      {
+        id: "detail-pending",
+        name: "配置待同步实例",
+        providerId: "p",
+        agentType: "claude",
+        configPath: "D:/detail-claude",
+        clientProtocol: "messages",
+        status: "active",
+        syncStatus: "conflict",
+        lastError: "配置已被外部修改"
+      },
+      ...[
+        ["hidden-detached", "p", "D:/detached", "detached"],
+        ["hidden-other", "other", "D:/other", "active"],
+        ["hidden-internal", "p", "internal:session", "active"],
+        ["hidden-test", "p", "test:probe", "active"]
+      ].map(([name, providerId, configPath, status]) => ({
+        id: name,
+        name,
+        providerId,
+        configPath,
+        status,
+        agentType: "codex",
+        syncStatus: "synced"
+      }))
+    ]
+  },
+  (value) => value.openProviderDetail(state.providers[0], "instances")
+)
+for (const label of [
+  "本地开发实例",
+  "D:/detail-codex",
+  "Responses",
+  "Messages",
+  "最近同步",
+  "已同步",
+  "配置冲突",
+  "配置已被外部修改",
+  "未记录"
+]) {
+  assert.ok(detailAgentsHtml.includes(label), label)
+}
+assert.equal(
+  (detailAgentsHtml.match(/class="detail-agent-card"/g) || []).length,
+  2
+)
+assert.ok(!detailAgentsHtml.includes("hidden-"))
+const emptyAgentsHtml = await renderCenter(state, (value) =>
+  value.openProviderDetail(state.providers[0], "instances")
+)
+assert.ok(
+  emptyAgentsHtml.includes("尚未关联 Agent") &&
+    emptyAgentsHtml.includes("管理 Agent")
 )
 await bindings.toggleProviderEnabled(state.providers[0])
 const disabledPayload = calls.find((item) => item.action === "save").payload
@@ -765,6 +1170,29 @@ readonlyEditor.addModels()
 readonlyEditor.removeModel("upstream-model")
 readonlyEditor.resetModels()
 assert.deepEqual(readonlyEvents, [])
+// 目录条目只发出默认模型选择，禁用或非选择模式均不允许操作。
+const selectionProps = reactive({
+  modelValue: "upstream-model\nanother-model",
+  readonly: true,
+  selectable: true,
+  disabled: false,
+  loading: false
+})
+const selectionEvents = []
+const selectionEditor = ModelListEditor.setup(selectionProps, {
+  expose() {},
+  emit: (...event) => selectionEvents.push(event)
+})
+selectionEditor.selectModel("another-model")
+assert.deepEqual(selectionEvents, [["update:selectedModel", "another-model"]])
+selectionEditor.selectModel("unknown-model")
+selectionProps.disabled = true
+selectionEditor.selectModel("upstream-model")
+selectionProps.disabled = false
+selectionProps.selectable = false
+selectionEditor.selectModel("upstream-model")
+assert.equal(selectionEvents.length, 1)
+assert.equal(selectionProps.modelValue, "upstream-model\nanother-model")
 const emptyCodexHtml = await renderToString(
   createSSRApp(AgentFields, {
     modelValue: agentProps.modelValue,
@@ -910,12 +1338,24 @@ const sourceHtml = await renderCenter(listState, (value) => {
 assert.ok(!sourceHtml.includes('value="disabled"'))
 assert.ok(!sourceHtml.includes("（已禁用）"))
 assert.ok(!sourceHtml.includes('label="Google 账号"'))
-const uncredentialedSourceHtml = await renderCenter({
-  ...listState,
-  providers: [...listState.providers, {
-    id: "uncredentialed", name: "待配置", kind: "google_account", enabled: 1, hasCredential: 0
-  }]
-}, value => { value.agentConfig.value = cliTargets[0] })
+const uncredentialedSourceHtml = await renderCenter(
+  {
+    ...listState,
+    providers: [
+      ...listState.providers,
+      {
+        id: "uncredentialed",
+        name: "待配置",
+        kind: "google_account",
+        enabled: 1,
+        hasCredential: 0
+      }
+    ]
+  },
+  (value) => {
+    value.agentConfig.value = cliTargets[0]
+  }
+)
 assert.match(uncredentialedSourceHtml, /value="uncredentialed" disabled/)
 const optionsHtml = await renderCenter(state, (value) => {
   value.showCreateOptions.value = true
@@ -995,17 +1435,24 @@ calls.length = 0
 await bindings.saveProvider()
 assert.equal(calls.find((item) => item.action === "save").payload.apiKey, "")
 assert.deepEqual(calls.find((item) => item.action === "login").payload, {
-  accountId: "new-codex_account", proxy: ""
+  accountId: "new-codex_account",
+  proxy: ""
 })
-await bindings.createSource(bindings.createSources.find((item) => item.kind === "google_account"))
+await bindings.createSource(
+  bindings.createSources.find((item) => item.kind === "google_account")
+)
 calls.length = 0
 await bindings.saveProvider()
 assert.deepEqual(calls.find((item) => item.action === "google-login").payload, {
-  providerId: "new-google_account", proxy: ""
+  providerId: "new-google_account",
+  proxy: ""
 })
 assert.equal(bindings.googleLoginState.value.status, "pending")
 let releaseGoogleState
-googleStateHandler = () => new Promise((resolve) => { releaseGoogleState = resolve })
+googleStateHandler = () =>
+  new Promise((resolve) => {
+    releaseGoogleState = resolve
+  })
 const pendingGooglePoll = bindings.pollGoogleLogin()
 await bindings.cancelGoogleLogin()
 releaseGoogleState({ status: "pending" })
@@ -1015,7 +1462,11 @@ assert.equal(bindings.googleLoginState.value, null)
 await bindings.openToolConfig(state.providers[0])
 assert.equal(bindings.agentConfig.value.id, "gateway")
 await bindings.saveAgentConfig()
-assert.equal(calls.filter((item) => item.action === "configure-agent").at(-1).payload.agentType, "gateway")
+assert.equal(
+  calls.filter((item) => item.action === "configure-agent").at(-1).payload
+    .agentType,
+  "gateway"
+)
 assert.equal(bindings.showGatewayManager.value, true)
 bindings.openApply(state.providers[0])
 assert.equal(bindings.applyForm.value.modelId, "m")
@@ -1047,7 +1498,13 @@ state = {
   providers: [
     ...previousState.providers,
     official,
-    { id: "google", name: "Google", kind: "google_account", enabled: 1, hasCredential: 1 },
+    {
+      id: "google",
+      name: "Google",
+      kind: "google_account",
+      enabled: 1,
+      hasCredential: 1
+    },
     { ...official, id: "disabled-account", enabled: 0 },
     { ...official, id: "uncredentialed-account", hasCredential: 0 }
   ]
@@ -1067,9 +1524,15 @@ const testRenderer = createRenderer({
 let liveBindings
 const liveApp = testRenderer.createApp({
   setup(_, context) {
-    liveBindings = Center.setup({
-      initialState: state, cliTargets, runtimeConfigSchemas, loginState: null
-    }, context)
+    liveBindings = Center.setup(
+      {
+        initialState: state,
+        cliTargets,
+        runtimeConfigSchemas,
+        loginState: null
+      },
+      context
+    )
     return () => null
   }
 })
@@ -1091,7 +1554,10 @@ await liveBindings.selectAgentProvider()
 liveBindings.closeAgentConfig()
 assert.ok(!calls.some((item) => item.action === "refresh-quota"))
 let releaseQuota
-quotaHandler = () => new Promise((resolve) => { releaseQuota = resolve })
+quotaHandler = () =>
+  new Promise((resolve) => {
+    releaseQuota = resolve
+  })
 liveBindings.providerTab.value = "codex_account"
 await settle()
 assert.equal(calls.filter((item) => item.action === "refresh-quota").length, 1)
@@ -1109,13 +1575,20 @@ quotaHandler = async ({ providerId }) => {
 calls.length = 0
 liveBindings.providerTab.value = "codex_account"
 await settle()
-assert.deepEqual(calls.filter((item) => item.action === "refresh-quota")
-  .map((item) => item.payload.providerId), [official.id, "google"])
+assert.deepEqual(
+  calls
+    .filter((item) => item.action === "refresh-quota")
+    .map((item) => item.payload.providerId),
+  [official.id, "google"]
+)
 assert.equal(liveBindings.refreshingQuotaIds.value.size, 0)
 assert.ok(messages.some((message) => message.includes("模拟额度接口失败")))
 liveBindings.providerTab.value = "api"
 await settle()
-quotaHandler = () => new Promise((resolve) => { releaseQuota = resolve })
+quotaHandler = () =>
+  new Promise((resolve) => {
+    releaseQuota = resolve
+  })
 calls.length = 0
 liveBindings.providerTab.value = "codex_account"
 await settle()
@@ -1123,7 +1596,10 @@ const pendingQuotaBatch = liveBindings.refreshOfficialQuotas()
 liveApp.unmount()
 releaseQuota({})
 await pendingQuotaBatch
-assert.deepEqual(calls.map((item) => item.action), ["refresh-quota"])
+assert.deepEqual(
+  calls.map((item) => item.action),
+  ["refresh-quota"]
+)
 quotaHandler = undefined
 state = previousState
 
@@ -1196,10 +1672,12 @@ assert.ok(
   !appSource.includes("usage-only") && !appSource.includes("serviceCenterOpen")
 )
 const usageViewSource = appSource.match(/<UsageView\b[\s\S]*?\/>/)?.[0] || ""
-assert.ok(usageViewSource.includes('v-else-if="activeView === \'usage\'"'))
+assert.ok(usageViewSource.includes("v-else-if=\"activeView === 'usage'\""))
 assert.ok(usageViewSource.includes(':usage="state.usage"'))
 assert.ok(
-  usageViewSource.includes(':provider-backend="state.serviceProviders?.backend"')
+  usageViewSource.includes(
+    ':provider-backend="state.serviceProviders?.backend"'
+  )
 )
 const formatterSource = transformSync(
   readFileSync("src/utils/formatters.js", "utf8"),
@@ -1280,5 +1758,5 @@ for (const { filename, code } of selectorComponents) {
   }
 }
 console.log(
-  `${files.length} 个 SFC 编译通过；原列表布局、图标继承、类型/禁用筛选、账号展示、Key 入口、Agent 管理、模型目录共用、Codex 同步开关、设置模式切换、Usage 保留、配置保存、授权、Token 及回滚交互通过`
+  `${files.length} 个 SFC 编译通过；原列表布局、图标继承、类型/禁用筛选、官方详情与额度状态、服务商概览与价格状态、Key 入口、Agent 管理、模型目录共用、Codex 同步开关、设置模式切换、Usage 保留、配置保存、授权、Token 及回滚交互通过`
 )

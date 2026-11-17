@@ -325,6 +325,7 @@
 
     <BaseModal
       v-if="detailProvider"
+      class="provider-detail-modal"
       :title="providerDisplayName(detailProvider)"
       description=""
       @close="detailProviderId = ''"
@@ -343,250 +344,344 @@
           </button>
         </div>
         <template v-if="detailTab === 'overview'">
-          <dl class="detail-fields">
-            <div class="detail-field">
-              <dt class="detail-label">服务商类型</dt>
-              <dd class="detail-value">
-                {{
-                  detailProvider.kind !== "api"
-                    ? detailProvider.kind === "google_account"
-                      ? "Google 官方账号"
-                      : "GPT / Codex 官方账号"
-                    : "OpenAI 兼容服务商"
-                }}
-              </dd>
-            </div>
-            <div v-if="detailProvider.kind === 'api'" class="detail-field">
-              <dt class="detail-label">基础地址</dt>
-              <dd class="detail-value">{{ detailProvider.baseUrl }}</dd>
-            </div>
-            <div class="detail-field">
-              <dt class="detail-label">正在使用的 Agent</dt>
-              <dd class="detail-value">
-                {{
-                  providerRunningAgents(detailProvider.id)
-                    .map(agentLabel)
-                    .join("、") || "暂无 Agent 使用"
-                }}
-              </dd>
-            </div>
-            <div class="detail-field">
-              <dt class="detail-label">凭据状态</dt>
-              <dd class="detail-value">
-                {{ detailProvider.hasCredential ? "已配置" : "待配置" }}
-              </dd>
-            </div>
-            <div v-if="detailProvider.proxy" class="detail-field">
-              <dt class="detail-label">代理地址</dt>
-              <dd class="detail-value">{{ detailProvider.proxy }}</dd>
-            </div>
-          </dl>
-          <div class="card-actions">
-            <button
-              v-if="detailProvider.kind === 'api'"
-              class="btn"
-              :disabled="busy"
-              @click="
-                perform('fetch-models', {
-                  providerId: detailProvider.id,
-                  agentVersion: agentVersion('codex')
-                })
-              "
-            >
-              获取模型
-            </button>
-            <button
-              class="btn"
-              :disabled="busy"
-              @click="openGatewayManager(detailProvider)"
-            >
-              管理 Agent
-            </button>
-            <button
-              class="btn"
-              :disabled="busy"
-              @click="editProvider(detailProvider)"
-            >
-              编辑配置
-            </button>
-          </div>
-          <p v-if="detailProvider.kind !== 'api'" class="muted">
-            使用官方模型列表
-          </p>
-          <div v-else class="detail-models">
-            <h3 class="section-title">模型</h3>
-            <span
-              v-for="model in providerModels(detailProvider.id)"
-              :key="model.id"
-              class="model-tag"
-              :class="{ 'model-tag-disabled': !model.enabled }"
-              >{{ model.displayName || model.upstreamModelId }}</span
-            >
-            <p v-if="!providerModels(detailProvider.id).length" class="muted">
-              尚未配置模型，可以获取模型或在编辑中添加。
-            </p>
-          </div>
-          <template v-if="detailProvider.kind === 'codex_account'">
-            <h3 class="section-title">官方账号</h3>
-            <div class="card-actions">
-              <button
-                class="btn"
-                :disabled="busy || data.backend !== 'service'"
-                @click="
-                  perform('login', {
+          <ServiceOfficialAccountOverview
+            v-if="detailProvider.kind !== 'api'"
+            :provider="detailProvider"
+            :display-name="providerDisplayName(detailProvider)"
+            :account="
+              detailProvider.kind === 'google_account'
+                ? googleAccount(detailProvider.id)
+                : providerAccount(detailProvider.id)
+            "
+            :quota-windows="quotaWindows(detailProvider)"
+            :running-agents="
+              providerRunningAgents(detailProvider.id).map(agentLabel)
+            "
+            :busy="busy"
+            :refreshing="refreshingQuotaIds.has(detailProvider.id)"
+            :login-disabled="
+              detailProvider.kind === 'codex_account' &&
+              data.backend !== 'service'
+            "
+            @refresh="refreshQuota(detailProvider)"
+            @login="
+              detailProvider.kind === 'google_account'
+                ? startGoogleLogin(detailProvider)
+                : perform('login', {
                     accountId: detailProvider.id,
                     proxy: detailProvider.proxy
                   })
-                "
-              >
-                官方登录
-              </button>
-              <button
-                class="btn"
-                :disabled="
-                  busy ||
-                  !detailProvider.enabled ||
-                  !detailProvider.hasCredential ||
-                  refreshingQuotaIds.has(detailProvider.id)
-                "
-                @click="refreshQuota(detailProvider)"
-              >
-                刷新官方额度
-              </button>
-              <button
-                class="btn"
-                :disabled="busy"
-                @click="
-                  ((accountProvider = detailProvider.id), (accountContent = ''))
-                "
-              >
-                导入 auth.json
-              </button>
-            </div>
-            <details class="quota-report">
-              <summary>官方额度（独立于网关用量）</summary>
-              <pre class="quota-json">{{
-                JSON.stringify(
-                  providerAccount(detailProvider.id)?.quota || {},
-                  null,
-                  2
-                )
-              }}</pre>
-            </details>
-          </template>
-          <template v-if="detailProvider.kind === 'google_account'">
-            <h3 class="section-title">Google 官方账号</h3>
-            <div class="card-actions">
-              <button
-                class="btn"
-                :disabled="busy"
-                @click="startGoogleLogin(detailProvider)"
-              >
-                Google 登录
-              </button>
-              <button
-                class="btn"
-                :disabled="
-                  busy ||
-                  !detailProvider.enabled ||
-                  !detailProvider.hasCredential ||
-                  refreshingQuotaIds.has(detailProvider.id)
-                "
-                @click="refreshQuota(detailProvider)"
-              >
-                刷新官方额度
-              </button>
-            </div>
-            <p class="muted">
-              {{
-                googleAccount(detailProvider.id)?.metadata?.message ||
-                "使用官方模型列表"
-              }}
-            </p>
-          </template>
+            "
+            @import="
+              ((accountProvider = detailProvider.id), (accountContent = ''))
+            "
+            @manage="openGatewayManager(detailProvider)"
+            @edit="editProvider(detailProvider)"
+          />
+          <ServiceProviderOverview
+            v-else
+            :provider="detailProvider"
+            :models="providerModels(detailProvider.id)"
+            :keys="
+              data.keys.filter((item) => item.providerId === detailProvider.id)
+            "
+            :running-agents="
+              providerRunningAgents(detailProvider.id).map(agentLabel)
+            "
+            :busy="busy"
+            @fetch="
+              perform('fetch-models', {
+                providerId: detailProvider.id,
+                agentVersion: agentVersion('codex')
+              })
+            "
+            @edit="editProvider(detailProvider)"
+            @keys="detailTab = 'keys'"
+            @manage="openGatewayManager(detailProvider)"
+          />
         </template>
-        <div v-else-if="detailTab === 'keys'" class="key-list">
-          <div class="card-actions">
+        <section v-else-if="detailTab === 'keys'" class="detail-panel">
+          <header class="detail-panel-heading">
+            <div class="detail-panel-title">
+              <span class="detail-panel-icon"><KeyRound :size="21" /></span>
+              <div class="detail-panel-copy">
+                <h3 class="detail-panel-name">API Key</h3>
+                <p class="detail-panel-caption">
+                  共 {{ detailKeys.length }} 个 · 可用
+                  {{
+                    detailKeys.filter((key) => key.status === "active").length
+                  }}
+                  个
+                </p>
+              </div>
+            </div>
             <button
+              v-if="detailKeys.length"
               class="btn btn-primary"
+              type="button"
               :disabled="busy"
               @click="editProvider(detailProvider)"
             >
-              添加 / 更新 Key
+              <Plus :size="14" />添加 / 更新 Key
             </button>
-          </div>
+          </header>
           <div
-            v-for="key in data.keys.filter(
-              (item) => item.providerId === detailProvider.id
-            )"
-            :key="key.id"
-            class="key-row"
+            class="detail-panel-body"
+            :class="{ 'detail-panel-body-empty': !detailKeys.length }"
           >
-            <span
-              >{{ key.name || key.logicalId }} · {{ key.fingerprint }} ·
-              {{ key.status }} {{ key.isActive ? "（使用中）" : "" }}</span
-            >
-            <button
-              class="btn"
-              :disabled="busy || key.isActive || key.status !== 'active'"
-              @click="
-                perform('key-select', {
-                  id: key.id,
-                  providerId: detailProvider.id
-                })
-              "
-            >
-              使用此 Key
-            </button>
-            <button
-              class="btn"
-              :disabled="busy || key.status === 'revoked'"
-              @click="
-                perform('key-revoke', {
-                  id: key.id,
-                  providerId: detailProvider.id
-                })
-              "
-            >
-              撤销
-            </button>
+            <table v-if="detailKeys.length" class="detail-key-table">
+              <thead class="detail-key-head">
+                <tr class="detail-key-row">
+                  <th class="detail-key-cell detail-key-identity" scope="col">
+                    名称
+                  </th>
+                  <th class="detail-key-cell" scope="col">Key 指纹</th>
+                  <th class="detail-key-cell detail-key-state" scope="col">
+                    状态
+                  </th>
+                  <th class="detail-key-cell detail-key-actions" scope="col">
+                    操作
+                  </th>
+                </tr>
+              </thead>
+              <tbody class="detail-key-body">
+                <tr
+                  v-for="key in detailKeys"
+                  :key="key.id"
+                  class="detail-key-row"
+                  :class="{
+                    'detail-key-current':
+                      key.isActive && key.status === 'active'
+                  }"
+                >
+                  <td class="detail-key-cell detail-key-identity">
+                    <span class="detail-key-name">{{
+                      key.name || key.logicalId || "未命名 Key"
+                    }}</span>
+                    <span
+                      v-if="key.name && key.logicalId !== key.name"
+                      class="detail-key-secondary"
+                      >{{ key.logicalId }}</span
+                    >
+                    <span v-if="key.note" class="detail-key-secondary">{{
+                      key.note
+                    }}</span>
+                  </td>
+                  <td class="detail-key-cell">
+                    <code class="detail-key-fingerprint">{{
+                      key.fingerprint || "未记录"
+                    }}</code>
+                  </td>
+                  <td class="detail-key-cell detail-key-state">
+                    <span
+                      class="detail-status"
+                      :class="{
+                        'detail-status-success':
+                          key.isActive && key.status === 'active',
+                        'detail-status-warning': key.status === 'unreadable'
+                      }"
+                    >
+                      <span class="detail-status-dot"></span
+                      >{{
+                        key.isActive && key.status === "active"
+                          ? "使用中"
+                          : keyStatusLabels[key.status] || key.status || "未知"
+                      }}
+                    </span>
+                  </td>
+                  <td class="detail-key-cell detail-key-actions">
+                    <div class="detail-key-buttons">
+                      <button
+                        class="btn"
+                        type="button"
+                        :disabled="
+                          busy || key.isActive || key.status !== 'active'
+                        "
+                        @click="
+                          perform('key-select', {
+                            id: key.id,
+                            providerId: detailProvider.id
+                          })
+                        "
+                      >
+                        <Check :size="14" />使用此 Key
+                      </button>
+                      <button
+                        class="btn detail-revoke-button"
+                        type="button"
+                        :disabled="busy || key.status === 'revoked'"
+                        @click="
+                          perform('key-revoke', {
+                            id: key.id,
+                            providerId: detailProvider.id
+                          })
+                        "
+                      >
+                        <Ban :size="14" />撤销
+                      </button>
+                    </div>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+            <div v-else class="detail-empty" role="status">
+              <span class="detail-empty-icon"><KeyRound :size="30" /></span>
+              <h3 class="detail-empty-title">尚未添加 API Key</h3>
+              <p class="detail-empty-description">
+                为此服务商添加 API Key 后，即可用于模型请求。
+              </p>
+              <button
+                class="btn btn-primary"
+                type="button"
+                :disabled="busy"
+                @click="editProvider(detailProvider)"
+              >
+                <Plus :size="14" />添加 / 更新 Key
+              </button>
+            </div>
           </div>
-          <p
-            v-if="
-              !data.keys.some((item) => item.providerId === detailProvider.id)
-            "
-            class="muted"
-          >
-            尚未添加 API Key。
+          <p class="detail-panel-hint">
+            <ShieldCheck :size="14" />仅展示 Key 指纹，完整凭据加密保存。
           </p>
-        </div>
-        <div v-else class="instance-list">
-          <article
-            v-for="instance in providerInstances(detailProvider.id)"
-            :key="instance.id"
-            class="instance-card"
-          >
-            <div class="instance-description">
-              <span
-                >{{ instance.name }} ·
-                {{ agentLabel(instance.agentType) }}</span
-              ><code>{{ instance.configPath }}</code
-              ><span v-if="instance.lastError" class="error-text">{{
-                instance.lastError
-              }}</span>
+        </section>
+        <section v-else class="detail-panel">
+          <header class="detail-panel-heading">
+            <div class="detail-panel-title">
+              <span class="detail-panel-icon"><Bot :size="21" /></span>
+              <div class="detail-panel-copy">
+                <h3 class="detail-panel-name">关联 Agent</h3>
+                <p class="detail-panel-caption">
+                  已关联 {{ detailInstances.length }} 个实例 · 已同步
+                  {{
+                    detailInstances.filter(
+                      (instance) => instance.syncStatus === "synced"
+                    ).length
+                  }}
+                  个
+                </p>
+              </div>
             </div>
             <button
-              class="btn"
+              v-if="detailInstances.length"
+              class="btn btn-primary"
+              type="button"
               :disabled="busy"
               @click="openGatewayManager(detailProvider)"
             >
-              管理接管
+              <Settings2 :size="14" />管理 Agent
             </button>
-          </article>
-          <p v-if="!providerInstances(detailProvider.id).length" class="muted">
-            此服务商尚未应用到 Agent。
+          </header>
+          <div
+            class="detail-panel-body"
+            :class="{ 'detail-panel-body-empty': !detailInstances.length }"
+          >
+            <article
+              v-for="instance in detailInstances"
+              :key="instance.id"
+              class="detail-agent-card"
+            >
+              <div class="detail-agent-heading">
+                <div class="detail-agent-identity">
+                  <span class="detail-agent-avatar">
+                    <AiIcon
+                      v-if="agentIcons[instance.agentType]"
+                      class="detail-agent-icon"
+                      :name="agentIcons[instance.agentType]"
+                      :alt="agentLabel(instance.agentType)"
+                    />
+                    <Bot v-else :size="22" />
+                  </span>
+                  <div class="detail-agent-copy">
+                    <h3 class="detail-agent-name">
+                      {{ instance.name || agentLabel(instance.agentType) }}
+                    </h3>
+                    <span class="detail-agent-type"
+                      >{{ agentLabel(instance.agentType)
+                      }}{{
+                        instance.agentVersion
+                          ? ` · ${instance.agentVersion}`
+                          : ""
+                      }}</span
+                    >
+                  </div>
+                </div>
+                <span
+                  class="detail-status"
+                  :class="{
+                    'detail-status-success': instance.syncStatus === 'synced',
+                    'detail-status-warning': instance.syncStatus !== 'synced'
+                  }"
+                >
+                  <span class="detail-status-dot"></span
+                  >{{
+                    syncStatusLabels[instance.syncStatus] ||
+                    instance.syncStatus ||
+                    "未知"
+                  }}
+                </span>
+                <button
+                  class="btn"
+                  type="button"
+                  :disabled="busy"
+                  @click="openGatewayManager(detailProvider)"
+                >
+                  <Settings2 :size="14" />管理接管
+                </button>
+              </div>
+              <dl class="detail-agent-fields">
+                <div class="detail-agent-field detail-agent-path">
+                  <dt class="detail-agent-label">配置路径</dt>
+                  <dd class="detail-agent-value">
+                    <code class="detail-agent-config">{{
+                      instance.configPath
+                    }}</code>
+                  </dd>
+                </div>
+                <div class="detail-agent-field">
+                  <dt class="detail-agent-label">客户端协议</dt>
+                  <dd class="detail-agent-value">
+                    {{
+                      clientProtocolLabels[instance.clientProtocol] ||
+                      instance.clientProtocol ||
+                      "未记录"
+                    }}
+                  </dd>
+                </div>
+                <div class="detail-agent-field">
+                  <dt class="detail-agent-label">最近同步</dt>
+                  <dd class="detail-agent-value">
+                    {{ formatDateTime(instance.lastSyncedAt) }}
+                  </dd>
+                </div>
+              </dl>
+              <p v-if="instance.lastError" class="detail-agent-error">
+                <Info :size="15" />{{ instance.lastError }}
+              </p>
+            </article>
+            <div
+              v-if="!detailInstances.length"
+              class="detail-empty"
+              role="status"
+            >
+              <span class="detail-empty-icon"><Bot :size="30" /></span>
+              <h3 class="detail-empty-title">尚未关联 Agent</h3>
+              <p class="detail-empty-description">
+                此服务商尚未应用到 Agent，可前往管理 Agent 配置使用来源。
+              </p>
+              <button
+                class="btn btn-primary"
+                type="button"
+                :disabled="busy"
+                @click="openGatewayManager(detailProvider)"
+              >
+                <Settings2 :size="14" />管理 Agent
+              </button>
+            </div>
+          </div>
+          <p class="detail-panel-hint">
+            <Info :size="14" />每个 Agent 同时使用一个来源，切换来源后同步配置。
           </p>
-        </div>
+        </section>
       </div>
     </BaseModal>
 
@@ -869,24 +964,40 @@
           <label class="form-field"
             >名称<input v-model="form.name" class="input" required
           /></label>
-          <label class="form-field"
-            >类型<select
-              v-model="form.kind"
-              class="input"
-              :disabled="Boolean(form.id)"
-            >
-              <option value="api">OpenAI 兼容服务商</option>
-              <option value="codex_account">Codex 官方账号</option>
-              <option value="google_account">Google 官方账号</option>
-            </select></label
-          >
+          <label class="form-field">
+            类型
+            <span class="provider-select">
+              <select
+                v-model="form.kind"
+                class="input"
+                :disabled="Boolean(form.id)"
+              >
+                <option value="api">OpenAI 兼容服务商</option>
+                <option value="codex_account">Codex 官方账号</option>
+                <option value="google_account">Google 官方账号</option>
+              </select>
+              <ChevronDown
+                class="provider-select-arrow"
+                :size="16"
+                aria-hidden="true"
+              />
+            </span>
+          </label>
           <template v-if="form.kind === 'api'">
-            <label class="form-field"
-              >上游协议<select v-model="form.upstreamProtocol" class="input">
-                <option value="responses">Responses</option>
-                <option value="chat">Chat Completions</option>
-              </select></label
-            >
+            <label class="form-field">
+              上游协议
+              <span class="provider-select">
+                <select v-model="form.upstreamProtocol" class="input">
+                  <option value="responses">Responses</option>
+                  <option value="chat">Chat Completions</option>
+                </select>
+                <ChevronDown
+                  class="provider-select-arrow"
+                  :size="16"
+                  aria-hidden="true"
+                />
+              </span>
+            </label>
             <label class="form-field"
               >基础地址<input
                 v-model="form.baseUrl"
@@ -1010,83 +1121,118 @@
 
     <BaseModal
       v-if="agentConfig"
+      class="agent-config-modal"
       :title="`配置 ${agentLabel(agentConfig.id)}`"
       :description="
         agentConfig.id === 'gateway'
           ? '保存此服务商的工具授权后，可在网关管理中生成独立调用 Token。'
           : '选择当前使用的服务商或官方账号，保存后应用到此 Agent。'
       "
+      role="dialog"
+      aria-modal="true"
+      :aria-label="`配置 ${agentLabel(agentConfig.id)}`"
       @close="closeAgentConfig"
     >
-      <form class="provider-form" @submit.prevent="saveAgentConfig">
-        <label class="form-field">
-          使用来源
-          <select
-            v-model="agentProviderId"
-            class="input"
+      <form class="agent-config-form" @submit.prevent="saveAgentConfig">
+        <div class="agent-config-body" :aria-busy="busy">
+          <ServiceAgentModelFields
+            v-model="agentBinding"
+            :provider-kind="form?.kind || 'api'"
+            :models="draftModels.filter((item) => item.enabled)"
+            :schema="runtimeConfigSchemas[agentConfig.id] || {}"
+            :desktop-routes="data.desktopModelRoutes || []"
             :disabled="busy"
-            @change="selectAgentProvider"
           >
-            <option value="" :disabled="agentConfig.id === 'gateway'">
-              {{
-                agentConfig.id === "gateway"
-                  ? "选择服务商"
-                  : "停止使用，恢复原有配置"
-              }}
-            </option>
-            <optgroup
-              v-for="group in sourceGroups"
-              :key="group.kind"
-              :label="group.label"
-            >
-              <option
-                v-for="provider in group.providers"
-                :key="provider.id"
-                :value="provider.id"
-                :disabled="!provider.hasCredential"
-              >
-                {{ providerDisplayName(provider)
-                }}{{ !provider.hasCredential ? "（待登录或配置凭据）" : "" }}
-              </option>
-            </optgroup>
-          </select>
-        </label>
-        <p v-if="!agentProviderId" class="muted">
-          选择服务商或官方账号后，可配置该 Agent 的模型规则。
-        </p>
-        <p v-else-if="form && form.kind !== 'api'" class="muted">
-          使用官方模型列表
-        </p>
-        <ServiceAgentModelFields
-          v-if="form && agentBindingIndex >= 0"
-          v-model="form.bindings[agentBindingIndex]"
-          :provider-kind="form.kind"
-          :models="draftModels.filter((item) => item.enabled)"
-          :schema="runtimeConfigSchemas[agentConfig.id] || {}"
-          :desktop-routes="data.desktopModelRoutes || []"
-          :disabled="busy"
-        />
-        <div class="form-footer">
-          <button
-            class="btn"
-            type="button"
-            :disabled="busy"
-            @click="closeAgentConfig"
-          >
-            取消
-          </button>
-          <button
-            class="btn btn-primary"
-            type="submit"
-            :disabled="
-              busy ||
-              Boolean(agentProviderId && !form) ||
-              (agentConfig.id === 'gateway' && !agentProviderId)
-            "
-          >
-            {{ agentConfig.id === "gateway" ? "保存授权" : "保存并应用" }}
-          </button>
+            <template #source>
+              <label class="agent-source-field">
+                使用来源
+                <span class="agent-select">
+                  <select
+                    v-model="agentProviderId"
+                    class="input"
+                    :disabled="busy"
+                    @change="selectAgentProvider"
+                  >
+                    <option value="" :disabled="agentConfig.id === 'gateway'">
+                      {{
+                        agentConfig.id === "gateway"
+                          ? "选择服务商"
+                          : "停止使用，恢复原有配置"
+                      }}
+                    </option>
+                    <optgroup
+                      v-for="group in sourceGroups"
+                      :key="group.kind"
+                      :label="group.label"
+                    >
+                      <option
+                        v-for="provider in group.providers"
+                        :key="provider.id"
+                        :value="provider.id"
+                        :disabled="!provider.hasCredential"
+                      >
+                        {{ providerDisplayName(provider)
+                        }}{{
+                          !provider.hasCredential ? "（待登录或配置凭据）" : ""
+                        }}
+                      </option>
+                    </optgroup>
+                  </select>
+                  <ChevronDown
+                    class="agent-select-arrow"
+                    :size="16"
+                    aria-hidden="true"
+                  />
+                </span>
+              </label>
+            </template>
+            <template #empty>
+              <p class="agent-config-empty" role="status">
+                {{
+                  busy
+                    ? "正在读取来源配置…"
+                    : agentProviderId
+                      ? "当前来源不可用，请重新选择已启用并配置凭据的来源。"
+                      : "选择服务商或官方账号后，可配置该 Agent 的模型规则。"
+                }}
+              </p>
+            </template>
+          </ServiceAgentModelFields>
         </div>
+        <footer class="agent-config-footer">
+          <p class="agent-config-hint">
+            <Info :size="16" />
+            {{
+              agentConfig.id === "gateway"
+                ? "保存后，可在网关管理中生成调用 Token。"
+                : agentProviderId
+                  ? "保存后，配置将应用到当前 Agent。"
+                  : "保存后，将停止接管并恢复原有配置。"
+            }}
+          </p>
+          <div class="agent-config-actions">
+            <button
+              class="btn"
+              type="button"
+              :disabled="busy"
+              @click="closeAgentConfig"
+            >
+              取消
+            </button>
+            <button
+              class="btn btn-primary"
+              type="submit"
+              :disabled="
+                busy ||
+                Boolean(agentProviderId && !form) ||
+                (agentConfig.id === 'gateway' && !agentProviderId)
+              "
+              :aria-busy="busy"
+            >
+              {{ agentConfig.id === "gateway" ? "保存授权" : "保存并应用" }}
+            </button>
+          </div>
+        </footer>
       </form>
     </BaseModal>
 
@@ -1263,9 +1409,12 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue"
 import {
   Ban,
   Bot,
+  Check,
+  ChevronDown,
   ChevronRight,
   Eye,
   EyeOff,
+  Info,
   KeyRound,
   Plus,
   RefreshCw,
@@ -1281,8 +1430,11 @@ import ProviderApiKeyInput from "./ProviderApiKeyInput.vue"
 import ProviderIconPicker from "./ProviderIconPicker.vue"
 import ProviderModelListEditor from "./ProviderModelListEditor.vue"
 import ServiceAgentModelFields from "./ServiceAgentModelFields.vue"
+import ServiceOfficialAccountOverview from "./ServiceOfficialAccountOverview.vue"
+import ServiceProviderOverview from "./ServiceProviderOverview.vue"
 import { serviceProviderApi } from "@/api/modules/service-providers"
 import { createMessage } from "@/utils/message"
+import { formatDateTime } from "@/utils/formatters"
 
 const props = defineProps({
   initialState: { type: Object, default: () => ({}) },
@@ -1359,6 +1511,36 @@ const visibleProviders = computed(() =>
 const detailProvider = computed(() =>
   data.value.providers.find((item) => item.id === detailProviderId.value)
 )
+// 详情页沿用当前服务商的公开凭据与实际接管实例，切换标签不额外请求。
+const detailKeys = computed(() =>
+  data.value.keys.filter((item) => item.providerId === detailProviderId.value)
+)
+const detailInstances = computed(() =>
+  providerInstances(detailProviderId.value)
+)
+const keyStatusLabels = {
+  active: "可用",
+  archived: "已归档",
+  unreadable: "无法读取",
+  revoked: "已撤销"
+}
+const syncStatusLabels = {
+  pending: "待同步",
+  synced: "已同步",
+  conflict: "配置冲突",
+  restored: "已恢复"
+}
+const clientProtocolLabels = {
+  responses: "Responses",
+  messages: "Messages",
+  chat: "Chat Completions",
+  all: "多协议"
+}
+const agentIcons = {
+  codex: "codex.svg",
+  claude: "claudecode.svg",
+  "claude-desktop": "claude.svg"
+}
 const detailTabs = computed(() => [
   { id: "overview", label: "基本信息" },
   ...(detailProvider.value?.kind === "api"
@@ -1396,6 +1578,13 @@ const agentBindingIndex = computed(
       (item) => item.agentType === agentConfig.value?.id
     ) ?? -1
 )
+const agentBinding = computed({
+  get: () => form.value?.bindings[agentBindingIndex.value] || null,
+  set: (value) => {
+    if (form.value && agentBindingIndex.value >= 0)
+      form.value.bindings[agentBindingIndex.value] = value
+  }
+})
 // 简单模型列表与高级详情共用一份草稿，避免编辑名称时丢失价格和目录扩展。
 const draftModels = computed(() => {
   try {
@@ -2179,7 +2368,17 @@ async function showBackup(id) {
   :deep(.base-modal__panel) {
     max-width: calc(100vw - 48px);
   }
-  .btn {
+  .provider-detail-modal {
+    :deep(.base-modal__panel) {
+      height: min(820px, calc(100vh - 48px));
+    }
+    :deep(.base-modal__header) {
+      flex: none;
+    }
+  }
+  .btn,
+  :deep(.official-overview .official-button),
+  :deep(.service-overview .service-overview-button) {
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -2686,8 +2885,11 @@ async function showBackup(id) {
     }
   }
   .provider-detail {
+    flex: 1;
+    overflow: hidden;
     .detail-tabs {
       display: flex;
+      flex: none;
       gap: 8px;
       border-bottom: 1px solid var(--color-line);
       .detail-tab {
@@ -2704,65 +2906,320 @@ async function showBackup(id) {
         }
       }
     }
-    .detail-fields {
-      display: flex;
-      flex-direction: column;
-      gap: 14px;
-      margin: 0;
-      .detail-field {
-        display: flex;
-        gap: 16px;
-        font-size: var(--font-size-base);
-        .detail-label {
-          flex: none;
-          width: 80px;
-          color: var(--color-text-muted);
-        }
-        .detail-value {
-          min-width: 0;
-          margin: 0;
-          overflow-wrap: anywhere;
-        }
+    .official-overview,
+    .service-overview {
+      flex: 1;
+      min-height: 0;
+      overflow: auto;
+      padding-right: 4px;
+    }
+    .btn {
+      flex: none;
+      gap: 6px;
+      white-space: nowrap;
+      &:focus-visible {
+        outline: 2px solid var(--color-primary);
+        outline-offset: 2px;
       }
     }
-    .detail-models {
+    .detail-panel {
       display: flex;
-      flex-wrap: wrap;
-      gap: 8px;
-      .section-title {
-        width: 100%;
-        margin-bottom: 4px;
-      }
-      .model-tag {
-        padding: 5px 9px;
-        border: 1px solid var(--color-line);
-        border-radius: 6px;
-        font-size: var(--font-size-sm);
-        &.model-tag-disabled {
-          color: var(--color-text-muted);
-          opacity: 0.6;
-        }
-      }
-    }
-    .key-list {
-      display: flex;
+      flex: 1;
+      min-height: 0;
       flex-direction: column;
-      gap: 12px;
-      .key-row {
+      gap: 16px;
+      .detail-panel-heading {
         display: flex;
         align-items: center;
-        gap: 10px;
-        padding: 12px;
+        flex: none;
+        justify-content: space-between;
+        gap: 16px;
+        padding: 16px 18px;
         border: 1px solid var(--color-line);
-        border-radius: 8px;
-        font-size: var(--font-size-sm);
+        border-radius: 12px;
+        background: var(--color-panel-soft);
+        .detail-panel-title {
+          display: flex;
+          min-width: 0;
+          align-items: center;
+          gap: 12px;
+          .detail-panel-icon {
+            display: flex;
+            flex: none;
+            width: 42px;
+            height: 42px;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid var(--color-line);
+            border-radius: 10px;
+            background: var(--color-panel);
+            color: var(--color-primary);
+          }
+          .detail-panel-copy {
+            display: flex;
+            min-width: 0;
+            flex-direction: column;
+            gap: 5px;
+            .detail-panel-name {
+              margin: 0;
+              font-size: var(--font-size-lg);
+            }
+            .detail-panel-caption {
+              margin: 0;
+              color: var(--color-text-muted);
+              font-size: var(--font-size-xs);
+            }
+          }
+        }
       }
-    }
-    .quota-report {
-      .quota-json {
-        white-space: pre-wrap;
-        overflow-wrap: anywhere;
+      .detail-status {
+        display: inline-flex;
+        flex: none;
+        align-items: center;
+        gap: 6px;
+        padding: 4px 8px;
+        border-radius: 6px;
+        background: var(--color-panel-soft);
+        color: var(--color-text-muted);
         font-size: var(--font-size-xs);
+        white-space: nowrap;
+        &.detail-status-success {
+          background: var(--color-success-soft);
+          color: var(--color-success);
+        }
+        &.detail-status-warning {
+          background: var(--color-warning-soft);
+          color: var(--color-warning);
+        }
+        .detail-status-dot {
+          width: 5px;
+          height: 5px;
+          border-radius: 50%;
+          background: currentColor;
+        }
+      }
+      .detail-panel-body {
+        display: flex;
+        flex: 1;
+        min-height: 0;
+        flex-direction: column;
+        gap: 12px;
+        overflow: auto;
+        scrollbar-gutter: stable;
+        &.detail-panel-body-empty {
+          overflow: hidden;
+          scrollbar-gutter: auto;
+        }
+        .detail-key-table {
+          flex: none;
+          width: 100%;
+          table-layout: fixed;
+          border-spacing: 0;
+          font-size: var(--font-size-sm);
+          .detail-key-cell {
+            padding: 16px 14px;
+            border-bottom: 1px solid var(--color-line);
+            color: var(--color-text);
+            text-align: left;
+            vertical-align: middle;
+            overflow-wrap: anywhere;
+            &.detail-key-identity {
+              width: 30%;
+            }
+            &.detail-key-state {
+              width: 14%;
+            }
+            &.detail-key-actions {
+              width: 31%;
+              text-align: right;
+            }
+            .detail-key-name {
+              display: block;
+              line-height: 1.6;
+            }
+            .detail-key-secondary {
+              display: block;
+              margin-top: 4px;
+              color: var(--color-text-muted);
+              font-size: var(--font-size-xs);
+              line-height: 1.6;
+            }
+            .detail-key-fingerprint {
+              padding: 4px 6px;
+              border-radius: 5px;
+              background: var(--color-panel-soft);
+              color: var(--color-text-muted);
+              font-size: var(--font-size-xs);
+            }
+            .detail-key-buttons {
+              display: flex;
+              flex-wrap: wrap;
+              justify-content: flex-end;
+              gap: 8px;
+              .detail-revoke-button {
+                color: var(--color-danger);
+              }
+            }
+          }
+          .detail-key-head {
+            .detail-key-cell {
+              position: sticky;
+              top: 0;
+              z-index: 1;
+              padding-top: 12px;
+              padding-bottom: 12px;
+              background: var(--color-panel-soft);
+              color: var(--color-text-muted);
+              font-size: var(--font-size-xs);
+            }
+          }
+          .detail-key-body {
+            .detail-key-current {
+              background: var(--color-primary-soft);
+            }
+          }
+        }
+        .detail-agent-card {
+          flex: none;
+          padding: 18px;
+          border: 1px solid var(--color-line);
+          border-radius: 12px;
+          background: var(--color-panel);
+          .detail-agent-heading {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            .detail-agent-identity {
+              display: flex;
+              flex: 1;
+              min-width: 0;
+              align-items: center;
+              gap: 12px;
+              .detail-agent-avatar {
+                display: flex;
+                flex: none;
+                width: 40px;
+                height: 40px;
+                align-items: center;
+                justify-content: center;
+                border-radius: 10px;
+                background: var(--color-panel-soft);
+                color: var(--color-primary);
+                .detail-agent-icon {
+                  width: 25px;
+                  height: 25px;
+                }
+              }
+              .detail-agent-copy {
+                display: flex;
+                min-width: 0;
+                flex-direction: column;
+                gap: 5px;
+                .detail-agent-name {
+                  margin: 0;
+                  font-size: var(--font-size-base);
+                  overflow-wrap: anywhere;
+                }
+                .detail-agent-type {
+                  color: var(--color-text-muted);
+                  font-size: var(--font-size-xs);
+                  overflow-wrap: anywhere;
+                }
+              }
+            }
+          }
+          .detail-agent-fields {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 14px 24px;
+            margin: 16px 0 0;
+            padding-top: 16px;
+            border-top: 1px solid var(--color-line);
+            .detail-agent-field {
+              display: flex;
+              flex: 1;
+              min-width: 0;
+              gap: 12px;
+              font-size: var(--font-size-sm);
+              &.detail-agent-path {
+                flex: none;
+                width: 100%;
+              }
+              .detail-agent-label {
+                flex: none;
+                width: 72px;
+                color: var(--color-text-muted);
+              }
+              .detail-agent-value {
+                min-width: 0;
+                margin: 0;
+                color: var(--color-text);
+                overflow-wrap: anywhere;
+                .detail-agent-config {
+                  font-size: var(--font-size-xs);
+                  line-height: 1.6;
+                }
+              }
+            }
+          }
+          .detail-agent-error {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            margin: 16px 0 0;
+            padding: 10px 12px;
+            border-radius: 8px;
+            background: var(--color-danger-soft);
+            color: var(--color-danger);
+            font-size: var(--font-size-xs);
+            line-height: 1.6;
+            overflow-wrap: anywhere;
+          }
+        }
+        .detail-empty {
+          display: flex;
+          flex: 1;
+          min-height: 0;
+          flex-direction: column;
+          align-items: center;
+          justify-content: center;
+          padding: 24px;
+          text-align: center;
+          .detail-empty-icon {
+            display: flex;
+            width: 72px;
+            height: 72px;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid var(--color-line);
+            border-radius: 20px;
+            background: var(--color-panel-soft);
+            color: var(--color-text-soft);
+          }
+          .detail-empty-title {
+            margin: 20px 0 8px;
+            color: var(--color-text);
+            font-size: var(--font-size-lg);
+          }
+          .detail-empty-description {
+            max-width: 360px;
+            margin: 0 0 20px;
+            color: var(--color-text-muted);
+            font-size: var(--font-size-sm);
+            line-height: 1.8;
+          }
+        }
+      }
+      .detail-panel-hint {
+        display: flex;
+        flex: none;
+        align-items: center;
+        gap: 7px;
+        margin: 0;
+        padding-top: 12px;
+        border-top: 1px solid var(--color-line);
+        color: var(--color-text-muted);
+        font-size: var(--font-size-sm);
       }
     }
   }
@@ -2849,6 +3306,134 @@ async function showBackup(id) {
       }
     }
   }
+  .agent-config-modal {
+    :deep(.base-modal__panel) {
+      width: 1060px;
+      max-width: 100%;
+      border-radius: 16px;
+    }
+
+    :deep(.base-modal__header) {
+      padding: 24px 28px 20px;
+    }
+
+    :deep(.base-modal__content) {
+      padding: 0;
+    }
+
+    .agent-config-form {
+      display: flex;
+      flex: 1;
+      min-height: 0;
+      flex-direction: column;
+
+      .agent-config-body {
+        min-height: 0;
+        padding: 4px 28px 24px;
+        overflow-y: auto;
+        scrollbar-gutter: stable;
+
+        :deep(.agent-select) {
+          position: relative;
+          display: block;
+          min-width: 0;
+
+          .input {
+            padding-right: 40px;
+            appearance: none;
+            text-overflow: ellipsis;
+          }
+
+          .agent-select-arrow {
+            position: absolute;
+            top: 50%;
+            right: 12px;
+            color: var(--color-text-muted);
+            pointer-events: none;
+            transform: translateY(-50%);
+          }
+
+          .input:disabled + .agent-select-arrow {
+            color: var(--color-text-soft);
+          }
+        }
+
+        .agent-source-field {
+          display: flex;
+          min-width: 0;
+          flex-direction: column;
+          gap: 8px;
+          font-size: var(--font-size-sm);
+
+          .input {
+            box-sizing: border-box;
+            min-width: 0;
+            height: 42px;
+            padding: 8px 40px 8px 12px;
+            border-radius: 8px;
+            font-size: inherit;
+
+            &:focus-visible {
+              border-color: var(--color-primary);
+              outline: 2px solid var(--color-info-line);
+              outline-offset: 1px;
+            }
+
+            &:disabled {
+              color: var(--color-text-soft);
+              cursor: not-allowed;
+            }
+          }
+        }
+
+        .agent-config-empty {
+          margin: 16px 0 0;
+          color: var(--color-text-muted);
+          font-size: var(--font-size-sm);
+        }
+      }
+
+      .agent-config-footer {
+        display: flex;
+        flex: none;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px 24px;
+        padding: 18px 28px;
+        border-top: 1px solid var(--color-line);
+        background: var(--color-panel);
+
+        .agent-config-hint {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin: 0;
+          color: var(--color-text-muted);
+          font-size: var(--font-size-xs);
+        }
+
+        .agent-config-actions {
+          display: flex;
+          flex: none;
+          gap: 10px;
+          margin-left: auto;
+
+          .btn {
+            min-height: 40px;
+            padding: 0 18px;
+            border-radius: 8px;
+            font-size: var(--font-size-sm);
+
+            &:focus-visible {
+              outline: 2px solid var(--color-primary);
+              outline-offset: 2px;
+            }
+          }
+        }
+      }
+    }
+  }
   .provider-form {
     display: flex;
     flex-direction: column;
@@ -2861,6 +3446,31 @@ async function showBackup(id) {
       flex-direction: column;
       gap: 8px;
       font-size: 13px;
+
+      .provider-select {
+        position: relative;
+        display: block;
+        min-width: 0;
+
+        .input {
+          padding-right: 40px;
+          appearance: none;
+          text-overflow: ellipsis;
+        }
+
+        .provider-select-arrow {
+          position: absolute;
+          top: 50%;
+          right: 12px;
+          color: var(--color-text-muted);
+          pointer-events: none;
+          transform: translateY(-50%);
+        }
+
+        .input:disabled + .provider-select-arrow {
+          color: var(--color-text-soft);
+        }
+      }
     }
     .form-grid {
       display: flex;
