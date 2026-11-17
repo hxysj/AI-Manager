@@ -452,6 +452,7 @@
         class="settings-view__panel settings-agent-panel"
       >
         <div class="settings-agent-list">
+          <LocalModelExtension />
           <AssistantExtension
             :model-value="draft.agents.assistant"
             :providers="providers"
@@ -461,7 +462,6 @@
             :open-request="assistantRequest"
             @save="saveChanges({ agents: { assistant: $event } })"
           />
-          <LocalModelExtension />
           <ScreenshotExtension
             :providers="providers"
             :codex-accounts="codexAccounts"

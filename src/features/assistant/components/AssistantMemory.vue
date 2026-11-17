@@ -19,13 +19,7 @@
         <button
           class="assistant-memory-button"
           type="button"
-          :disabled="
-            busy ||
-            loading ||
-            !threadId ||
-            !settings.model ||
-            settings.targetId === 'local'
-          "
+          :disabled="busy || loading || !threadId || !settings.model"
           @click="$emit('compress')"
         >
           立即压缩

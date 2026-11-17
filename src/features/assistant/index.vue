@@ -242,9 +242,6 @@
               重新连接
             </button>
           </div>
-          <p v-if="local" class="assistant-hint">
-            本地助手模型待添加，请在应用配置中选择 Provider 模型。
-          </p>
           <p v-if="settings.enabled === false" class="assistant-hint">
             应用助手已关闭，请在设置 → 功能扩展中启用。
           </p>
@@ -567,7 +564,6 @@ const canSend = computed(
     !busy.value &&
     !modelSaving.value &&
     !historyLoading.value &&
-    !local.value &&
     Boolean(
       threadId.value &&
       (draft.value.trim() || images.value.length) &&

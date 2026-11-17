@@ -212,15 +212,8 @@ async function dragWindow(event) {
 
 async function send() {
   if (!canSend.value) return
-  if (
-    !settings.value.targetId ||
-    !settings.value.model ||
-    settings.value.targetId === "local"
-  ) {
-    error.value =
-      settings.value.targetId === "local"
-        ? "本地助手模型待添加，请先选择 Provider 模型。"
-        : "请先在设置 → 功能扩展中选择助手模型。"
+  if (!settings.value.targetId || !settings.value.model) {
+    error.value = "请先在设置 → 功能扩展中选择助手模型。"
     return
   }
   const current = sequence

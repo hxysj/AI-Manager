@@ -602,9 +602,28 @@ await tick()
 assert.equal(view.state.busy, false)
 assert.equal(calls.find((call) => call[0] === "cancel")[1], "new-run")
 view.state.settings.targetId = "local"
+view.state.settings.model = ""
 view.state.draft = "本地模型"
 await tick()
-assert.equal(view.state.canSend, false, "没有本地助手模型时禁止发送")
+assert.equal(view.state.canSend, false, "尚未选择模型时禁止发送")
+// 本地来源和 Provider 一样进入实际发送、压缩流程，不再被占位判断拦截。
+view.state.settings.model = "qwen3.5-0.8b"
+view.state.draft = "本地模型你好"
+await tick()
+assert.equal(view.state.canSend, true, "选中本地模型后应允许主面板发送")
+await view.state.sendMessage()
+assert.deepEqual(calls.findLast((call) => call[0] === "send")[1], {
+  threadId: "t1",
+  message: "本地模型你好",
+  images: []
+})
+assert.equal(view.state.errorMessage, "")
+await view.state.stop()
+await tick()
+await view.state.compressContext()
+assert.deepEqual(calls.at(-1), ["compress", "t1"], "本地模型应能发起上下文压缩")
+await view.state.stop()
+await tick()
 for (const callback of settingsListeners)
   callback({
     appSettings: {
@@ -692,7 +711,29 @@ document.focused = true
 await expireIdle()
 assert.equal(desktop.state.visible, true)
 desktop.state.images = []
+desktop.state.settings.targetId = "local"
+desktop.state.settings.model = ""
+desktop.state.draft = "你好"
+const desktopSendsBefore = calls.filter(
+  (call) => call[0] === "desktop-send"
+).length
 await desktop.state.send()
+assert.equal(
+  calls.filter((call) => call[0] === "desktop-send").length,
+  desktopSendsBefore
+)
+assert.match(desktop.state.error, /选择助手模型/)
+desktop.state.settings.model = "qwen3.5-0.8b"
+await desktop.state.send()
+assert.deepEqual(calls.findLast((call) => call[0] === "desktop-send")[1], {
+  message: "你好",
+  images: []
+})
+assert.equal(
+  desktop.state.error,
+  "",
+  "选中本地模型后不应再提示待添加或要求选择 Provider"
+)
 assert.equal(desktop.state.visible, true, "发送不应自动收起窗口")
 assert.equal(desktop.state.draft, "")
 assert.equal(desktop.state.task.status, "thinking")
@@ -892,8 +933,28 @@ assert.ok(
   !markdown.root.children[0].props.innerHTML.includes('href="javascript:')
 )
 markdown.unmount()
-const memoryPanel = mount(MemoryPanel, { threadId: "t1", settings: {} })
+let localCompressionEvents = 0
+const memoryPanel = mount(MemoryPanel, {
+  threadId: "t1",
+  settings: { targetId: "local", model: "qwen3.5-0.8b" },
+  onCompress: () => {
+    localCompressionEvents += 1
+  }
+})
 await tick()
+const memoryNodes = [memoryPanel.root]
+for (const node of memoryNodes) memoryNodes.push(...node.children)
+const localCompressButton = memoryNodes.find(
+  (node) => node.type === "button" && node.text.trim() === "立即压缩"
+)
+assert.ok(localCompressButton)
+assert.equal(
+  localCompressButton.props.disabled,
+  false,
+  "本地模型的压缩按钮应可用"
+)
+localCompressButton.props.onClick()
+assert.equal(localCompressionEvents, 1)
 memoryPanel.state.draft = "用户偏好简体中文"
 await memoryPanel.state.save(memoryPanel.state.draft)
 assert.equal(publicMemoryText, "用户偏好简体中文")
