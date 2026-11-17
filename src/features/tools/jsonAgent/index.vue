@@ -1621,7 +1621,6 @@ async function handleAssistantEditor(request) {
       expandRoot(parsed)
       saveHistory()
       await nextTick()
-      sourceInput.value?.focus()
     }
     await assistantApi.editorResult({
       id: request.id,

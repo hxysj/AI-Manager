@@ -270,6 +270,59 @@ async fn service_setup(fixture:&Fixture,url:&str,format:UpstreamFormat)->(String
 }
 
 #[test]
+fn service_claude_to_openai_preserves_instruction_roles_attachments_and_tools() {
+    run(async {
+        for format in [UpstreamFormat::OpenAiChat, UpstreamFormat::OpenAiResponses] {
+            let fixture = Fixture::new();
+            let (url, mut captures, upstream) = mock(format, StatusCode::OK, false, false, None).await;
+            let (base, token, _, server) = service_setup(&fixture, &url, format).await;
+            let client = Client::builder().no_proxy().build().unwrap();
+            for stream in [false, true] {
+                let response = client.post(format!("{base}/v1/messages")).bearer_auth(&token).json(&json!({
+                    "model":"alias","stream":stream,"max_tokens":512,
+                    "system":"顶层指令",
+                    "messages":[
+                        {"role":"system","content":"系统指令"},
+                        {"role":"developer","content":[{"type":"text","text":"开发指令"}]},
+                        {"role":"user","content":[{"type":"text","text":"解释源码"},
+                            {"type":"document","source":{"type":"text","data":"export const homework = 1"}},
+                            {"type":"image","source":{"type":"base64","media_type":"image/png","data":"aGVsbG8="}}]},
+                        {"role":"assistant","content":[{"type":"tool_use","id":"call_one","name":"lookup","input":{"value":"ping"}}]},
+                        {"role":"user","content":[{"type":"tool_result","tool_use_id":"call_one","content":"pong"}]}
+                    ],
+                    "tools":[{"name":"lookup","input_schema":{"type":"object","properties":{"value":{"type":"string"}}}}],
+                    "tool_choice":{"type":"any","disable_parallel_tool_use":true}
+                })).send().await.unwrap();
+                let status = response.status();
+                let result = response.text().await.unwrap();
+                assert_eq!(status, StatusCode::OK, "{result}");
+                assert!(result.contains(if stream { "message_stop" } else { "tool_use" }), "{result}");
+                let (path, _, body) = captures.recv().await.unwrap();
+                let responses = format == UpstreamFormat::OpenAiResponses;
+                assert!(path.ends_with(if responses { "/responses" } else { "/chat/completions" }));
+                assert_eq!(body["model"], "real-model");
+                let messages = &body[if responses { "input" } else { "messages" }];
+                assert_eq!(messages[1]["role"], "system");
+                assert_eq!(messages[2]["role"], "developer");
+                assert_eq!(messages[3]["content"][1]["text"], "export const homework = 1");
+                assert_eq!(messages[3]["content"][2]["type"], if responses { "input_image" } else { "image_url" });
+                assert_eq!(body["tool_choice"], "required");
+                assert_eq!(body["parallel_tool_calls"], false);
+                if responses {
+                    assert_eq!(messages[4]["type"], "function_call");
+                    assert_eq!(messages[5]["type"], "function_call_output");
+                    assert_eq!(messages[4]["call_id"], messages[5]["call_id"]);
+                } else {
+                    assert_eq!(messages[4]["tool_calls"][0]["id"], messages[5]["tool_call_id"]);
+                }
+            }
+            server.abort();
+            upstream.abort();
+        }
+    });
+}
+
+#[test]
 fn service_google_account_routes_through_shared_gateway_and_keeps_usage() {
     run(async {
         use crate::core::{database, service_provider_store as store};

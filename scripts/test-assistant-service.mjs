@@ -363,7 +363,9 @@ try {
   assert.equal(requests[0].token, "Bearer loopback-only")
   assert.equal(requests[0].payload.model, "agent-test")
   assert.equal(requests[0].payload.max_output_tokens, 8192, "模型请求携带输出预算")
-  assert.equal(requests[0].payload.tools.length, 12)
+  assert.equal(requests[0].payload.tools.length, 14)
+  assert.ok(requests[0].payload.tools.some((tool) => tool.name === "call_app_api"))
+  assert.ok(JSON.stringify(requests[0].payload).includes("执行软件内操作默认静默完成"))
   assert.ok(
     requests[0].payload.tools.some((tool) => tool.name === "read_app_ui")
   )
@@ -413,6 +415,19 @@ try {
     "后台重启后本地记忆仍在"
   )
   assert.equal((await rpc("threads")).total, 2)
+
+  // 静默任务直接回调业务接口，不应派发任何窗口或控件操作。
+  const apiThread = await rpc("create-thread")
+  const apiStart = tools.length
+  plans.push(
+    { type: "tool", name: "read_app_api", args: { module: "images" } },
+    { type: "tool", name: "call_app_api", args: { channel: "tools:image-history", payload: {} } },
+    { text: "已在后台查询图片任务。" }
+  )
+  assert.equal((await rpc("run", turn(apiThread.id, "静默查询图片任务"))).text, "已在后台查询图片任务。")
+  assert.deepEqual(tools.slice(apiStart).map((item) => item.name), ["read_app_api", "call_app_api"])
+  assert.deepEqual(tools.at(-1).args, { channel: "tools:image-history", payload: {} })
+  await rpc("delete-thread", { threadId: apiThread.id })
 
   const uiThread = await rpc("create-thread")
   const uiParams = {

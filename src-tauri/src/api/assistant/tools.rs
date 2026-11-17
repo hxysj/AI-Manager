@@ -10,6 +10,7 @@ mod windows;
 mod pet;
 mod json_editor;
 mod skills;
+mod app_api;
 pub(super) mod ui;
 
 pub(super) fn catalog() -> Value {
@@ -39,6 +40,7 @@ pub(super) fn execute<'a>(
     }
     match request["name"].as_str().unwrap_or("") {
         "read_app_config" => config::execute(service, app, args).await,
+        "read_app_api" | "call_app_api" => app_api::execute(app, args, request["name"].as_str().unwrap_or("")).await,
         "update_app_settings" => settings::execute(app, args).await,
         "open_app_window" => windows::execute(app, args, request["surface"].as_str()).await,
         "read_app_ui" | "interact_app_ui" => ui::execute(service, app, args, cancellation, request).await,

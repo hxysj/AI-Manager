@@ -4,7 +4,7 @@ import { z } from "zod"
 export default [
   {
     id: "read_json_editor",
-    description: "打开 JSON 工具并读取原文、当前格式化结果和校验错误。",
+    description: "静默读取 JSON 编辑器原文、格式化结果和校验错误，不显示或聚焦窗口。",
     inputSchema: z.object({})
   },
   {

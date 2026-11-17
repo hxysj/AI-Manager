@@ -15,7 +15,7 @@ export default [
   {
     id: "interact_app_ui",
     description:
-      "聚焦应用窗口后操作已读取的控件：focus 聚焦，fill 替换输入文本，click 点击，select 选择原生下拉项，scroll 滚动。必须使用最近一次回读的 snapshotId 和 nodeId；操作后返回新快照。点击只表示事件已派发，需检查后续页面状态确认任务完成。原生系统对话框、其他软件和画布内部不在此工具范围。",
+      "仅在用户明确要求操作界面时使用，默认使用 call_app_api。操作已读取的控件：focus 显式聚焦，fill 替换输入文本，click 点击，select 选择原生下拉项，scroll 滚动；工具不会主动置前窗口。必须使用最近一次回读的 snapshotId 和 nodeId；操作后返回新快照。点击只表示事件已派发，需检查任务状态确认完成。",
     inputSchema: z.object({
       windowLabel: z.string().min(1).max(100),
       snapshotId: z.string().min(1).max(100),

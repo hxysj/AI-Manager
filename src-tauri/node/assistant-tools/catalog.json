@@ -1,5 +1,17 @@
 [
   {
+    "id": "read_app_api",
+    "name": "查询内部接口",
+    "description": "按模块查询可静默调用的业务接口和参数。",
+    "module": "内部接口"
+  },
+  {
+    "id": "call_app_api",
+    "name": "静默执行操作",
+    "description": "直接调用业务接口并回读结果，不打开或聚焦界面。",
+    "module": "内部接口"
+  },
+  {
     "id": "read_app_config",
     "name": "读取应用配置",
     "description": "按模块读取应用设置、Provider、运行时和规则，认证信息会被过滤。",

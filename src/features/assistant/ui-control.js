@@ -158,7 +158,7 @@ export function createAppUiController() {
     if (!["focus", "fill", "click", "select", "scroll"].includes(args.action)) {
       throw new Error("不支持的界面操作")
     }
-    element.scrollIntoView({ block: "nearest", inline: "nearest" })
+    // 后台派发操作不改变用户当前的焦点和滚动位置；仅显式 focus / scroll 才调整界面。
     if (args.action === "click") {
       if (element.matches('input[type="file"]'))
         throw new Error("文件选择需要用户在系统对话框中完成")
@@ -202,7 +202,6 @@ export function createAppUiController() {
       if (element.maxLength >= 0 && args.text.length > element.maxLength) {
         throw new Error(`输入内容超过控件的 ${element.maxLength} 字符限制`)
       }
-      element.focus()
       if (element.isContentEditable) element.textContent = args.text
       else element.value = args.text
       element.dispatchEvent(new Event("input", { bubbles: true }))

@@ -90,11 +90,6 @@ pub(super) async fn execute(
     if cancellation.is_cancelled() {
         return Err(failure("任务已停止"));
     }
-    if interact {
-        window.unminimize().map_err(failure)?;
-        window.show().map_err(failure)?;
-        window.set_focus().map_err(failure)?;
-    }
     let id = uuid::Uuid::new_v4().to_string();
     let payload = json!({
         "id": id, "runId": request["runId"], "windowLabel": label,

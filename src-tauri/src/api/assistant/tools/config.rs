@@ -17,7 +17,7 @@ pub(super) async fn execute(service: &AssistantService, app: &AppHandle, args: &
             "pet": service.state.lock().await["petAction"],
         }),
         "settings" => snapshot["appSettings"].clone(),
-        "providers" => snapshot["providers"].clone(),
+        "providers" => json!({"providers":snapshot["providers"],"serviceProviders":snapshot["serviceProviders"]}),
         "runtime" => json!({
             "models": snapshot["runtimeModels"], "profiles": snapshot["runtimeProfiles"],
             "state": snapshot["runtimeProviderState"],

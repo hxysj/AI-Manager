@@ -1185,10 +1185,17 @@ fn upstream_body(
     request: &CanonicalRequest,
     format: UpstreamFormat,
 ) -> Result<Value, ManagerError> {
+    // Claude 到 OpenAI 直接使用对应格式的转换器，避免经过 Chat 中间态丢失附件和工具选项。
+    if request.protocol == Protocol::Claude && matches!(format, UpstreamFormat::OpenAiChat | UpstreamFormat::OpenAiResponses) {
+        let mut body = crate::api::claude_desktop::gateway_openai_request(&request.original, format == UpstreamFormat::OpenAiResponses)?;
+        body["model"] = json!(model);
+        body["stream"] = json!(request.stream);
+        return Ok(body);
+    }
     let native = native_protocol(request.protocol, format);
     let converted;
     let request = if !native && request.protocol == Protocol::Claude {
-        let value = crate::api::claude_desktop::gateway_chat_request(&request.original)?;
+        let value = crate::api::claude_desktop::gateway_openai_request(&request.original, false)?;
         converted = CanonicalRequest {
             protocol: Protocol::Claude,
             original: request.original.clone(),

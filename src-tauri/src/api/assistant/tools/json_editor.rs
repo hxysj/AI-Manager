@@ -2,12 +2,11 @@ use super::super::{AssistantService, EditorRequest};
 use serde_json::{json, Value};
 use tokio::sync::oneshot;
 use tokio_util::sync::CancellationToken;
-use crate::core::{error::ManagerError, state::AppState};
-use tauri::{AppHandle, Manager, Emitter};
+use crate::core::error::ManagerError;
+use tauri::{AppHandle, Emitter};
 
 // 此模块只处理对应能力，任务身份和工具开关由统一入口校验。
 pub(super) async fn execute(service: &AssistantService, app: &AppHandle, args: &Value, cancellation: CancellationToken, request: &Value) -> Result<Value, ManagerError> {
-    let state = app.state::<AppState>();
     if request["name"] == "write_json_editor" {
         let result = args["result"].as_str().ok_or_else(|| ManagerError::System("缺少 JSON 结果".into()))?;
         if result.chars().count() > 60_000 || args["source"].as_str().is_some_and(|text| text.chars().count() > 60_000) {
@@ -24,12 +23,7 @@ pub(super) async fn execute(service: &AssistantService, app: &AppHandle, args: &
     let (reply, received) = oneshot::channel();
     service.editors.lock().await.insert(id.clone(), EditorRequest { payload: payload.clone(), reply });
     let result = async {
-        if app.get_webview_window("tool-window-json-agent").is_some() {
-            crate::api::app::open_tool_window(app, "json-agent")?;
-        } else {
-            Box::pin(state.dispatch(app.clone(), "quick-switch:show-main",
-                Some(json!({"toolId": "json-agent"})))).await?;
-        }
+        crate::api::app::prepare_tool_window(app, "json-agent", false)?;
         app.emit("assistant:editor-request", payload)
             .map_err(|error| ManagerError::System(error.to_string()))?;
         // 窗口启动和编辑回执有界等待，未收到回执不能向模型宣称已写入。

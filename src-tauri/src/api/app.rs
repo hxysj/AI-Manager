@@ -36,6 +36,9 @@ static ASSISTANT_REPLY_VISIBLE: AtomicBool = AtomicBool::new(false);
 // 工具窗口与主面板共用窗口锁，避免迟到的初始化在主面板打开后重新显示。
 static READY_TOOL_WINDOWS: LazyLock<SyncMutex<HashSet<String>>> =
     LazyLock::new(|| SyncMutex::new(HashSet::new()));
+// 助手读取编辑器时只加载后台页面；显式打开窗口后才退出后台状态。
+static BACKGROUND_TOOL_WINDOWS: LazyLock<SyncMutex<HashSet<String>>> =
+    LazyLock::new(|| SyncMutex::new(HashSet::new()));
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
@@ -544,12 +547,22 @@ fn tool_window_title(tool_id: &str) -> Result<&'static str, ManagerError> {
 }
 
 pub fn open_tool_window(app: &tauri::AppHandle, tool_id: &str) -> Result<Value, ManagerError> {
+    prepare_tool_window(app, tool_id, true)
+}
+
+pub(crate) fn prepare_tool_window(app: &tauri::AppHandle, tool_id: &str, show: bool) -> Result<Value, ManagerError> {
     let title = tool_window_title(tool_id)?;
     let _guard = QUICK_SWITCH_WINDOW_POSITION
         .lock()
         .map_err(|error| ManagerError::System(error.to_string()))?;
     let label = format!("tool-window-{tool_id}");
+    if show {
+        BACKGROUND_TOOL_WINDOWS.lock().map_err(|error| ManagerError::System(error.to_string()))?.remove(&label);
+    }
     if let Some(window) = app.get_webview_window(&label) {
+        if !show {
+            return Ok(json!({"visible": window.is_visible().map_err(|error| ManagerError::System(error.to_string()))?}));
+        }
         let ready = READY_TOOL_WINDOWS
             .lock()
             .map_err(|error| ManagerError::System(error.to_string()))?
@@ -564,6 +577,9 @@ pub fn open_tool_window(app: &tauri::AppHandle, tool_id: &str) -> Result<Value, 
         .lock()
         .map_err(|error| ManagerError::System(error.to_string()))?
         .remove(&label);
+    if !show {
+        BACKGROUND_TOOL_WINDOWS.lock().map_err(|error| ManagerError::System(error.to_string()))?.insert(label.clone());
+    }
     let large = matches!(
         tool_id,
         "assistant" | "image-workbench" | "git" | "network-quality" | "lan-share" | "multi-protocol-gateway"
@@ -627,7 +643,10 @@ pub fn mark_tool_window_ready(
     READY_TOOL_WINDOWS
         .lock()
         .map_err(|error| ManagerError::System(error.to_string()))?
-        .insert(label);
+        .insert(label.clone());
+    if BACKGROUND_TOOL_WINDOWS.lock().map_err(|error| ManagerError::System(error.to_string()))?.contains(&label) {
+        return Ok(json!({"visible": false}));
+    }
     show_tool_window(app, &window).map(|visible| json!({ "visible": visible }))
 }
 

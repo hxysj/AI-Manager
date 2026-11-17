@@ -98,6 +98,10 @@ async function run() {
   assert(!find(snapshot, '开始生成').disabled, '填写提示词后应允许生成')
   snapshot = await action(snapshot, '开始生成', 'click')
   assert(model.generated && snapshot.text.includes('任务已提交'), '点击必须触发工作台原有提交处理')
+  const userFocus = document.querySelector('input[aria-label="只读说明"]')
+  userFocus.focus()
+  snapshot = await action(snapshot, '图片提示词', 'fill', { text: '后台修改提示词' })
+  assert(document.activeElement === userFocus, '填写其他控件不能抢走用户焦点')
   snapshot = await action(snapshot, '生成模式', 'select', { text: 'codex' })
   assert(model.mode === 'codex', '选择必须更新真实 Vue 状态')
   await rejects(() => action(snapshot, '生成模式', 'select', { text: 'missing' }), /选项不存在/)
@@ -133,7 +137,7 @@ async function run() {
     id: 'cancelled', runId: 'cancelled', windowLabel: 'main', operation: 'interact',
     args: { snapshotId: state.snapshotId, nodeId: find(state, '图片提示词').nodeId, action: 'fill', text: '不应执行' }
   })
-  assert(model.prompt === '一张游乐园照片', '已经取消的任务不能操作界面')
+  assert(model.prompt === '后台修改提示词', '已经取消的任务不能操作界面')
   app.unmount()
   await callback({ ...pending[0], id: 'unmounted' })
   assert(replies.length === 1 && unsubscribeCount === 1, '卸载后应清理监听并停止响应')

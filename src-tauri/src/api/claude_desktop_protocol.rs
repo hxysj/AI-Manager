@@ -50,14 +50,14 @@ fn convert_content(
         } else {
             json!({"type": "image_url", "image_url": {"url": image_url(block)?}})
         }),
-        "document" if !assistant && responses => {
+        "document" if !assistant && (responses || text(&block["source"], "type") == "text") => {
             let source = &block["source"];
             Some(match text(source, "type") {
                 "base64" => {
                     json!({"type": "input_file", "filename": "attachment.pdf", "file_data": format!("data:{};base64,{}", text(source, "media_type"), raw(source, "data"))})
                 }
                 "url" => json!({"type": "input_file", "file_url": text(source, "url")}),
-                "text" => json!({"type": "input_text", "text": raw(source, "data")}),
+                "text" => json!({"type": if responses { "input_text" } else { "text" }, "text": raw(source, "data")}),
                 _ => return Err(error("当前文档内容类型不能转换为 Responses 输入")),
             })
         }
@@ -92,14 +92,56 @@ pub(super) fn convert_request(payload: &Value, responses: bool) -> Result<Value,
         .ok_or_else(|| error("messages 必须为数组"))?;
     for message in source {
         let role = text(message, "role");
+        // 部分 Claude 客户端将系统指令放在 messages 内，转换时保留指令角色。
+        if ["system", "developer"].contains(&role) {
+            let blocks = content_blocks(&message["content"])?;
+            if blocks.iter().any(|block| text(block, "type") != "text") {
+                return Err(error("系统指令消息只支持文本内容"));
+            }
+            messages.push(json!({"role": role, "content": blocks.iter().map(|block| raw(block, "text")).collect::<Vec<_>>().join("\n")}));
+            continue;
+        }
+        if role == "tool" {
+            let id = text(message, "tool_call_id");
+            if id.is_empty() {
+                return Err(error("工具结果缺少 tool_call_id"));
+            }
+            let blocks = content_blocks(&message["content"])?;
+            if blocks.iter().any(|block| text(block, "type") != "text") {
+                return Err(error("工具结果消息只支持文本内容"));
+            }
+            let output = blocks.iter().map(|block| raw(block, "text")).collect::<Vec<_>>().join("\n");
+            messages.push(if responses {
+                json!({"type":"function_call_output","call_id":id,"output":output})
+            } else {
+                json!({"role":"tool","tool_call_id":id,"content":output})
+            });
+            continue;
+        }
         if !["user", "assistant"].contains(&role) {
-            return Err(error("消息 role 必须为 user 或 assistant"));
+            return Err(error(&format!("不支持的消息 role：{role}")));
         }
         let assistant = role == "assistant";
         let mut content = Vec::new();
         let mut tools = Vec::new();
         let mut tool_outputs = Vec::new();
-        for block in content_blocks(&message["content"])? {
+        if let Some(calls) = message.get("tool_calls") {
+            if !assistant { return Err(error("只有 assistant 消息可以包含工具调用")); }
+            for call in calls.as_array().ok_or_else(|| error("tool_calls 必须为数组"))? {
+                let function = &call["function"];
+                if text(call,"type") != "function" || text(call,"id").is_empty() || text(function,"name").is_empty()
+                    || serde_json::from_str::<Value>(raw(function,"arguments")).ok().is_none_or(|value| !value.is_object()) {
+                    return Err(error("工具调用缺少有效的 id、name 或对象参数"));
+                }
+                tools.push(if responses {
+                    json!({"type":"function_call","call_id":call["id"],"name":function["name"],"arguments":function["arguments"]})
+                } else { call.clone() });
+            }
+        }
+        let blocks = if assistant && message["content"].is_null() && !tools.is_empty() {
+            Vec::new()
+        } else { content_blocks(&message["content"])? };
+        for block in blocks {
             match text(&block, "type") {
                 "tool_use" if assistant => {
                     if text(&block, "id").is_empty()
@@ -854,6 +896,35 @@ mod tests {
                 .unwrap()
             })
             .collect()
+    }
+
+    #[test]
+    fn mixed_client_roles_preserve_tool_call_ids_and_reject_unknown_roles() {
+        let payload = json!({"model":"model","messages":[
+            {"role":"system","content":"系统指令"},
+            {"role":"assistant","content":null,"tool_calls":[{"id":"call_mixed","type":"function","function":{"name":"lookup","arguments":"{}"}}]},
+            {"role":"tool","tool_call_id":"call_mixed","content":"结果"},
+            {"role":"user","content":"继续"}
+        ]});
+        for responses in [false, true] {
+            let result = convert_request(&payload, responses).unwrap();
+            let messages = &result[if responses { "input" } else { "messages" }];
+            assert_eq!(messages[0]["role"], "system");
+            if responses {
+                assert_eq!(messages[1]["call_id"], "call_mixed");
+                assert_eq!(messages[2]["type"], "function_call_output");
+                assert_eq!(messages[2]["call_id"], "call_mixed");
+            } else {
+                assert_eq!(messages[1]["tool_calls"][0]["id"], "call_mixed");
+                assert_eq!(messages[2]["role"], "tool");
+                assert_eq!(messages[2]["tool_call_id"], "call_mixed");
+            }
+        }
+        for message in [json!({"role":"unknown","content":"禁止猜测角色"}),json!({"role":"tool","content":"缺少调用标识"})] {
+            let mut invalid = payload.clone();
+            invalid["messages"] = json!([message]);
+            assert!(convert_request(&invalid, false).is_err());
+        }
     }
 
     #[test]

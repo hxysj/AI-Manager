@@ -6,6 +6,7 @@ import pet from "./pet.mjs"
 import jsonEditor from "./json-editor.mjs"
 import skills from "./skills.mjs"
 import ui from "./ui.mjs"
+import appApi from "./app-api.mjs"
 import catalog from "./catalog.json" with { type: "json" }
 export { catalog }
 
@@ -19,7 +20,8 @@ export function createTools(signal, nativeTool, disabled = []) {
       ...pet,
       ...jsonEditor,
       ...skills,
-      ...ui
+      ...ui,
+      ...appApi
     ]
       .filter((definition) => !disabled.includes(definition.id))
       .map((definition) => [
