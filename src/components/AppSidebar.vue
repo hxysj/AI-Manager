@@ -65,6 +65,11 @@
         }}</span>
       </button>
     </el-scrollbar>
+
+    <footer class="app-sidebar-footer" :title="`当前版本：v${appVersion}`">
+      <span v-if="!collapsed">当前版本</span>
+      <span>v{{ appVersion }}</span>
+    </footer>
   </aside>
 </template>
 
@@ -73,6 +78,8 @@ import { Bot, Moon, Sun } from "lucide-vue-next"
 import { ElScrollbar } from "element-plus"
 import "element-plus/es/components/scrollbar/style/css"
 import logoUrl from "@/assets/ai-manager-logo.png?url"
+// 版本号随应用构建配置更新，避免在界面中重复维护。
+import { version as appVersion } from "../../package.json"
 
 defineProps({
   activeView: {
@@ -251,6 +258,19 @@ defineEmits([
       gap: var(--sidebar-nav-gap);
       padding: var(--sidebar-nav-padding) 12px;
     }
+  }
+
+  .app-sidebar-footer {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 14px 8px;
+    border-top: 1px solid var(--color-line);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+    white-space: nowrap;
   }
 
   &__nav-item {

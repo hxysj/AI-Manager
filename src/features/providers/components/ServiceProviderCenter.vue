@@ -167,7 +167,13 @@
               <span class="running-agent-dot"></span>
               {{ agentLabel(agent) }}
             </span>
-            <span class="provider-tag">
+            <span
+              class="provider-tag"
+              :class="{
+                'provider-gpt-tag': provider.kind === 'codex_account',
+                'provider-google-tag': provider.kind === 'google_account'
+              }"
+            >
               {{
                 provider.kind === "codex_account"
                   ? "GPT 官方账号"
@@ -178,6 +184,14 @@
                       : "Responses"
               }}
             </span>
+            <span
+              v-if="provider.kind !== 'api' && providerPlanLabel(provider)"
+              class="provider-tag provider-plan-tag"
+              >{{ providerPlanLabel(provider) }}</span
+            >
+            <span v-if="!provider.enabled" class="provider-tag disabled-tag"
+              >已禁用</span
+            >
             <span
               v-if="!provider.hasCredential"
               class="provider-tag missing-tag"
@@ -190,14 +204,12 @@
             :title="provider.note"
             >{{ provider.note }}</span
           >
-          <span class="provider-url" :title="provider.baseUrl">
-            {{
-              provider.kind !== "api"
-                ? provider.kind === "google_account"
-                  ? "Google 官方账号"
-                  : "GPT / Codex 官方账号"
-                : provider.baseUrl
-            }}
+          <span
+            v-if="provider.kind === 'api'"
+            class="provider-url"
+            :title="provider.baseUrl"
+          >
+            {{ provider.baseUrl }}
           </span>
           <div
             v-if="
@@ -209,32 +221,51 @@
               v-for="quota in quotaWindows(provider)"
               :key="quota.name"
               class="quota-item"
+              :class="{
+                'quota-warning':
+                  quota.remaining != null && quota.remaining < 30,
+                'quota-danger': quota.remaining != null && quota.remaining < 10,
+                'quota-unknown': quota.remaining == null
+              }"
               :title="
                 quota.resetAt
                   ? `重置时间：${formatTime(quota.resetAt * 1000)}`
-                  : ''
+                  : '重置时间未知'
               "
             >
               <div class="quota-heading">
-                <span>{{ quota.name }}</span>
-                <span>{{
-                  quota.remaining == null ? "未知" : `${quota.remaining}%`
-                }}</span>
+                <span class="quota-icon"></span>
+                <span class="quota-name">{{ quota.name }}</span>
               </div>
-              <div class="quota-track">
+              <div
+                class="quota-track"
+                role="progressbar"
+                :aria-label="`${quota.name}剩余额度`"
+                :aria-valuenow="quota.remaining ?? undefined"
+                :aria-valuetext="
+                  quota.remaining == null ? '额度未知' : `${quota.remaining}%`
+                "
+                :aria-valuemin="0"
+                :aria-valuemax="100"
+              >
                 <span
                   class="quota-fill"
                   :style="{ width: `${quota.remaining ?? 0}%` }"
                 ></span>
               </div>
+              <div class="quota-meta">
+                <span class="quota-value">{{
+                  quota.remaining == null ? "未知" : `${quota.remaining}%`
+                }}</span>
+                <span aria-hidden="true">·</span>
+                <span class="quota-reset">{{
+                  formatResetCountdown(quota.resetAt)
+                }}</span>
+              </div>
             </div>
           </div>
-          <span class="provider-meta">
-            {{
-              provider.kind !== "api"
-                ? "使用官方模型列表"
-                : `${providerModels(provider.id).length} 个模型`
-            }}
+          <span v-if="provider.kind === 'api'" class="provider-meta">
+            {{ providerModels(provider.id).length }} 个模型
           </span>
         </div>
         <div class="provider-actions">
@@ -1158,6 +1189,8 @@ const showCreateOptions = ref(false)
 const officialLogin = ref(null)
 const officialLoginState = ref(null)
 const refreshingQuotaIds = ref(new Set())
+const countdownNow = ref(Date.now())
+let countdownTimer
 let officialLoginRequest = 0
 let officialQuotaTask
 let disposed = false
@@ -1337,7 +1370,13 @@ watch(
 watch(providerTab, (tab) => {
   if (tab === "codex_account") refreshOfficialQuotas()
 })
-onMounted(refresh)
+onMounted(() => {
+  refresh()
+  // 倒计时只更新本地展示，不随每次计时请求官方额度。
+  countdownTimer = setInterval(() => {
+    countdownNow.value = Date.now()
+  }, 1000)
+})
 watch(
   () => props.loginState,
   (value) => {
@@ -1407,23 +1446,60 @@ const providerRunningAgents = (id) => [
 const formatTime = (value) =>
   value ? new Date(value).toLocaleString("zh-CN", { hour12: false }) : "—"
 
+// 套餐取已有公开账号缓存，列表展示不额外读取凭据。
+function providerPlanLabel(provider) {
+  const plan =
+    provider.kind === "google_account"
+      ? googleAccount(provider.id)?.metadata?.plan
+      : providerAccount(provider.id)?.quota?.plan_type
+  return (
+    {
+      free: "免费版",
+      plus: "Plus",
+      pro: "Pro",
+      team: "Team",
+      business: "Business",
+      enterprise: "Enterprise",
+      "g1-pro-tier": "Google AI Pro",
+      "g1-ultra-tier": "Google AI Ultra",
+      "free-tier": "免费版",
+      FREE: "免费版"
+    }[plan] ||
+    plan ||
+    ""
+  )
+}
+
 function quotaWindows(provider) {
   const limits = providerAccount(provider.id)?.quota?.rate_limit
   return [limits?.primary_window, limits?.secondary_window]
     .filter(Boolean)
     .map((window, index) => ({
       name:
-        window.limit_window_seconds >= 86400
-          ? `${window.limit_window_seconds / 86400} 天额度`
-          : window.limit_window_seconds
-            ? `${window.limit_window_seconds / 3600} 小时额度`
-            : `额度 ${index + 1}`,
+        window.limit_window_seconds === 604800
+          ? "周额度"
+          : window.limit_window_seconds >= 86400
+            ? `${window.limit_window_seconds / 86400} 天额度`
+            : window.limit_window_seconds
+              ? `${window.limit_window_seconds / 3600} 小时额度`
+              : `额度 ${index + 1}`,
       remaining:
         window.used_percent == null
           ? null
           : Math.max(0, Math.min(100, 100 - window.used_percent)),
       resetAt: window.reset_at
     }))
+}
+
+// 保留真实重置日期供悬浮查看，卡片内只显示剩余时间。
+function formatResetCountdown(value) {
+  if (!value) return "重置时间未知"
+  const remaining = value * 1000 - countdownNow.value
+  if (remaining <= 0) return "待刷新"
+  const minutes = Math.floor(remaining / 60000)
+  const days = Math.floor(minutes / 1440)
+  const hours = Math.floor((minutes % 1440) / 60)
+  return `${days ? `${days}d ` : ""}${hours}h ${minutes % 60}m后重置`
 }
 
 function openProviderDetail(provider, tab = "overview") {
@@ -1637,6 +1713,7 @@ async function importOfficialAccount(payload) {
 
 onUnmounted(() => {
   disposed = true
+  clearInterval(countdownTimer)
   officialLoginRequest += 1
   if (officialLoginState.value?.status === "pending")
     serviceProviderApi.invoke("cancel-login").catch(() => {})
@@ -2404,6 +2481,22 @@ async function showBackup(id) {
             color: var(--color-success);
             font-size: var(--font-size-xs);
             line-height: 1.4;
+            &.provider-gpt-tag,
+            &.provider-plan-tag {
+              border-color: var(--color-primary-solid);
+              background: var(--color-primary-soft);
+              color: var(--color-primary);
+            }
+            &.provider-google-tag {
+              border-color: rgba(139, 92, 246, 0.45);
+              background: rgba(139, 92, 246, 0.1);
+              color: #8b5cf6;
+            }
+            &.disabled-tag {
+              border-color: var(--color-line-strong);
+              background: var(--color-panel-soft);
+              color: var(--color-text-muted);
+            }
             &.missing-tag {
               border-color: var(--color-warning-line);
               background: var(--color-warning-soft);
@@ -2445,30 +2538,82 @@ async function showBackup(id) {
         }
         .quota-list {
           display: flex;
+          flex-wrap: wrap;
           gap: 12px;
           .quota-item {
+            --quota-color: #12b981;
+            --quota-bg: #f6fffb;
             display: flex;
-            flex: 1;
+            flex: 0 1 212px;
             min-width: 0;
             flex-direction: column;
-            gap: 5px;
+            gap: 7px;
+            padding: 8px 10px 10px;
+            border: 1px solid var(--color-line);
+            border-radius: 7px;
+            background: var(--quota-bg);
+            &.quota-warning {
+              --quota-color: #f59e0b;
+              --quota-bg: var(--color-warning-soft);
+            }
+            &.quota-danger {
+              --quota-color: var(--color-danger);
+              --quota-bg: var(--color-danger-soft);
+            }
+            &.quota-unknown {
+              --quota-color: var(--color-text-soft);
+              --quota-bg: var(--color-panel-soft);
+            }
             .quota-heading {
               display: flex;
-              justify-content: space-between;
-              gap: 8px;
+              align-items: center;
+              gap: 7px;
               color: var(--color-text-muted);
-              font-size: var(--font-size-xs);
+              font-size: var(--font-size-sm);
+              .quota-icon {
+                width: 18px;
+                height: 18px;
+                flex: none;
+                border: 4px solid var(--quota-color);
+                border-radius: 50%;
+              }
+              .quota-name {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+              }
             }
             .quota-track {
-              height: 4px;
+              height: 7px;
               overflow: hidden;
               border-radius: 999px;
-              background: var(--color-line);
+              background: var(--color-success-soft);
               .quota-fill {
                 display: block;
                 height: 100%;
                 border-radius: inherit;
-                background: var(--color-success);
+                background: var(--quota-color);
+              }
+            }
+            .quota-meta {
+              display: flex;
+              align-items: center;
+              justify-content: flex-end;
+              gap: 6px;
+              color: var(--color-text-muted);
+              font-size: var(--font-size-sm);
+              .quota-value {
+                flex: none;
+                color: var(--quota-color);
+                font-size: var(--font-size-lg);
+                font-variant-numeric: tabular-nums;
+                line-height: 1;
+              }
+              .quota-reset {
+                min-width: 0;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
               }
             }
           }

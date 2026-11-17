@@ -10,6 +10,8 @@
       class="assistant-model-field"
       aria-label="当前模型"
       placeholder="选择 Provider 和模型"
+      placement="top-end"
+      :fallback-placements="['top-end', 'bottom-end']"
       filterable
       allow-create
       default-first-option

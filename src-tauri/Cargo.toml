@@ -1,5 +1,6 @@
 [package]
 name = "monkey-thief"
+# 应用版本由根目录 package.json 自动同步，请只修改该配置。
 version = "2.0.31"
 description = "Desktop manager for AI CLI skills, repos and runtime metadata"
 authors = ["Monkey Thief"]

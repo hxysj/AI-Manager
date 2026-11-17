@@ -139,6 +139,22 @@ npm run dist:win
 
 安装包输出到 `src-tauri/target/release/bundle/nsis/`。
 
+### 统一版本号
+
+应用版本号只维护根目录 `package.json` 的 `version` 字段。侧栏和 Tauri 打包直接读取此字段；开发启动、构建和 CI 发布前会自动同步 npm 锁文件、Cargo 配置及锁文件、发布说明标题，更新版本时无需逐个修改。
+
+需要直接执行 Cargo 命令时，修改版本后先运行一次同步；发布说明的正文仍按本次更新内容维护：
+
+```powershell
+npm run sync:version
+```
+
+只检查版本是否一致、不写入文件：
+
+```powershell
+npm run sync:version -- --check
+```
+
 ## 快速开始
 
 1. **确认目录**：打开 `Settings > 目录`，检查 Data 目录以及 Claude Code、Codex 配置目录。修改 Data 目录后需要重启应用。
