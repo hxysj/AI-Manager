@@ -178,8 +178,11 @@
                   >提醒时间<input
                     v-model="plan.localAt"
                     type="datetime-local"
+                    step="1"
                     :min="
-                      plan.enabled ? localInput(Date.now() + 60000) : undefined
+                      plan.enabled
+                        ? localInput(Date.now() + 1000, true)
+                        : undefined
                     "
                     :required="plan.enabled"
                 /></label>
@@ -298,7 +301,10 @@
                   type="button"
                   class="note-text-button"
                   @click="
-                    plan.localAt = localInput(Date.now() + minutes * 60000)
+                    plan.localAt = localInput(
+                      Date.now() + minutes * 60000,
+                      true
+                    )
                   "
                 >
                   {{ minutes }} 分钟后</button
@@ -523,6 +529,7 @@ import { formatDateTime } from "@/utils/formatters"
 import {
   emptyNote,
   localInput,
+  reminderAt,
   noteTypes,
   repeatOptions,
   taskStates
@@ -544,7 +551,7 @@ form.value.reminders = (form.value.reminders || []).map((plan) => ({
   ...plan,
   enabled: Boolean(plan.enabled),
   schedule: { weekdays: [], sound: true, ...plan.schedule },
-  localAt: localInput(plan.nextFireAt),
+  localAt: localInput(plan.nextFireAt, true),
   localEnd: plan.schedule.endAt
     ? localInput(plan.schedule.endAt).slice(0, 10)
     : ""
@@ -623,7 +630,7 @@ function applyAnalysis(note) {
     ...(note.reminders || []).map((plan) => ({
       ...plan,
       taskId: taskIds.get(plan.taskId) || plan.taskId,
-      localAt: localInput(plan.nextFireAt),
+      localAt: localInput(plan.nextFireAt, true),
       localEnd: ""
     }))
   )
@@ -698,7 +705,7 @@ function addReminder() {
   form.value.reminders.push({
     taskId: "",
     enabled: true,
-    localAt: localInput(Date.now() + 600000),
+    localAt: localInput(Date.now() + 600000, true),
     localEnd: "",
     schedule: {
       weekdays: [],
@@ -725,7 +732,8 @@ function updateRelative(plan) {
   const task = form.value.tasks.find((task) => task.id === plan.taskId)
   if (plan.schedule.offsetMinutes && task?.localDueAt)
     plan.localAt = localInput(
-      new Date(task.localDueAt).getTime() - plan.schedule.offsetMinutes * 60000
+      new Date(task.localDueAt).getTime() - plan.schedule.offsetMinutes * 60000,
+      true
     )
 }
 watch(
@@ -740,7 +748,7 @@ function beforeDeadline(plan) {
   if (task?.dueDate) {
     const at = new Date(`${task.dueDate}T09:00`)
     at.setDate(at.getDate() - 1)
-    plan.localAt = localInput(at.getTime())
+    plan.localAt = localInput(at.getTime(), true)
   }
 }
 async function save() {
@@ -749,7 +757,7 @@ async function save() {
   // 提交时重新核对当前时间，避免编辑期间时间已过或提前提醒落在过去。
   if (
     form.value.reminders.some(
-      (plan) => plan.enabled && !(new Date(plan.localAt).getTime() > Date.now())
+      (plan) => plan.enabled && !(reminderAt(plan) > Date.now())
     )
   ) {
     error.value = "提醒时间必须晚于当前时间，请重新选择"
@@ -776,10 +784,10 @@ async function save() {
         id: plan.id,
         taskId: plan.taskId,
         enabled: plan.enabled,
-        nextFireAt: new Date(plan.localAt).getTime(),
+        nextFireAt: reminderAt(plan),
         schedule: {
           ...plan.schedule,
-          at: new Date(plan.localAt).getTime(),
+          at: reminderAt(plan),
           endAt: plan.localEnd
             ? new Date(`${plan.localEnd}T23:59:59`).getTime()
             : null,

@@ -2116,8 +2116,12 @@ mod tests {
             let id=save_service_login(paths,"",&auth,"",generation).unwrap();
             c.execute("UPDATE service_provider_configs SET deleted_at=1 WHERE id=?1",[&id]).unwrap();
             assert!(save_service_login(paths,&id,&auth,"",generation).is_err());
-            assert!(save_service_login(paths,"",&auth,"",generation).is_err());
-            assert_eq!(store::query(&c,"SELECT count(*) AS total FROM service_provider_configs",&[]).unwrap()[0]["total"],1);
+            let added=save_service_login(paths,"",&auth,"",generation).unwrap();
+            assert_ne!(added,id);
+            assert!(!store::config(&c,&id).unwrap()["deletedAt"].is_null());
+            assert_eq!(store::config(&c,&added).unwrap()["kind"],"codex_account");
+            assert_eq!(save_service_login(paths,"",&auth,"",generation).unwrap(),added);
+            assert_eq!(store::query(&c,"SELECT count(*) AS total FROM service_provider_configs",&[]).unwrap()[0]["total"],2);
         });
     }
 
@@ -2136,6 +2140,13 @@ mod tests {
             assert_eq!(store::config(&c,id).unwrap()["proxy"],"http://127.0.0.1:7890");
             assert_eq!(import_service_account(paths,"",&content,None).unwrap()["id"],id);
             assert_eq!(store::query(&c,"SELECT count(*) AS total FROM service_provider_configs",&[]).unwrap()[0]["total"],1);
+            store::remove(paths,id,store::config(&c,id).unwrap()["revision"].as_i64().unwrap()).unwrap();
+            assert!(import_service_account(paths,id,&content,None).is_err());
+            let added=import_service_account(paths,"",&content,None).unwrap();
+            assert_ne!(added["id"],id);
+            assert_eq!(import_service_account(paths,"",&content,None).unwrap()["id"],added["id"]);
+            assert!(!store::config(&c,id).unwrap()["deletedAt"].is_null());
+            assert_eq!(store::query(&c,"SELECT count(*) AS total FROM service_provider_configs",&[]).unwrap()[0]["total"],2);
         });
     }
 

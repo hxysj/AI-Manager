@@ -43,8 +43,8 @@ export const quickNotesApi={onChanged:async fn=>{handlers.add(fn);return()=>hand
  if(action==='task-update'){const n=state.notes.find(n=>n.id===p.id);n.tasks.find(t=>t.id===p.taskId).status=p.status;n.revision++;changed();return structuredClone(n)}
  if(action==='archive'||action==='trash'||action==='restore'){const n=state.notes.find(n=>n.id===p.id);n.lifecycle=action==='archive'?'archived':action==='trash'?'trash':'active';n.revision++;changed();return structuredClone(n)}
  if(action==='capture'){globalThis.lastCapture=p;return {id:'capture',requestId:p.requestId,status:'running'}}
- if(action==='capture-save'){const n={...p.note,id:crypto.randomUUID(),revision:1,createdAt:Date.now(),updatedAt:Date.now(),groupId:p.note.groupId||'inbox',categoryId:p.note.categoryId||'uncategorized',lifecycle:'active'};state.notes.push(n);changed();return structuredClone(n)}
- if(action==='capture-state'){if(globalThis.deferCaptureState)await new Promise(resolve=>{globalThis.releaseCaptureState=resolve});return {id:'capture',requestId:p.requestId,status:'preview',result:{title:'修复分值同步问题',content:'修复登录页与预约页分值不同步的问题，补充回归验证。',type:'todo',groupId:'project',categoryId:'debugging',tags:['分值同步','回归测试'],tasks:[{id:'ai-task',title:'补充回归测试',status:'pending',dueDate:null}],worklog:{},reminders:[]}}}
+ if(action==='capture-save'){const n={...p.note,id:crypto.randomUUID(),revision:1,createdAt:Date.now(),updatedAt:Date.now(),groupId:p.note.groupId||'inbox',categoryId:p.note.categoryId||'uncategorized',lifecycle:'active'};state.notes.push(n);state.reminders.push(...(p.note.reminders||[]).map(r=>({...r,id:r.id||crypto.randomUUID(),noteId:n.id})));changed();return structuredClone(n)}
+ if(action==='capture-state'){if(globalThis.deferCaptureState)await new Promise(resolve=>{globalThis.releaseCaptureState=resolve});return {id:'capture',requestId:p.requestId,status:'preview',result:{title:'修复分值同步问题',content:'修复登录页与预约页分值不同步的问题，补充回归验证。',type:'todo',groupId:'project',categoryId:'debugging',tags:['分值同步','回归测试'],tasks:[{id:'ai-task',title:'补充回归测试',status:'pending',dueDate:null}],worklog:{},reminders:globalThis.aiReminderAt?[{taskId:'ai-task',enabled:true,nextFireAt:globalThis.aiReminderAt,schedule:{at:globalThis.aiReminderAt,repeat:'once'}}]:[]}}}
  if(action==='organize'){state.folders.push({...p,id:crypto.randomUUID()});changed();return {id:'folder'}}
  return {ok:true}
 }}
@@ -117,11 +117,15 @@ async function test(){
  button('智能记录').click();await settle()
  const modal=[...document.querySelectorAll('.smart-record-modal')].find(n=>n.getClientRects().length)
  let source=modal.querySelector('.smart-input');set(source,'修复登录页与预约页分值不同步的问题，补充回归测试。');await settle()
+ // 提醒精度从模型预览到确认、再编辑均须保持原始触发点。
+ const preciseTime=new Date(Date.now()+120000);preciseTime.setMilliseconds(456);globalThis.aiReminderAt=preciseTime.getTime()
  const count=state.notes.length
  button('分析并预览',modal).click();await settle();await settle()
  assert(globalThis.lastCapture.preview===true,'智能记录没有请求预览')
  assert(state.notes.length===count&&!calls.some(c=>c.action==='capture-save'),'预览前提前保存了便签')
  assert(modal.querySelector('.smart-preview-title').textContent==='修复分值同步问题','没有渲染模型实际返回结果')
+ const previewTime=modal.querySelector('.smart-field input[type=datetime-local]')
+ assert(previewTime?.value.length===19&&previewTime.step==='1','AI 提醒预览没有保留秒数')
  const suggestions=modal.querySelectorAll('.smart-task').length
  button('添加',modal).click();await settle();assert(modal.querySelectorAll('.smart-task').length===suggestions+1,'预览没有新增待办')
  const newSuggestion=[...modal.querySelectorAll('.smart-task')].at(-1);set(newSuggestion.querySelector('input'),'补充检查');newSuggestion.querySelector('[aria-label=移除建议待办]').click();await settle()
@@ -129,6 +133,15 @@ async function test(){
  set(modal.querySelector('.smart-field input'),'确认后的 AI 标题');button('确认并保存',modal).click();await settle()
  assert(calls.some(c=>c.action==='capture-save'&&c.p.note.title==='确认后的 AI 标题'),'预览修改没有提交')
  assert(state.notes.length===count+1,'确认后没有生成便签')
+ const confirmed=calls.findLast(c=>c.action==='capture-save').p.note
+ assert(confirmed.reminders[0].nextFireAt===globalThis.aiReminderAt&&confirmed.reminders[0].schedule.at===globalThis.aiReminderAt,'确认保存改变了 AI 提醒的触发点')
+ const reminderCard=[...document.querySelectorAll('.quick-note-card')].find(n=>n.textContent.includes('确认后的 AI 标题'))
+ assert(reminderCard.querySelector('[aria-label=管理提醒]'),'AI 保存的卡片没有启用提醒')
+ reminderCard.querySelector('.note-card-open').click();await settle()
+ assert(document.querySelector('.note-reminder input[type=datetime-local]').value.length===19,'再次编辑丢失提醒秒数')
+ button('保存修改').click();await settle()
+ assert(calls.findLast(c=>c.action==='save').p.reminders[0].nextFireAt===globalThis.aiReminderAt,'再次保存改变了已有提醒时间')
+ globalThis.aiReminderAt=null
  button('智能记录').click();await settle();source=modal.querySelector('.smart-input');set(source,'关闭后保留的草稿');await settle();modal.querySelector('[aria-label=关闭智能记录]').click();await settle()
  button('智能记录').click();await settle();assert(source.value==='关闭后保留的草稿','关闭后丢失原文草稿')
  button('仅保存原文',modal).click();await settle();assert(calls.some(c=>c.action==='save'&&c.p.content==='关闭后保留的草稿'),'仅保存原文没有调用保存')

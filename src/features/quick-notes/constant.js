@@ -17,12 +17,18 @@ export const repeatOptions = [
   { id: "weekly", label: "每周" },
   { id: "monthly", label: "每月（不存在的日期取月底）" }
 ]
-export function localInput(value) {
+export function localInput(value, withSeconds = false) {
   if (!value) return ""
   const date = new Date(value)
   return new Date(date.getTime() - date.getTimezoneOffset() * 60000)
     .toISOString()
-    .slice(0, 16)
+    .slice(0, withSeconds ? 19 : 16)
+}
+// 提醒未被编辑时保留原始触发点，避免预览及重新保存丢失秒数和毫秒。
+export function reminderAt(plan) {
+  return plan.localAt === localInput(plan.nextFireAt, true)
+    ? plan.nextFireAt
+    : new Date(plan.localAt).getTime()
 }
 export function emptyNote() {
   return {

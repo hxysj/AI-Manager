@@ -16,6 +16,11 @@
         /><span class="note-type-badge"
           ><NotebookPen :size="12" />{{ typeName }}</span
         ></label
+      ><span class="note-card-location"
+        ><Folder :size="13" />{{ groupName
+        }}<span v-if="categoryName && categoryName !== '未分类'"
+          >· {{ categoryName }}</span
+        ></span
       ><button
         class="note-card-icon"
         type="button"
@@ -57,19 +62,19 @@
     <p v-if="note.pendingTime" class="note-card-pending">
       <Clock3 :size="12" />提醒时间待确认
     </p>
-    <div class="note-card-tags">
-      <span>#{{ groupName }}</span
-      ><span v-if="categoryName && categoryName !== '未分类'">{{
-        categoryName
-      }}</span
-      ><span v-for="tag in (note.tags || []).slice(0, 3)" :key="tag"
+    <div v-if="note.tags?.length" class="note-card-tags">
+      <span v-for="tag in [...new Set(note.tags)].slice(0, 4)" :key="tag"
         >#{{ tag }}</span
       >
     </div>
     <footer class="note-card-footer">
-      <span :title="`记录于 ${formatDateTime(note.createdAt)}`">{{
-        note.occurredOn || formatDateTime(note.createdAt).slice(0, 10)
-      }}</span
+      <span
+        class="note-card-date"
+        :title="`记录于 ${formatDateTime(note.createdAt)}`"
+        ><CalendarDays :size="13" />{{
+          note.occurredOn ||
+          new Date(note.createdAt).toLocaleDateString("sv-SE")
+        }}</span
       ><button
         v-if="note.lifecycle === 'active'"
         class="note-card-reminder"
@@ -77,16 +82,16 @@
         :aria-label="nextReminder ? '管理提醒' : '添加提醒'"
         @click="$emit('reminder', note)"
       >
-        <Bell :size="12" />{{
+        <Bell :size="14" />{{
           nextReminder ? formatDateTime(nextReminder).slice(5, 16) : "添加提醒"
         }}</button
       ><button
-        class="note-card-icon"
+        class="note-card-detail-button"
         type="button"
         title="编辑便签"
         @click="$emit('open', note)"
       >
-        <ArrowUpRight :size="15" />
+        查看详情<ArrowUpRight :size="14" />
       </button>
     </footer>
   </article>
@@ -94,7 +99,15 @@
 
 <script setup>
 import { computed } from "vue"
-import { ArrowUpRight, Bell, Clock3, Pin, NotebookPen } from "lucide-vue-next"
+import {
+  ArrowUpRight,
+  Bell,
+  Clock3,
+  Pin,
+  NotebookPen,
+  Folder,
+  CalendarDays
+} from "lucide-vue-next"
 import { noteTypes } from "@/features/quick-notes/constant"
 import { formatDateTime } from "@/utils/formatters"
 const props = defineProps({
@@ -122,23 +135,18 @@ const categoryName = computed(
 
 <style scoped lang="less">
 .quick-note-card {
-  --note-accent: #b68c3b;
+  --note-accent: #7394b3;
   display: flex;
   flex-direction: column;
-  gap: 13px;
-  width: 520px;
-  flex: 0 1 560px;
+  gap: 14px;
+  width: 100%;
+  flex: none;
   max-width: 100%;
-  padding: 20px 23px 17px;
+  padding: 21px 23px 16px;
   border: 1px solid var(--color-line);
-  border-top: 3px solid var(--note-accent);
-  border-radius: 15px;
-  background: linear-gradient(
-    135deg,
-    var(--color-panel),
-    var(--color-panel-soft)
-  );
-  box-shadow: 0 3px 12px #18304706;
+  border-radius: 12px;
+  background: var(--color-panel);
+  box-shadow: 0 2px 8px #18304703;
   transition: border-color 0.15s;
   &.note-color-mint {
     --note-accent: #63a187;
@@ -159,10 +167,19 @@ const categoryName = computed(
     display: flex;
     align-items: center;
     justify-content: space-between;
+    gap: 12px;
     .note-card-select {
       display: inline-flex;
       align-items: center;
-      gap: 7px;
+      gap: 9px;
+      color: var(--color-text-muted);
+      font-size: 12px;
+    }
+    .note-card-location {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-left: auto;
       color: var(--color-text-muted);
       font-size: 11px;
     }
@@ -171,10 +188,10 @@ const categoryName = computed(
     display: inline-flex;
     align-items: center;
     gap: 5px;
-    padding: 4px 10px;
-    border-radius: 20px;
-    background: var(--color-primary-soft);
-    color: var(--color-primary);
+    padding: 3px 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--note-accent);
   }
   .note-card-icon {
     display: inline-flex;
@@ -191,7 +208,7 @@ const categoryName = computed(
   .note-card-open {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
     padding: 0;
     border: 0;
     background: transparent;
@@ -200,19 +217,19 @@ const categoryName = computed(
     font: inherit;
     cursor: pointer;
     .note-card-title {
-      font-size: 17px;
+      font-size: 18px;
       line-height: 1.6;
       overflow-wrap: anywhere;
     }
     .note-card-body {
       display: -webkit-box;
-      -webkit-line-clamp: 4;
+      -webkit-line-clamp: 3;
       -webkit-box-orient: vertical;
       overflow: hidden;
       white-space: pre-wrap;
       overflow-wrap: anywhere;
       line-height: 1.8;
-      font-size: 12px;
+      font-size: 14px;
       color: var(--color-text-muted);
     }
   }
@@ -230,11 +247,14 @@ const categoryName = computed(
     display: flex;
     flex-direction: column;
     gap: 8px;
+    padding: 11px 13px;
+    border-radius: 8px;
+    background: var(--color-panel-soft);
     .note-card-task {
       display: flex;
       align-items: center;
       gap: 7px;
-      font-size: 12px;
+      font-size: 13px;
       line-height: 1.5;
       &.note-task-done {
         text-decoration: line-through;
@@ -256,44 +276,60 @@ const categoryName = computed(
     gap: 5px;
     margin: 0;
     color: var(--color-warning);
-    font-size: 11px;
+    font-size: 12px;
   }
   .note-card-tags {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    margin-top: auto;
     :deep(span) {
       background: var(--color-panel-soft);
       color: var(--color-text-muted);
       padding: 4px 9px;
-      border-radius: 20px;
-      font-size: 10px;
+      border-radius: 5px;
+      font-size: 11px;
     }
   }
   .note-card-footer {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 12px;
     border-top: 1px solid var(--color-line);
     padding-top: 10px;
     color: var(--color-text-muted);
-    font-size: 10px;
+    font-size: 12px;
+    .note-card-date {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+    }
     .note-card-reminder {
       display: inline-flex;
       align-items: center;
-      gap: 4px;
+      gap: 6px;
       margin-left: auto;
-      padding: 0;
-      border: 0;
-      background: transparent;
+      padding: 6px 10px;
+      border: 1px solid var(--color-line);
+      border-radius: 7px;
+      background: var(--color-panel);
       font: inherit;
       color: var(--color-primary);
       white-space: nowrap;
       cursor: pointer;
     }
-    .note-card-icon {
-      margin-left: auto;
+    .note-card-detail-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 6px 0 6px 4px;
+      border: 0;
+      font: inherit;
+      background: transparent;
+      color: var(--color-text-muted);
+      cursor: pointer;
+      &:hover {
+        color: var(--color-primary);
+      }
     }
   }
 }

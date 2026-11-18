@@ -967,9 +967,11 @@ pub(crate) fn prepare_official_login(
     if !matches!(kind, "codex_account" | "google_account") || identity.trim().is_empty() {
         return Err(fail("官方账号身份无效"));
     }
+    // 新增 Codex 账号只复用有效记录，已删除记录保留历史，不作为重新登录的更新目标。
     let existing = query(c,
         "SELECT id,kind,account_id,name,deleted_at FROM service_provider_configs
-        WHERE kind=?1 AND account_id=?2 ORDER BY created_at,id LIMIT 1",
+        WHERE kind=?1 AND account_id=?2 AND (kind<>'codex_account' OR deleted_at IS NULL)
+        ORDER BY created_at,id LIMIT 1",
         &[&kind, &identity])?.pop();
     let provider = if target.is_empty() {
         existing.as_ref().map(|row| text(row, "id").to_string()).unwrap_or_default()

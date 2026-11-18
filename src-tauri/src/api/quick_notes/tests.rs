@@ -19,6 +19,37 @@ fn model_folder_ids_require_matching_kind_and_names_can_reuse_aliases() {
 }
 
 #[test]
+fn reminder_offsets_use_capture_time_and_invalid_formats_request_model_correction() {
+    let captured=store::now()-5_000;
+    let capture=json!({"capturedAt":captured,"source":{"timeZone":"Asia/Shanghai"}});
+    for seconds in [30,120,1800,3600] {
+        let normalized=normalize_item(json!({"content":"提醒吃饭","pendingTime":"旧的待确认提示","tasks":[{"title":"吃饭"}],
+            "reminders":[{"afterSeconds":seconds,"at":null,"taskIndex":0,"uncertain":false}]}),&[],&capture,&json!({})).unwrap();
+        assert_eq!(normalized["reminders"][0]["nextFireAt"],captured+seconds*1000);
+        assert_eq!(normalized["reminders"][0]["schedule"]["at"],captured+seconds*1000);
+        assert_eq!(normalized["reminders"][0]["taskId"],normalized["tasks"][0]["id"]);
+        assert_eq!(normalized["reminders"][0]["schedule"]["timeZone"],"Asia/Shanghai");
+        assert_eq!(normalized["pendingTime"],"");
+    }
+    for plan in [
+        json!({"at":"2 分钟后"}),json!({"at":"2026-11-18 15:00"}),json!({"at":null}),
+        json!({"afterSeconds":0}),json!({"afterSeconds":-1}),json!({"afterSeconds":1.5}),
+        json!({"afterSeconds":"120"}),json!({"afterSeconds":i64::MAX}),
+        json!({"afterSeconds":120,"at":"2099-01-01T00:00:00+08:00"})
+    ] {
+        assert!(normalize_item(json!({"content":"验证","reminders":[plan]}),&[],&capture,&json!({})).is_err());
+    }
+    let uncertain=normalize_item(json!({"content":"三点提醒我","reminders":[{"at":null,"uncertain":true}]}),&[],&capture,&json!({})).unwrap();
+    assert!(uncertain["reminders"].as_array().unwrap().is_empty());
+    assert!(!store::text(&uncertain,"pendingTime").is_empty());
+    let expired=normalize_item(json!({"content":"两分钟前的请求","reminders":[{"afterSeconds":120}]}),&[],&json!({"capturedAt":store::now()-180_000}),&json!({})).unwrap();
+    assert!(expired["reminders"].as_array().unwrap().is_empty());
+    assert!(store::text(&expired,"pendingTime").contains("已经过去"));
+    let date_only=normalize_item(json!({"content":"明天开会","occurredOn":"2026-11-19"}),&[],&capture,&json!({})).unwrap();
+    assert!(date_only["reminders"].as_array().unwrap().is_empty());
+}
+
+#[test]
 fn capture_uses_real_model_proxy_for_chat_responses_and_claude() {
     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
         for (cli,api,endpoint) in [("codex","chat","/v1/chat/completions"),("codex","responses","/v1/responses"),("claude","messages","/v1/messages")] {
@@ -30,7 +61,9 @@ fn capture_uses_real_model_proxy_for_chat_responses_and_claude() {
             let mut keys=serde_json::Map::new();runtime_provider::set_provider_key(&mut keys,"test","upstream-secret".into()).unwrap();
             provider_store::write_provider_bundle(&paths,&[json!({"id":"test","name":"测试","cli":cli,"baseUrl":format!("http://{}/v1",listener.local_addr().unwrap()),"enabled":true})],&[],&[],&keys).unwrap();
             let future=store::now()+3_600_000;
-            let generated=json!({"title":"回归测试","content":"验证速记","type":"worklog","groupId":"unknown","categoryId":"debugging","tags":["回归"],"tasks":[{"title":"验证模型","status":"pending"}],"reminders":[{"at":chrono::DateTime::<chrono::Utc>::from_timestamp_millis(future).unwrap().to_rfc3339(),"repeat":"once","taskIndex":0}]}).to_string();
+            let reminder=if preview {json!({"afterSeconds":120,"at":null,"repeat":"once","taskIndex":0})}
+                else {json!({"at":chrono::DateTime::<chrono::Utc>::from_timestamp_millis(future).unwrap().to_rfc3339(),"repeat":"once","taskIndex":0})};
+            let generated=json!({"title":"回归测试","content":"验证速记","type":"worklog","groupId":"unknown","categoryId":"debugging","tags":["回归"],"tasks":[{"title":"验证模型","status":"pending"}],"reminders":[reminder]}).to_string();
             let reply=match api {"chat"=>json!({"choices":[{"message":{"content":generated}}]}),"messages"=>json!({"content":[{"type":"text","text":generated}]}),_=>json!({"output":[{"type":"message","content":[{"type":"output_text","text":generated}]}]})};
             let server=tokio::spawn(async move {
                 let (stream,_)=listener.accept().await.unwrap();
@@ -45,7 +78,7 @@ fn capture_uses_real_model_proxy_for_chat_responses_and_claude() {
                 })).await.unwrap();
             });
             let context=AssistantContext{paths:paths.clone(),workspace_root:root.clone(),resource_dir:root.clone(),cli_targets:json!([]),settings:AssistantSettings{target_id:"test".into(),model:"notes-model".into(),protocol:if api=="messages"{"auto"}else{api}.into(),..Default::default()},local_models:Default::default()};
-            let input=json!({"requestId":"capture","text":"明天提醒我回归测试","source":{"timeZone":"Asia/Shanghai"},"preview":preview});
+            let input=json!({"requestId":"capture","text":if preview{"2 分钟后提醒我回归测试"}else{"明天提醒我回归测试"},"source":{"timeZone":"Asia/Shanghai"},"preview":preview});
             let capture=store::capture(&paths,&input,&json!({"model":"notes-model"})).unwrap();
             let generated=generate_and_save(&context,&capture,&input).await.unwrap();
             let note=if preview {
@@ -55,7 +88,8 @@ fn capture_uses_real_model_proxy_for_chat_responses_and_claude() {
             }else{generated};
             assert_eq!(note["groupId"],"inbox");assert_eq!(note["categoryId"],"debugging");
             assert_eq!(note["createdAt"],capture["capturedAt"]);
-            assert_eq!(store::detail(&paths,store::text(&note,"id")).unwrap()["reminders"][0]["nextFireAt"],future);
+            let expected=if preview{capture["capturedAt"].as_i64().unwrap()+120_000}else{future};
+            assert_eq!(store::detail(&paths,store::text(&note,"id")).unwrap()["reminders"][0]["nextFireAt"],expected);
             server.abort();
             assert_eq!(root.parent(),Some(std::env::temp_dir().as_path()));std::fs::remove_dir_all(root).unwrap();
           }
@@ -68,7 +102,7 @@ fn capture_repairs_model_output_atomically_and_stops_on_limits_cancellation_and_
     use std::sync::atomic::{AtomicUsize,Ordering};
     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
         for (cli,api) in [("codex","chat"),("codex","responses"),("claude","messages")] {
-            for case in ["single","split","json","limit","http","cancel","conflict"] {
+            for case in ["single","split","json","reminder","limit","http","cancel","conflict"] {
                 let root=std::env::temp_dir().join(format!("quick-note-repair-{}",uuid::Uuid::new_v4()));
                 let paths=crate::core::paths::resolve_app_paths(&root);
                 store::initialize(&paths).unwrap();
@@ -102,7 +136,7 @@ fn capture_repairs_model_output_atomically_and_stops_on_limits_cancellation_and_
                                         let feedback:Value=serde_json::from_str(user.as_str().unwrap()).unwrap();
                                         assert_eq!(feedback["原文"],capture["sourceText"]);
                                         assert!(!store::text(&feedback,"上次输出").is_empty());
-                                        let expected=if case=="json"{"JSON"}else if attempt==1 || case=="limit"{"occurredOn"}else{"tasks.dueDate"};
+                                        let expected=if case=="json"{"JSON"}else if case=="reminder"{"reminders[0].at"}else if attempt==1 || case=="limit"{"occurredOn"}else{"tasks.dueDate"};
                                         assert!(store::text(&feedback,"校验错误").contains(expected));
                                         assert!(store::list(&paths,&json!({})).unwrap()["notes"].as_array().unwrap().is_empty());
                                         assert!(!store::dispatch(&paths,"folders",&json!({})).unwrap()["folders"].as_array().unwrap().iter().any(|f|f["name"]=="联调项目"));
@@ -117,6 +151,9 @@ fn capture_repairs_model_output_atomically_and_stops_on_limits_cancellation_and_
                                         item["occurredOn"]=json!(if attempt==0 || case=="limit"{"今天"}else{"2026-11-18"});
                                         item["tasks"][0]["dueDate"]=json!(if attempt<2{"2026/11/19"}else{"2026-11-19"});
                                     }
+                                    if case=="reminder" {
+                                        item["reminders"]=if attempt==0{json!([{"at":"2 分钟后"}])}else{json!([{"afterSeconds":120,"at":null,"taskIndex":0}])};
+                                    }
                                     let output=if case=="json" && attempt==0{"整理结果不是 JSON".to_string()}else if case=="split"{json!({"notes":[{"content":"独立事项","newGroup":{"name":"联调项目"}},item]}).to_string()}else{item.to_string()};
                                     let reply=match api {"chat"=>json!({"choices":[{"message":{"content":output}}]}),"messages"=>json!({"content":[{"type":"text","text":output}]}),_=>json!({"output_text":output})};
                                     Ok::<_,Infallible>(Response::builder().status(if case=="http"{500}else{200}).header("content-type","application/json").body(Full::new(Bytes::from(reply.to_string()))).unwrap())
@@ -127,18 +164,19 @@ fn capture_repairs_model_output_atomically_and_stops_on_limits_cancellation_and_
                 });
                 let context=AssistantContext{paths:paths.clone(),workspace_root:root.clone(),resource_dir:root.clone(),cli_targets:json!([]),settings:AssistantSettings{target_id:"test".into(),model:"notes-model".into(),protocol:if api=="messages"{"auto"}else{api}.into(),..Default::default()},local_models:Default::default()};
                 let result=generate_and_save(&context,&capture,&input).await;
-                let expected_calls=if ["single","split","limit"].contains(&case){3}else if case=="json"{2}else{1};
+                let expected_calls=if ["single","split","limit"].contains(&case){3}else if ["json","reminder"].contains(&case){2}else{1};
                 assert_eq!(calls.load(Ordering::SeqCst),expected_calls,"{api}/{case}");
                 let notes=store::list(&paths,&json!({})).unwrap()["notes"].as_array().unwrap().clone();
                 let state=store::capture_state(&paths,"repair").unwrap();
                 assert_eq!(state["sourceText"],input["text"]);
-                if ["single","split","json"].contains(&case) {
+                if ["single","split","json","reminder"].contains(&case) {
                     let note=result.unwrap();
                     assert_eq!(state["status"],"completed");assert_eq!(note["createdAt"],capture["capturedAt"]);
                     assert_eq!(notes.len(),if case=="split"{2}else{1});
                     assert!(notes.iter().all(|n|n["revision"]==1));
                     let saved=if case=="split"{&note["notes"][1]}else{&note};
-                    if case!="json" {assert_eq!(saved["occurredOn"],"2026-11-18");assert_eq!(saved["tasks"][0]["dueDate"],"2026-11-19");}
+                    if ["single","split"].contains(&case) {assert_eq!(saved["occurredOn"],"2026-11-18");assert_eq!(saved["tasks"][0]["dueDate"],"2026-11-19");}
+                    if case=="reminder" {assert_eq!(store::detail(&paths,store::text(saved,"id")).unwrap()["reminders"][0]["nextFireAt"],capture["capturedAt"].as_i64().unwrap()+120_000);}
                     let folders=store::dispatch(&paths,"folders",&json!({})).unwrap();
                     assert_eq!(folders["folders"].as_array().unwrap().iter().filter(|f|f["name"]=="联调项目").count(),1);
                     assert_eq!(folders["folders"].as_array().unwrap().iter().find(|f|f["id"]==saved["groupId"]).unwrap()["kind"],"group");

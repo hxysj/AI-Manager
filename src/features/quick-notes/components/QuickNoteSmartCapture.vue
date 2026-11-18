@@ -164,7 +164,8 @@
                 ><input
                   v-model="plan.localAt"
                   type="datetime-local"
-                  :min="localInput(Date.now() + 60000)"
+                  step="1"
+                  :min="localInput(Date.now() + 1000, true)"
                 /><button
                   class="smart-icon"
                   type="button"
@@ -269,7 +270,7 @@ import {
 import BaseModal from "@/components/BaseModal.vue"
 import AssistantModelSelect from "@/features/assistant/components/AssistantModelSelect.vue"
 import { quickNotesApi } from "@/api/modules/quick-notes"
-import { localInput } from "@/features/quick-notes/constant"
+import { localInput, reminderAt } from "@/features/quick-notes/constant"
 const props = defineProps({
   open: Boolean,
   applyOnly: Boolean,
@@ -368,7 +369,7 @@ async function check() {
       preview.value = structuredClone(result.result)
       preview.value.reminders = (preview.value.reminders || []).map((plan) => ({
         ...plan,
-        localAt: localInput(plan.nextFireAt)
+        localAt: localInput(plan.nextFireAt, true)
       }))
       tags.value = (preview.value.tags || []).join("，")
     } else {
@@ -392,11 +393,15 @@ async function confirm(original = false) {
           .split(/[,，]/)
           .map((value) => value.trim())
           .filter(Boolean),
-        reminders: preview.value.reminders.map(({ localAt, ...plan }) => ({
-          ...plan,
-          nextFireAt: new Date(localAt).getTime(),
-          schedule: { ...plan.schedule, at: new Date(localAt).getTime() }
-        }))
+        reminders: preview.value.reminders.map((plan) => {
+          const at = reminderAt(plan)
+          const { localAt, ...value } = plan
+          return {
+            ...value,
+            nextFireAt: at,
+            schedule: { ...plan.schedule, at }
+          }
+        })
       }
   if (note.reminders.some((plan) => !(plan.nextFireAt > Date.now()))) {
     error.value = "提醒时间必须晚于当前时间，请重新选择"

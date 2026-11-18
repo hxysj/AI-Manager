@@ -76,15 +76,6 @@
             </button>
           </div>
         </label>
-        <button
-          class="codex-login-primary"
-          type="button"
-          :disabled="pending || loginState?.status === 'pending'"
-          @click="startLogin"
-        >
-          <Globe2 :size="16" />
-          浏览器登录
-        </button>
         <label v-if="loginState?.authUrl" class="codex-login-field">
           <span>手动输入回调地址</span>
           <div class="codex-login-callback-row">
@@ -107,18 +98,6 @@
         </label>
         <div v-if="loginState?.authUrl" class="codex-login-tip">
           完成授权后，此窗口将自动更新
-        </div>
-        <div
-          v-if="loginState?.status === 'pending'"
-          class="codex-login-actions"
-        >
-          <button
-            class="codex-login-action"
-            type="button"
-            @click="emit('cancel')"
-          >
-            取消登录
-          </button>
         </div>
       </template>
 
@@ -156,18 +135,37 @@
             placeholder='{"access_token":"","account_id":"","id_token":"","refresh_token":""}'
           />
         </label>
-        <div class="codex-login-actions">
-          <button
-            class="codex-login-action"
-            type="button"
-            :disabled="pending || loginState?.status === 'pending' || !content"
-            @click="importAuth"
-          >
-            解析并验证
-          </button>
-        </div>
       </template>
     </section>
+    <footer class="codex-login-footer">
+      <button
+        v-if="tab === 'auth'"
+        class="codex-login-action"
+        type="button"
+        :disabled="pending || loginState?.status === 'pending' || !content"
+        @click="importAuth"
+      >
+        <Check :size="15" />解析并验证
+      </button>
+      <template v-else>
+        <button
+          v-if="loginState?.status === 'pending'"
+          class="codex-login-action"
+          type="button"
+          @click="emit('cancel')"
+        >
+          取消登录
+        </button>
+        <button
+          class="codex-login-primary"
+          type="button"
+          :disabled="pending || loginState?.status === 'pending'"
+          @click="startLogin"
+        >
+          <Globe2 :size="16" />浏览器登录
+        </button>
+      </template>
+    </footer>
   </BaseModal>
 </template>
 
@@ -231,6 +229,7 @@ async function openExternalLink(url) {
     border-radius: 16px;
   }
   :deep(.base-modal__header) {
+    flex: none;
     align-items: center;
     padding: 22px 26px 20px;
     border-bottom: 1px solid var(--color-line);
@@ -241,7 +240,14 @@ async function openExternalLink(url) {
   .codex-login-panel {
     display: flex;
     flex-direction: column;
+    flex: 1;
+    min-height: 0;
     gap: 14px;
+    overflow: auto;
+    // 仅正文区域滚动，标题和底部操作始终留在可见区域。
+    > * {
+      flex-shrink: 0;
+    }
     .codex-login-tabs {
       display: flex;
       gap: 4px;
@@ -339,22 +345,6 @@ async function openExternalLink(url) {
         resize: none;
       }
     }
-    .codex-login-primary {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      gap: 8px;
-      height: 38px;
-      border: 0;
-      border-radius: 10px;
-      background: linear-gradient(90deg, #1f66f2, #10a5aa);
-      color: #fff;
-      cursor: pointer;
-      &:disabled {
-        cursor: not-allowed;
-        opacity: 0.52;
-      }
-    }
     .codex-login-tip {
       display: flex;
       align-items: center;
@@ -364,23 +354,6 @@ async function openExternalLink(url) {
       border-radius: 10px;
       color: var(--color-text-muted);
       font-size: var(--font-size-sm);
-    }
-    .codex-login-actions {
-      display: flex;
-      justify-content: flex-end;
-      .codex-login-action {
-        height: 32px;
-        padding: 0 12px;
-        border: 1px solid var(--color-line);
-        border-radius: 8px;
-        background: var(--color-panel);
-        color: var(--color-text);
-        cursor: pointer;
-        &:disabled {
-          cursor: not-allowed;
-          opacity: 0.52;
-        }
-      }
     }
     .codex-login-status {
       padding: 9px 11px;
@@ -431,6 +404,41 @@ async function openExternalLink(url) {
           cursor: pointer;
         }
       }
+    }
+  }
+  .codex-login-footer {
+    display: flex;
+    flex: none;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 10px;
+    padding-top: 16px;
+    margin-top: 16px;
+    border-top: 1px solid var(--color-line);
+    .codex-login-action,
+    .codex-login-primary {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 7px;
+      height: 38px;
+      padding: 0 16px;
+      border: 1px solid var(--color-line);
+      border-radius: 10px;
+      background: var(--color-panel);
+      color: var(--color-text);
+      font: inherit;
+      font-size: var(--font-size-sm);
+      cursor: pointer;
+      &:disabled {
+        opacity: 0.52;
+        cursor: default;
+      }
+    }
+    .codex-login-primary {
+      background: var(--color-primary-solid);
+      border-color: var(--color-primary-solid);
+      color: white;
     }
   }
 }
