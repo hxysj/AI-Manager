@@ -1642,12 +1642,13 @@ fn service_legacy_gate_blocks_switch_until_all_requests_finish() {
 }
 
 #[test]
-fn service_client_token_survives_provider_edits_switches_and_recovery_until_detached() {
+fn service_client_token_survives_provider_changes_restarts_and_reactivation() {
     let f = Fixture::new();
     let first = f.provider();
     let second = f.provider();
     service_provider::switch_backend(&f.paths,"service").unwrap();
     let c = database::open(&f.paths).unwrap();
+    let mut client_tokens = Vec::new();
     for agent in ["codex","claude"] {
         let directory = f.root.join(agent);
         std::fs::create_dir_all(&directory).unwrap();
@@ -1663,7 +1664,15 @@ fn service_client_token_survives_provider_edits_switches_and_recovery_until_deta
             else {value["env"]["ANTHROPIC_AUTH_TOKEN"].as_str().unwrap().to_string()}
         };
         let token = read_token();
+        assert!(!client_tokens.contains(&token),"不同 Agent 必须使用各自的固定令牌");
+        client_tokens.push(token.clone());
         let token_id = service::authorize(&c,&token).unwrap()["tokenId"].clone();
+        let cache_key = format!("service_provider:agent_token:{agent}");
+        let encrypted: String = c.query_row("SELECT value FROM app_metadata WHERE key=?1",[&cache_key],|row|row.get(0)).unwrap();
+        assert_ne!(encrypted,token);
+        assert_eq!(decrypt_provider_key(&encrypted).unwrap(),token);
+        // 模拟升级前尚无固定令牌缓存的活跃实例，继续沿用当前配置里的原值。
+        c.execute("DELETE FROM app_metadata WHERE key=?1",[&cache_key]).unwrap();
         let mut config = super::config(&c,&first).unwrap();
         config["name"] = json!("改名仍可用");
         config["apiKey"] = json!("updated-upstream-secret");
@@ -1695,10 +1704,21 @@ fn service_client_token_survives_provider_edits_switches_and_recovery_until_deta
         service_provider::detach(&f.paths,text(&active,"instanceId")).unwrap();
         assert!(service::authorize(&c,&token).is_err());
         assert_eq!(std::fs::read_to_string(&file).unwrap(),original);
+        // 已关闭的旧版实例也从历史快照找回 Token，重启恢复不能改变它。
+        c.execute("DELETE FROM app_metadata WHERE key=?1",[&cache_key]).unwrap();
+        service_provider::recover(&f.paths).unwrap();
         service_provider::quick_switch(&f.paths,&targets,&json!({"agentType":agent,"providerId":second})).unwrap();
-        assert_ne!(read_token(),token);
-        assert!(service::authorize(&c,&token).is_err(),"已撤销的令牌不能因再次启用而复活");
+        assert_eq!(read_token(),token);
+        assert_eq!(service::authorize(&c,&token).unwrap()["tokenId"],token_id);
         service_provider::detach(&f.paths,text(&active,"instanceId")).unwrap();
+        assert!(service::authorize(&c,&token).is_err());
+        let alternate=directory.join("alternate");
+        let moved=service_provider::quick_switch(&f.paths,&json!([{"id":agent,"configPath":alternate}]),
+            &json!({"agentType":agent,"providerId":first})).unwrap();
+        assert_ne!(moved["instanceId"],active["instanceId"]);
+        assert!(std::fs::read_to_string(alternate.join(file.file_name().unwrap())).unwrap().contains(&token));
+        assert_eq!(service::authorize(&c,&token).unwrap()["tokenId"],token_id);
+        service_provider::detach(&f.paths,text(&moved,"instanceId")).unwrap();
     }
 }
 

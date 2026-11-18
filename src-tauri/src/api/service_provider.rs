@@ -355,6 +355,36 @@ pub(crate) fn activate(
     apply(paths, targets, value, None)
 }
 
+// 每个客户端的固定令牌独立加密保存；升级时从历史接管快照沿用已有值。
+fn fixed_agent_token(c: &rusqlite::Connection, agent: &str, current: Option<&str>) -> Result<String, ManagerError> {
+    let key = format!("service_provider:agent_token:{agent}");
+    if let Some(saved) = store::query(c,"SELECT value FROM app_metadata WHERE key=?1",&[&key])?.pop() {
+        let token = runtime_provider::decrypt_provider_key(store::text(&saved,"value"))?;
+        if token.is_empty() { return Err(store::fail("固定 Agent 令牌为空，请检查本机数据")); }
+        return Ok(token);
+    }
+    for file in store::query(c,"SELECT f.file_path,f.after_ciphertext,t.token_hash FROM service_managed_files f
+        JOIN service_agent_instances i ON i.id=f.instance_id JOIN service_gateway_tokens t ON t.instance_id=i.id
+        WHERE i.agent_type=?1 AND i.config_path NOT LIKE 'internal:%' AND i.config_path NOT LIKE 'test:%'
+        AND i.config_path NOT LIKE 'external:%'
+        ORDER BY (i.id=?2) DESC,(i.status='active') DESC,(t.status='active') DESC,t.created_at DESC,f.updated_at DESC,f.rowid DESC",
+        &[&agent,&current])? {
+        let content = runtime_provider::decrypt_provider_key(store::text(&file,"after_ciphertext"))?;
+        let token = if agent == "codex" {
+            if Path::new(store::text(&file,"file_path")).extension().is_none_or(|extension|extension!="toml") { continue; }
+            toml_edit::de::from_str::<Value>(&content).ok().and_then(|config|
+                config["model_providers"]["ai_manager_service"]["experimental_bearer_token"].as_str().map(str::to_owned))
+        } else {
+            serde_json::from_str::<Value>(&content).ok().and_then(|config|
+                config["env"]["ANTHROPIC_AUTH_TOKEN"].as_str().or_else(||config["inferenceGatewayApiKey"].as_str()).map(str::to_owned))
+        };
+        if let Some(token) = token.filter(|token|!token.is_empty() && store::hash(token)==file["token_hash"]) {
+            return Ok(token);
+        }
+    }
+    Ok(format!("sk-am-{}{}",uuid::Uuid::new_v4().simple(),uuid::Uuid::new_v4().simple()))
+}
+
 fn apply(
     paths: &AppPaths,
     targets: &Value,
@@ -415,31 +445,7 @@ fn apply(
     for file in &mut managed {
         file["file_path"] = json!(normalized(Path::new(store::text(file,"file_path")))?);
     }
-    // 客户端令牌绑定实例。更新和切换只改变后台路由，已启动的 Agent 可继续使用原令牌。
-    let mut retained_token = None;
-    for file in &managed {
-        let content = runtime_provider::decrypt_provider_key(store::text(file,"after_ciphertext"))?;
-        let token = if agent == "codex" && Path::new(store::text(file,"file_path")).extension().is_some_and(|extension|extension=="toml") {
-            let config = toml_edit::de::from_str::<Value>(&content).map_err(|_|store::fail("接管备份的 TOML 配置无效"))?;
-            config["model_providers"]["ai_manager_service"]["experimental_bearer_token"].as_str().map(str::to_owned)
-        } else if agent != "codex" {
-            let config: Value = serde_json::from_str(&content)?;
-            config["env"]["ANTHROPIC_AUTH_TOKEN"].as_str().or_else(||config["inferenceGatewayApiKey"].as_str()).map(str::to_owned)
-        } else { None };
-        if let Some(token) = token.filter(|token|!token.is_empty()) {
-            let valid: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM service_gateway_tokens WHERE instance_id=?1 AND token_hash=?2 AND status='active'
-                AND (expires_at IS NULL OR expires_at>?3))",params![refresh.unwrap()["id"].as_str(),store::hash(&token),store::now()],|row|row.get(0))?;
-            if valid { retained_token = Some(token); break; }
-        }
-    }
-    if refresh.is_some() && retained_token.is_none() {
-        return Err(store::fail("此实例没有可用的接管令牌，请停止使用后重新启用"));
-    }
-    let token = retained_token.unwrap_or_else(||format!(
-        "sk-am-{}{}",
-        uuid::Uuid::new_v4().simple(),
-        uuid::Uuid::new_v4().simple()
-    ));
+    let token = fixed_agent_token(&c,agent,refresh.map(|instance|store::text(instance,"id")))?;
     let baseline = |path: &Path, current: &Option<String>| -> Result<Option<String>,ManagerError> {
         let path_text = normalized(path)?;
         if let Some(file) = managed.iter().find(|file|file["file_path"]==path_text) {
@@ -703,14 +709,19 @@ fn apply(
         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'error',?9,?9) ON CONFLICT(id) DO UPDATE SET provider_id=excluded.provider_id,
         model_id=excluded.model_id,config_path=excluded.config_path,status='error',sync_status='pending',agent_version=excluded.agent_version,revision=revision+1,updated_at=excluded.updated_at",
         params![instance,agent,value["name"].as_str().filter(|s|!s.is_empty()).unwrap_or(agent),instance_path,version,protocol,provider,model_id,store::now()])?;
-    if refresh.is_none() {
-        tx.execute("UPDATE service_gateway_tokens SET status='revoked',revoked_at=?2 WHERE instance_id=?1 AND status='active'",params![instance,store::now()])?;
-        tx.execute("INSERT INTO service_gateway_tokens(id,token_hash,token_prefix,instance_id,created_at) VALUES(?1,?2,?3,?4,?5)",
-            params![store::id(),store::hash(&token),&token[..14],instance,store::now()])?;
-    } else if !tx.query_row("SELECT EXISTS(SELECT 1 FROM service_gateway_tokens WHERE instance_id=?1 AND token_hash=?2 AND status='active')",
-        params![instance,store::hash(&token)],|row|row.get::<_,bool>(0))? {
-        return Err(store::fail("实例令牌已被撤销，请刷新后重试"));
+    let token_key = format!("service_provider:agent_token:{agent}");
+    tx.execute("INSERT INTO app_metadata(key,value) VALUES(?1,?2) ON CONFLICT(key) DO NOTHING",
+        params![token_key,runtime_provider::encrypt_provider_key(&token)?])?;
+    let saved: String = tx.query_row("SELECT value FROM app_metadata WHERE key=?1",[&token_key],|row|row.get(0))?;
+    if runtime_provider::decrypt_provider_key(&saved)? != token {
+        return Err(store::fail("Agent 令牌已由另一操作保存，请重试"));
     }
+    // 关闭只暂停授权，再次启用恢复同一条令牌记录，历史请求仍可按原 Token 追溯。
+    tx.execute("UPDATE service_gateway_tokens SET status='revoked',revoked_at=?2 WHERE instance_id=?1 AND status='active' AND token_hash<>?3",
+        params![instance,store::now(),store::hash(&token)])?;
+    tx.execute("INSERT INTO service_gateway_tokens(id,token_hash,token_prefix,instance_id,created_at) VALUES(?1,?2,?3,?4,?5)
+        ON CONFLICT(token_hash) DO UPDATE SET instance_id=excluded.instance_id,status='active',expires_at=NULL,revoked_at=NULL",
+        params![store::id(),store::hash(&token),&token[..14],instance,store::now()])?;
     let mut prepared = Vec::new();
     for (path, after) in files {
         let expected = originals.get(&path);
@@ -980,9 +991,18 @@ pub(crate) fn detach(paths: &AppPaths, instance: &str) -> Result<(), ManagerErro
         tx.commit()?;
         return Err(store::fail(conflicts.join("；")));
     }
-    tx.execute("UPDATE service_gateway_tokens SET status='revoked',revoked_at=?2 WHERE instance_id=?1 AND status='active'",params![instance,store::now()])?;
     tx.execute("UPDATE service_agent_instances SET status='detached',sync_status='restored',provider_id=NULL,model_id=NULL,
         last_error='',revision=revision+1,updated_at=?2 WHERE id=?1",params![instance,store::now()])?;
+    // 旧版可能留下同一 Agent 的多个目录，关闭其中一个时保留其余目录的访问。
+    if let Some(other) = store::query(&tx,"SELECT i.id FROM service_agent_instances i
+        WHERE i.agent_type=(SELECT agent_type FROM service_agent_instances WHERE id=?1) AND i.status='active' AND i.sync_status='synced'
+        AND i.config_path NOT LIKE 'internal:%' AND i.config_path NOT LIKE 'test:%' AND i.config_path NOT LIKE 'external:%'
+        AND NOT EXISTS(SELECT 1 FROM service_gateway_tokens t WHERE t.instance_id=i.id AND t.status='active')
+        ORDER BY i.last_synced_at DESC,i.updated_at DESC,i.id LIMIT 1",&[&instance])?.pop() {
+        tx.execute("UPDATE service_gateway_tokens SET instance_id=?2 WHERE instance_id=?1 AND status='active'",
+            params![instance,store::text(&other,"id")])?;
+    }
+    tx.execute("UPDATE service_gateway_tokens SET status='revoked',revoked_at=?2 WHERE instance_id=?1 AND status='active'",params![instance,store::now()])?;
     tx.commit()?;
     Ok(())
 }

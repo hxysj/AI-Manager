@@ -495,6 +495,18 @@ fn client_keeps_one_token_while_provider_route_key_and_protocol_change() {
         let response=client.post(format!("{base}/v1/responses")).bearer_auth(&original_token)
             .json(&json!({"model":"real-model","input":"hello"})).send().await.unwrap();
         assert_eq!(response.status(),StatusCode::UNAUTHORIZED);
+        // 客户端仍缓存首次 Token，关闭、重启恢复、重新启用后直接恢复调用。
+        service_provider::recover(&fixture.paths).unwrap();
+        service_provider::quick_switch(&fixture.paths,&targets,&json!({"agentType":"codex","providerId":second})).unwrap();
+        let response=client.post(format!("{base}/v1/responses")).bearer_auth(&original_token)
+            .json(&json!({"model":"real-model","input":"resumed","stream":false})).send().await.unwrap();
+        let status=response.status();
+        let body=response.text().await.unwrap();
+        assert_eq!(status,StatusCode::OK,"重新启用应接受原 Token：{body}");
+        let (_,headers,_)=second_requests.recv().await.unwrap();
+        assert_eq!(headers["authorization"],"Bearer second-upstream-key");
+        assert_eq!(store::query(&c,"SELECT count(*) AS count FROM service_gateway_tokens WHERE instance_id=?1",&[&store::text(&instance,"instanceId")]).unwrap()[0]["count"],1);
+        service_provider::detach(&fixture.paths,store::text(&instance,"instanceId")).unwrap();
         server.abort();first_upstream.abort();second_upstream.abort();
     });
 }
