@@ -268,7 +268,7 @@ async function dragWindow(event) {
   if (
     event.button !== 0 ||
     event.target?.closest?.(
-      "button, textarea, input, select, a, [role='button']"
+      "button, textarea, input, select, a, [role='button'], [role='combobox'], .assistant-model-control, .el-select-dropdown"
     )
   )
     return

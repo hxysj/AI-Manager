@@ -13,7 +13,7 @@ use tokio::{
 use tokio_util::sync::CancellationToken;
 
 mod tools;
-mod images;
+pub(crate) mod images;
 pub mod desktop;
 
 type Reply = oneshot::Sender<Result<Value, String>>;

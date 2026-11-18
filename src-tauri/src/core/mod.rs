@@ -4,6 +4,7 @@ pub mod image_prompt_store;
 pub mod image_store;
 pub mod paths;
 pub mod quick_notes_store;
+pub mod quick_notes_calendar_store;
 pub mod provider_key_usage;
 pub mod provider_store;
 pub mod service_provider_store;

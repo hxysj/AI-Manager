@@ -233,7 +233,8 @@
                 'quota-warning':
                   quota.remaining != null && quota.remaining < 30,
                 'quota-danger': quota.remaining != null && quota.remaining < 10,
-                'quota-unknown': quota.remaining == null
+                'quota-unknown': quota.remaining == null,
+                'quota-refreshing': refreshingQuotaIds.has(provider.id)
               }"
               :title="
                 quota.resetAt
@@ -247,6 +248,7 @@
               </div>
               <div
                 class="quota-track"
+                :aria-busy="refreshingQuotaIds.has(provider.id)"
                 role="progressbar"
                 :aria-label="`${quota.name}剩余额度`"
                 :aria-valuenow="quota.remaining ?? undefined"
@@ -2698,11 +2700,25 @@ async function showBackup(id) {
               border-radius: 999px;
               background: var(--color-success-soft);
               .quota-fill {
+                transition: width 0.45s ease;
                 display: block;
                 height: 100%;
                 border-radius: inherit;
                 background: var(--quota-color);
               }
+            }
+            &.quota-refreshing .quota-track {
+              background-image: linear-gradient(
+                100deg,
+                transparent 20%,
+                var(--quota-color) 50%,
+                transparent 80%
+              );
+              background-size: 200% 100%;
+              animation: quota-loading 1.2s linear infinite;
+            }
+            &.quota-refreshing .quota-fill {
+              opacity: 0.45;
             }
             .quota-meta {
               display: flex;
@@ -3363,6 +3379,15 @@ async function showBackup(id) {
     }
   }
 }
+@keyframes quota-loading {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
 @keyframes quota-refresh-spin {
   to {
     transform: rotate(360deg);

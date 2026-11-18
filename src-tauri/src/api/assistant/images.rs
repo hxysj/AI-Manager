@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 use crate::core::error::ManagerError;
 
 // 在原生边界校验实际图片字节，避免仅凭前端声明接受任意数据。
-pub(super) fn validate(value: &Value) -> Result<Vec<Value>, ManagerError> {
+pub(crate) fn validate(value: &Value) -> Result<Vec<Value>, ManagerError> {
     if value.is_null() { return Ok(Vec::new()); }
     let images = value.as_array().ok_or_else(|| ManagerError::System("图片附件格式错误".into()))?;
     if images.len() > 4 { return Err(ManagerError::System("每条消息最多 4 张图片".into())); }

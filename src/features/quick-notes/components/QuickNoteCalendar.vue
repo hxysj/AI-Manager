@@ -19,6 +19,13 @@
           <button
             class="calendar-button"
             type="button"
+            @click="rulesVisible = !rulesVisible"
+          >
+            休假规则
+          </button>
+          <button
+            class="calendar-button"
+            type="button"
             @click="selectDate(today)"
           >
             今天
@@ -40,6 +47,7 @@
           </button>
         </div>
       </div>
+      <CalendarRuleSettings v-if="rulesVisible" :rules="rules" />
       <header class="calendar-toolbar">
         <div class="calendar-period">
           <button
@@ -105,12 +113,13 @@
           class="calendar-day"
           :class="{
             'calendar-outside': day.outside,
-            'calendar-weekend': day.weekend,
+            'calendar-weekend': day.schedule?.workStatus === 'rest',
             'calendar-today': day.key === today,
             'calendar-selected': day.key === selectedDate
           }"
           type="button"
           :data-date="day.key"
+          :style="day.schedule ? { color: day.schedule.color } : {}"
           :aria-label="`${day.key}，农历${day.lunar}，${day.entries.length} 项事项`"
           :aria-current="day.key === today ? 'date' : undefined"
           :aria-pressed="day.key === selectedDate"
@@ -122,6 +131,9 @@
               >今</span
             >
           </span>
+          <span v-if="day.schedule" class="calendar-lunar">{{
+            day.schedule.title
+          }}</span>
           <span class="calendar-lunar">{{ day.lunar }}</span>
           <span v-if="day.entries.length" class="calendar-markers">
             <span
@@ -323,7 +335,11 @@ import {
 import { localInput } from "@/features/quick-notes/constant"
 import { formatDateTime } from "@/utils/formatters"
 
+import CalendarRuleSettings from "./CalendarRuleSettings.vue"
+import { calendarDay } from "../calendar-rules"
+const rulesVisible = ref(false)
 const props = defineProps({
+  rules: { type: Array, default: () => [] },
   notes: { type: Array, default: () => [] },
   reminders: { type: Array, default: () => [] }
 })
@@ -404,6 +420,7 @@ const days = computed(() => {
     const lunarDay = Number(lunar.find((part) => part.type === "day").value)
     return {
       key,
+      schedule: calendarDay(date, props.rules),
       number: date.getDate(),
       outside: date.getMonth() !== month.value,
       weekend: index % 7 > 4,
@@ -614,6 +631,7 @@ onBeforeUnmount(() => clearInterval(clock))
         grid-template-rows: minmax(0, 1fr);
       }
       .calendar-day {
+        position: relative;
         display: flex;
         align-items: center;
         flex-direction: column;
@@ -691,11 +709,13 @@ onBeforeUnmount(() => clearInterval(clock))
           }
         }
         .calendar-markers {
+          position: absolute;
+          top: 4px;
+          right: 5px;
           display: flex;
           align-items: center;
           justify-content: center;
           gap: 3px;
-          margin-top: auto;
           .calendar-day-count {
             margin-left: 2px;
             font-size: 9px;

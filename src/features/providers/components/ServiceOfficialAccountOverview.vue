@@ -69,7 +69,11 @@
           class="btn official-button"
           type="button"
           :disabled="
-            busy || refreshing || !provider.enabled || !provider.hasCredential || issue?.requiresReauth
+            busy ||
+            refreshing ||
+            !provider.enabled ||
+            !provider.hasCredential ||
+            issue?.requiresReauth
           "
           @click="$emit('refresh')"
         >
@@ -122,7 +126,11 @@
           </div>
           <div
             class="official-quota-track"
-            :class="{ 'official-quota-unknown': item.remaining == null }"
+            :class="{
+              'official-quota-unknown': item.remaining == null,
+              'official-quota-refreshing': refreshing
+            }"
+            :aria-busy="refreshing"
             role="progressbar"
             :aria-label="`${item.name}剩余额度`"
             :aria-valuenow="item.remaining == null ? undefined : item.remaining"
@@ -588,7 +596,21 @@ function resetLabel(value) {
           overflow: hidden;
           border-radius: 3px;
           background: var(--color-line);
+          &.official-quota-refreshing {
+            background-image: linear-gradient(
+              100deg,
+              transparent 20%,
+              var(--color-primary) 50%,
+              transparent 80%
+            );
+            background-size: 200% 100%;
+            animation: official-quota-loading 1.2s linear infinite;
+            .official-quota-fill {
+              opacity: 0.45;
+            }
+          }
           .official-quota-fill {
+            transition: width 0.45s ease;
             display: block;
             height: 100%;
             border-radius: inherit;
@@ -735,6 +757,14 @@ function resetLabel(value) {
 @keyframes official-refresh-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+@keyframes official-quota-loading {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
   }
 }
 </style>

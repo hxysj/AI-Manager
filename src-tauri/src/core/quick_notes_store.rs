@@ -20,6 +20,7 @@ pub fn open(paths: &AppPaths) -> Result<Connection, ManagerError> {
         }
         tx.commit()?;
     }
+    crate::core::quick_notes_calendar_store::initialize(&mut c)?;
     Ok(c)
 }
 
@@ -65,7 +66,7 @@ pub fn list(paths: &AppPaths, filters: &Value) -> Result<Value,ManagerError> {
     let events = query(&c,"SELECT e.id,e.note_id AS noteId,e.reminder_id AS reminderId,e.scheduled_at AS scheduledAt,e.status,e.error,e.read_at AS readAt,n.title,n.lifecycle
         FROM quick_note_reminder_events e JOIN quick_notes n ON n.id=e.note_id WHERE n.lifecycle<>'trash' ORDER BY scheduled_at DESC LIMIT 200",&[])?;
     let captures = query(&c,"SELECT id,note_id AS noteId,source_text AS sourceText,captured_at AS capturedAt,status,error FROM quick_note_captures WHERE status<>'completed' ORDER BY captured_at DESC LIMIT 50",&[])?;
-    Ok(json!({"notes":notes,"folders":folders,"reminders":plans,"events":events,"captures":captures,"hasMore":notes.len()==limit as usize,"offset":offset,"limit":limit}))
+    Ok(json!({"notes":notes,"folders":folders,"reminders":plans,"events":events,"captures":captures,"calendarRules":crate::core::quick_notes_calendar_store::list_in(&c)?,"hasMore":notes.len()==limit as usize,"offset":offset,"limit":limit}))
 }
 
 fn valid_date(value: &Value,field: &str) -> Result<(),ManagerError> {
@@ -382,6 +383,7 @@ pub fn due_events(paths: &AppPaths,at: i64) -> Result<Vec<Value>,ManagerError> {
 }
 
 pub fn dispatch(paths: &AppPaths,action: &str,input: &Value) -> Result<Value,ManagerError> {
+    if action.starts_with("calendar-rule-"){return crate::core::quick_notes_calendar_store::dispatch(paths,action,input);}
     match action {
         "list"=>list(paths,input), "detail"=>detail(paths,text(input,"id")),
         "folders"=>Ok(json!({"folders":query(&open(paths)?,"SELECT id,kind,name,aliases_json AS aliasesJson,sort_order AS sortOrder,archived FROM quick_note_folders WHERE (?1='' OR kind=?1) ORDER BY sort_order,name",&[&text(input,"kind")])?})),

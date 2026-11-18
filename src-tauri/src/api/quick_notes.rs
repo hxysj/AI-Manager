@@ -8,6 +8,7 @@ use tokio::sync::Mutex;
 use tokio_util::sync::CancellationToken;
 
 pub mod reminders;
+mod calendar;
 #[cfg(test)]
 mod tests;
 
@@ -20,6 +21,7 @@ pub struct QuickNotesService {
 impl QuickNotesService {
     pub async fn dispatch(&self,app: AppHandle,mut context: AssistantContext,action: &str,mut input: Value) -> Result<Value,ManagerError> {
         if !input.is_object(){return Err(store::fail("速记参数必须为对象"));}
+        if action=="calendar-analyze" {let result=calendar::analyze(&context,&input).await?; if result["question"].is_null(){app.emit("quick-notes:changed",json!({})).ok();} return Ok(result);}
         if action=="assistant-state" {return Ok(self.feedback.lock().await.clone());}
         if action=="capture-state" {
             let mut capture=store::capture_state(&context.paths,store::text(&input,"requestId"))?;
@@ -116,7 +118,7 @@ impl QuickNotesService {
             return Ok(capture);
         }
         let result=store::dispatch(&context.paths,action,&input)?;
-        if !["list","detail","folders","capture-state","export"].contains(&action){app.emit("quick-notes:changed",json!({"id":result["id"]})).ok();}
+        if !["list","detail","folders","capture-state","export","calendar-rule-list","calendar-rule-history"].contains(&action){app.emit("quick-notes:changed",json!({"id":result["id"]})).ok();}
         Ok(result)
     }
 }
@@ -149,23 +151,10 @@ async fn generate_and_save(context: &AssistantContext,capture: &Value,input: &Va
     let instruction=format!("{instruction}\n提醒时间必须区分相对时长与日历时刻：原文明示“2 分钟后提醒”“半小时后提醒”等相对时长时，返回 reminders:[{{\"afterSeconds\":120,\"at\":null,\"repeat\":\"once\",\"taskIndex\":null,\"uncertain\":false}}]；2 分钟是 120 秒，半小时是 1800 秒，由程序以捕获时间为基准计算，禁止把这类明确时长写成 pendingTime 或 uncertain:true。明示具体日期与时刻时，at 返回带时区的 RFC3339 字符串，afterSeconds 留 null；两种时间不能同时填写。只提日期但没有要求提醒时不生成提醒。真正无法确定时刻的提醒设置 uncertain:true，并说明缺少的信息。所有提醒时间都已确定时 pendingTime 必须为空字符串。");
     let instruction=if capture["source"]["scope"]=="split" {format!("{instruction}\n本次按独立事项拆成多条便签：顶层返回 {{\"notes\":[上面的便签结构]}}，最多 20 条，同一事项不要按段落机械拆分。")}else{instruction};
     let mut user=capture["sourceText"].as_str().unwrap_or("").to_owned();
-    let endpoint=match api.as_str(){"chat"=>"chat/completions","messages"=>"messages",_=>"responses"};
     let client=reqwest::Client::builder().no_proxy().build().map_err(|e|store::fail(e.to_string()))?;
     let mut corrections=0;
     loop {
-        let body=match api.as_str(){
-            "chat"=>json!({"model":context.settings.model,"messages":[{"role":"system","content":instruction},{"role":"user","content":user}],"stream":false}),
-            "messages"=>json!({"model":context.settings.model,"system":instruction,"messages":[{"role":"user","content":user}],"max_tokens":8192,"stream":false}),
-            _=>json!({"model":context.settings.model,"instructions":instruction,"input":user,"stream":false}),
-        };
-        let response=client.post(format!("{}/{endpoint}",gateway.base_url)).bearer_auth(&gateway.token).json(&body).send().await.map_err(|e|store::fail(e.to_string()))?;
-        let status=response.status();
-        let streaming=response.headers().get("content-type").and_then(|v|v.to_str().ok()).unwrap_or("").contains("text/event-stream");
-        let mut bytes=Vec::new();
-        let mut stream=response.bytes_stream();
-        while let Some(chunk)=stream.next().await {bytes.extend_from_slice(&chunk.map_err(|e|store::fail(e.to_string()))?);if bytes.len()>2_000_000{return Err(store::fail("速记模型返回内容过大，原文已保留"));}}
-        if !status.is_success(){return Err(store::fail(format!("速记整理失败：HTTP {} {}",status.as_u16(),String::from_utf8_lossy(&bytes).chars().take(500).collect::<String>())));}
-        let output=model_text(&bytes,streaming)?;
+        let output=model_reply(&client,&gateway,&api,&context.settings.model,&instruction,&user,&[]).await?;
         let output=output.trim().trim_start_matches("```json").trim_start_matches("```").trim_end_matches("```").trim();
         // 校验失败的事务会回滚，再将原文、模型输出和具体错误交回同一模型修正。
         let result=(|| {
@@ -189,6 +178,40 @@ async fn generate_and_save(context: &AssistantContext,capture: &Value,input: &Va
         user=json!({"原文":capture["sourceText"],"上次输出":output,"校验错误":error.to_string(),"要求":"修正上述错误并重新整理原文，返回可保存的完整 JSON，不补造事实。"}).to_string();
         corrections+=1;
     }
+}
+
+// 便签与日历规则复用同一模型连接、协议和流式结果解析。
+async fn model_reply(client: &reqwest::Client,gateway: &LlmProxy,api: &str,model: &str,instruction: &str,user: &str,images: &[Value]) -> Result<String,ManagerError> {
+    let mut content=Vec::new();
+    if !images.is_empty() {
+        content.push(json!({"type":if api=="responses"{"input_text"}else{"text"},"text":user}));
+        for image in images {
+            content.push(match api {
+                "messages"=>json!({"type":"image","source":{"type":"base64","media_type":image["mimeType"],"data":text_image_data(image)}}),
+                "chat"=>json!({"type":"image_url","image_url":{"url":image["dataUrl"]}}),
+                _=>json!({"type":"input_image","image_url":image["dataUrl"]}),
+            });
+        }
+    }
+    let user_content=if images.is_empty(){json!(user)}else{json!(content)};
+    let body=match api {
+        "chat"=>json!({"model":model,"messages":[{"role":"system","content":instruction},{"role":"user","content":user_content}],"stream":false}),
+        "messages"=>json!({"model":model,"system":instruction,"messages":[{"role":"user","content":user_content}],"max_tokens":8192,"stream":false}),
+        _=>json!({"model":model,"instructions":instruction,"input":if images.is_empty(){json!(user)}else{json!([{"role":"user","content":content}])},"stream":false}),
+    };
+    let endpoint=match api{"chat"=>"chat/completions","messages"=>"messages",_=>"responses"};
+    let response=client.post(format!("{}/{endpoint}",gateway.base_url)).bearer_auth(&gateway.token).json(&body).send().await.map_err(|e|store::fail(e.to_string()))?;
+    let status=response.status();
+    let streaming=response.headers().get("content-type").and_then(|v|v.to_str().ok()).unwrap_or("").contains("text/event-stream");
+    let mut bytes=Vec::new();
+    let mut stream=response.bytes_stream();
+    while let Some(chunk)=stream.next().await {bytes.extend_from_slice(&chunk.map_err(|e|store::fail(e.to_string()))?);if bytes.len()>2_000_000{return Err(store::fail("模型返回内容过大，请减少单次整理内容"));}}
+    if !status.is_success(){return Err(store::fail(format!("模型整理失败：HTTP {} {}",status.as_u16(),String::from_utf8_lossy(&bytes).chars().take(500).collect::<String>())));}
+    model_text(&bytes,streaming)
+}
+
+fn text_image_data(image: &Value) -> &str {
+    store::text(image,"dataUrl").split_once(',').map(|(_,data)|data).unwrap_or("")
 }
 
 fn normalize_item(mut item: Value,folders: &[Value],capture: &Value,input: &Value) -> Result<Value,ManagerError> {

@@ -381,6 +381,7 @@
               v-if="view === 'calendar'"
               :notes="filtered"
               :reminders="state.reminders"
+              :rules="state.calendarRules || []"
               @open="edit"
               @create="newNote"
               @smart-record="openSmartCapture"

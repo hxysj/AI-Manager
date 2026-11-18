@@ -545,6 +545,10 @@ pub async fn fetch_models(paths: &AppPaths, value: &Value) -> Result<Value, Mana
         let version = value["agentVersion"]
             .as_str()
             .filter(|v| !v.is_empty())
+            .and_then(|raw| raw.split_whitespace().find(|part| {
+                let numbers = part.split('.').collect::<Vec<_>>();
+                numbers.len() == 3 && numbers.iter().all(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()))
+            }))
             .unwrap_or("0.153.4");
         let mut url = url::Url::parse(&format!("{CODEX_OFFICIAL_BASE_URL}/models"))
             .map_err(|_| store::fail("官方模型地址无效"))?;
