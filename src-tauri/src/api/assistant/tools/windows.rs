@@ -13,7 +13,7 @@ pub(super) async fn execute(
     if tool_id != "main" && ![
         "assistant", "json-agent", "image-workbench", "string-diff", "image-link-extractor",
         "coordinate-overlay", "port-monitor", "network-quality",
-        "multi-protocol-gateway", "git", "lan-share", "codex-pets",
+        "multi-protocol-gateway", "git", "lan-share", "codex-pets", "quick-notes",
     ].contains(&tool_id) {
         return Err(ManagerError::System("未知应用窗口".into()));
     }

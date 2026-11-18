@@ -306,19 +306,30 @@
                   <Braces :size="16" />
                 </button>
               </div>
+              <QuickNoteCapture
+                ref="noteCapture"
+                v-model="quickNoteMode"
+                mode-toggle
+                :draft="draft"
+                :messages="displayMessages"
+                :thread-id="threadId"
+                :model="settings"
+                @busy="noteSaving = $event"
+                @captured="clearNoteDraft"
+              />
               <AssistantModelSelect
                 class="assistant-model-select"
                 :settings="settings"
                 :providers="providers"
                 :codex-accounts="codexAccounts"
                 :runtime-models="runtimeModels"
-                :disabled="busy"
+                :disabled="busy || noteSaving"
                 @change="settings = $event"
                 @saving="modelSaving = $event"
                 @error="errorMessage = $event"
               />
               <button
-                v-if="busy"
+                v-if="busy && !quickNoteMode"
                 class="assistant-button assistant-stop"
                 type="button"
                 :disabled="task.status === 'cancelling'"
@@ -335,12 +346,18 @@
                 :disabled="!canSend"
                 @click="sendMessage"
               >
-                <Send :size="16" />发送
+                <Send :size="16" />{{
+                  quickNoteMode ? (noteSaving ? "整理中…" : "记录") : "发送"
+                }}
               </button>
             </div>
           </div>
           <p class="assistant-keyboard-hint">
-            Enter 发送 · Shift + Enter 换行 · 支持粘贴图片
+            {{
+              quickNoteMode
+                ? "Enter 记录便签 · Shift + Enter 换行"
+                : "Enter 发送 · Shift + Enter 换行 · 支持粘贴图片"
+            }}
           </p>
         </div>
       </div>
@@ -461,6 +478,7 @@ import MarkdownContent from "@/components/MarkdownContent.vue"
 import AssistantImages from "@/features/assistant/components/AssistantImages.vue"
 import { readAssistantImages } from "@/features/assistant/attachments"
 import AssistantModelSelect from "@/features/assistant/components/AssistantModelSelect.vue"
+import QuickNoteCapture from "@/features/quick-notes/components/QuickNoteCapture.vue"
 import AssistantCapabilities from "@/features/assistant/components/AssistantCapabilities.vue"
 import AssistantMemory from "@/features/assistant/components/AssistantMemory.vue"
 
@@ -482,6 +500,13 @@ const settings = ref({
 })
 const local = computed(() => settings.value.targetId === "local")
 const draft = ref("")
+const quickNoteMode = ref(false)
+const noteSaving = ref(false)
+const noteCapture = ref(null)
+// 仅清理本次速记捕获的输入，保存期间继续输入的内容保持不变。
+function clearNoteDraft(snapshot) {
+  if (snapshot && draft.value === snapshot) draft.value = ""
+}
 const images = ref([])
 const loading = ref(false)
 const initialized = ref(false)
@@ -557,20 +582,28 @@ const invalidTarget = computed(
         item.disabled !== true
     )
 )
-const canSend = computed(
-  () =>
-    initialized.value &&
-    settings.value.enabled !== false &&
-    !busy.value &&
-    !modelSaving.value &&
-    !historyLoading.value &&
-    Boolean(
-      threadId.value &&
-      (draft.value.trim() || images.value.length) &&
-      settings.value.targetId &&
-      settings.value.model
-    ) &&
-    !invalidTarget.value
+const canSend = computed(() =>
+  quickNoteMode.value
+    ? Boolean(
+        draft.value.trim() &&
+        settings.value.targetId &&
+        settings.value.model &&
+        !noteSaving.value &&
+        !modelSaving.value &&
+        !invalidTarget.value
+      )
+    : initialized.value &&
+      settings.value.enabled !== false &&
+      !busy.value &&
+      !modelSaving.value &&
+      !historyLoading.value &&
+      Boolean(
+        threadId.value &&
+        (draft.value.trim() || images.value.length) &&
+        settings.value.targetId &&
+        settings.value.model
+      ) &&
+      !invalidTarget.value
 )
 
 // 活动任务由快照显示，历史中只隐藏本轮消息，避免重进窗口时重复渲染。
@@ -803,6 +836,11 @@ async function removeThread(id) {
 }
 async function sendMessage() {
   if (!canSend.value) return
+  // 选中速记后，发送和 Enter 共用保存入口，不写入聊天会话。
+  if (quickNoteMode.value) {
+    await noteCapture.value?.capture()
+    return
+  }
   const message = draft.value.trim()
   const id = threadId.value
   submitting.value = true

@@ -533,6 +533,7 @@ fn tool_window_title(tool_id: &str) -> Result<&'static str, ManagerError> {
         "assistant" => Ok("应用助手"),
         "image-workbench" => Ok("图片工作台"),
         "json-agent" => Ok("JSON 智能解析"),
+        "quick-notes" => Ok("速记便签"),
         "string-diff" => Ok("差异对比"),
         "image-link-extractor" => Ok("图片链接提取"),
         "coordinate-overlay" => Ok("坐标框预览"),

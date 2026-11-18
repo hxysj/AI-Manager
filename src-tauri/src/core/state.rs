@@ -40,6 +40,7 @@ pub struct AppState {
     local_models: local_models::LocalModelService,
     assistant: assistant::AssistantService,
     assistant_sync: Mutex<()>,
+    quick_notes: crate::api::quick_notes::QuickNotesService,
 }
 
 impl AppState {
@@ -51,6 +52,11 @@ impl AppState {
     pub async fn shutdown_assistant(&self) {
         let _guard = self.assistant_sync.lock().await;
         self.assistant.shutdown().await;
+    }
+
+    pub async fn tick_quick_note_reminders(&self,app: &AppHandle) -> Result<(),ManagerError> {
+        let paths=self.manager.lock().await.paths.clone();
+        crate::api::quick_notes::reminders::tick(app,&paths)
     }
 
     async fn assistant_context(&self) -> assistant::AssistantContext {
@@ -89,6 +95,7 @@ impl AppState {
             local_models: local_models::LocalModelService::default(),
             assistant: assistant::AssistantService::default(),
             assistant_sync: Mutex::new(()),
+            quick_notes: Default::default(),
         }
     }
 
@@ -98,6 +105,10 @@ impl AppState {
         channel: &str,
         payload: Option<Value>,
     ) -> Result<Value, ManagerError> {
+        if let Some(action)=channel.strip_prefix("quick-notes:") {
+            let context=self.assistant_context().await;
+            return self.quick_notes.dispatch(app,context,action,payload.unwrap_or_else(||json!({}))).await;
+        }
         // 模型运行与工具回调不持有全局业务锁，窗口和设置仍可独立响应。
         if let Some(action) = channel.strip_prefix("assistant:") {
             let context = self.assistant_context().await;
@@ -571,6 +582,7 @@ impl ManagerState {
         migrate_tauri_app_data(&tauri_app_data_path, &user_data_path)?;
         let paths = resolve_app_paths(&user_data_path);
         crate::core::translation_store::initialize(&paths)?;
+        crate::core::quick_notes_store::initialize(&paths)?;
         crate::core::image_prompt_store::initialize(&paths)?;
         crate::core::image_store::initialize(&paths)?;
         service_provider::recover(&paths)?;

@@ -148,7 +148,7 @@ async fn dispatch_command(
     ) {
         return state.dispatch(app, channel, payload).await;
     }
-    if channel.starts_with("app-log:") || channel.starts_with("network-quality:") {
+    if channel.starts_with("app-log:") || channel.starts_with("network-quality:") || channel.starts_with("quick-notes:") {
         return state.dispatch(app.clone(), channel, payload).await;
     }
 
@@ -250,6 +250,16 @@ pub fn run() {
             // 预热窗口会立即调用 IPC，先注册共享状态。
             app.manage(assistant::desktop::DesktopAssistant::default());
             app.manage(AppState::new(manager_state));
+            // 托盘运行时继续提醒，重启恢复由持久化事件去重。
+            let notes_handle=app.handle().clone();
+            tauri::async_runtime::spawn(async move {
+                loop {
+                    if let Err(error)=notes_handle.state::<AppState>().tick_quick_note_reminders(&notes_handle).await {
+                        eprintln!("速记提醒调度失败：{error}");
+                    }
+                    tokio::time::sleep(std::time::Duration::from_secs(10)).await;
+                }
+            });
             // 助手随应用预热会话库，未发送消息时不会请求模型服务。
             let assistant_handle = app.handle().clone();
             tauri::async_runtime::spawn(async move {

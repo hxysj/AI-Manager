@@ -60,6 +60,18 @@
             busy ? "回复中，可先输入下一条" : "Enter 发送 · Shift+Enter 换行"
           }}</span
         >
+        <QuickNoteCapture
+          ref="noteCapture"
+          v-model="quickNoteMode"
+          mode-toggle
+          :draft="draft"
+          :model="settings"
+          :messages="noteMessages"
+          :thread-id="task.threadId || ''"
+          surface="desktop"
+          @busy="noteSaving = $event"
+          @captured="clearNoteDraft"
+        />
         <AssistantModelSelect
           class="desktop-assistant-model"
           compact
@@ -67,7 +79,7 @@
           :providers="catalog.providers || []"
           :codex-accounts="catalog.codexAccounts || []"
           :runtime-models="catalog.runtimeModels || []"
-          :disabled="busy || submitting"
+          :disabled="busy || submitting || noteSaving"
           @change="settings = $event"
           @saving="modelSaving = $event"
           @error="error = $event"
@@ -75,12 +87,19 @@
         <button
           class="desktop-assistant-send"
           type="button"
-          :aria-label="busy ? '停止回复' : '发送消息'"
-          :title="busy ? '停止回复' : '发送消息'"
-          :disabled="busy ? task.status === 'cancelling' : !canSend"
-          @click="busy ? stop() : send()"
+          :aria-label="
+            quickNoteMode ? '记录便签' : busy ? '停止回复' : '发送消息'
+          "
+          :title="quickNoteMode ? '记录便签' : busy ? '停止回复' : '发送消息'"
+          :disabled="
+            busy && !quickNoteMode ? task.status === 'cancelling' : !canSend
+          "
+          @click="busy && !quickNoteMode ? stop() : send()"
         >
-          <Square v-if="busy" :size="13" /><ArrowUp v-else :size="17" />
+          <Square v-if="busy && !quickNoteMode" :size="13" /><ArrowUp
+            v-else
+            :size="17"
+          />
         </button>
       </div>
     </div>
@@ -92,12 +111,16 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue"
 import { ArrowUp, Square, X } from "lucide-vue-next"
 import { appApi, assistantApi } from "@/api"
 import AssistantModelSelect from "@/features/assistant/components/AssistantModelSelect.vue"
+import QuickNoteCapture from "@/features/quick-notes/components/QuickNoteCapture.vue"
 import AssistantImages from "@/features/assistant/components/AssistantImages.vue"
 import { readAssistantImages } from "@/features/assistant/attachments"
 import MarkdownContent from "@/components/MarkdownContent.vue"
 
 const visible = ref(false)
 const draft = ref("")
+const quickNoteMode = ref(false)
+const noteSaving = ref(false)
+const noteCapture = ref(null)
 const error = ref("")
 const input = ref(null)
 const catalog = ref({})
@@ -105,6 +128,22 @@ const images = ref([])
 const modelSaving = ref(false)
 const settings = ref({})
 const task = ref({})
+// 桌面速记只读取当前输入和已经完成的一轮，不抓取其他会话。
+const noteMessages = computed(() =>
+  task.value.status === "completed"
+    ? [
+        {
+          id: `${task.value.runId}-user`,
+          role: "user",
+          text: task.value.message
+        },
+        { id: task.value.runId, role: "assistant", text: task.value.text }
+      ]
+    : []
+)
+function clearNoteDraft(snapshot) {
+  if (snapshot && draft.value === snapshot) draft.value = ""
+}
 const submitting = ref(false)
 const busy = computed(() =>
   ["thinking", "working", "replying", "cancelling"].includes(task.value.status)
@@ -115,13 +154,20 @@ const showResponse = computed(
     task.value.replyAtPet === false &&
     Boolean(task.value.runId)
 )
-const canSend = computed(
-  () =>
-    (draft.value.trim() || images.value.length) &&
-    !modelSaving.value &&
-    !submitting.value &&
-    !busy.value &&
-    settings.value.enabled !== false
+const canSend = computed(() =>
+  quickNoteMode.value
+    ? Boolean(
+        draft.value.trim() &&
+        settings.value.targetId &&
+        settings.value.model &&
+        !noteSaving.value &&
+        !modelSaving.value
+      )
+    : (draft.value.trim() || images.value.length) &&
+      !modelSaving.value &&
+      !submitting.value &&
+      !busy.value &&
+      settings.value.enabled !== false
 )
 let sequence = 0
 let eventVersion = 0
@@ -212,6 +258,11 @@ async function dragWindow(event) {
 
 async function send() {
   if (!canSend.value) return
+  // 速记是显式选择的输入模式，关闭选择后沿用普通桌面聊天。
+  if (quickNoteMode.value) {
+    await noteCapture.value?.capture()
+    return
+  }
   if (!settings.value.targetId || !settings.value.model) {
     error.value = "请先在设置 → 功能扩展中选择助手模型。"
     return

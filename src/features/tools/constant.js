@@ -9,12 +9,21 @@ import {
   PawPrint,
   ScanLine,
   ServerCog,
-  Share2
+  Share2,
+  StickyNote
 } from "lucide-vue-next"
 
 // 工具中心、悬浮窗和设置共用入口，保持名称、图标及可用条件一致。
 export function getToolItems({ cliTargets = [], repos = [] } = {}) {
   const items = [
+    {
+      id: "quick-notes",
+      label: "速记便签",
+      summary: "记录便签与工作进展，AI 整理分类、提取待办，按时提醒。",
+      meta: "便签 / 待办 / 工作留痕",
+      icon: StickyNote,
+      theme: "orange"
+    },
     {
       id: "image-workbench",
       label: "图片工作台",

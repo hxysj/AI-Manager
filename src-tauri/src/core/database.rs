@@ -16,7 +16,7 @@ mod restore;
 pub use restore::{preview_rows, row_choice_key, RestoreRowDifference};
 
 // 仅跨设备恢复的业务数据进入备份，其他表只保留结构。
-const BACKUP_INCLUDED_TABLES: [&str; 11] = [
+const BACKUP_INCLUDED_TABLES: [&str; 16] = [
     "providers",
     "skills",
     "skill_groups",
@@ -28,6 +28,11 @@ const BACKUP_INCLUDED_TABLES: [&str; 11] = [
     "service_provider_models",
     "service_provider_agent_bindings",
     "service_agent_model_routes",
+    "quick_note_folders",
+    "quick_notes",
+    "quick_note_revisions",
+    "quick_note_captures",
+    "quick_note_reminders",
 ];
 
 #[derive(Debug, PartialEq, Eq)]
@@ -353,6 +358,7 @@ fn with_restore_snapshot<T>(
 ) -> Result<T, ManagerError> {
     crate::core::skill_store::initialize(paths)?;
     crate::core::usage_store::initialize(paths)?;
+    crate::core::quick_notes_store::open(paths)?;
     crate::core::rule_store::initialize(paths)?;
     let service_mode = crate::core::service_provider_store::active(paths)?;
     if !service_mode {
@@ -377,6 +383,9 @@ fn with_restore_snapshot<T>(
         crate::core::rule_store::migrate_connection(&mut source)?;
         crate::core::provider_store::migrate_connection(&mut source)?;
         source.execute_batch(crate::core::service_provider_store::SCHEMA)?;
+        if source.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='quick_notes')",[],|r|r.get::<_,bool>(0))? {
+            source.execute_batch(include_str!("quick_notes_schema.sql"))?;
+        }
         drop(source);
         action(&snapshot_path)
     })();

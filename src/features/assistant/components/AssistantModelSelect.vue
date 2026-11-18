@@ -53,6 +53,7 @@ const props = defineProps({
   codexAccounts: { type: Array, default: () => [] },
   runtimeModels: { type: Array, default: () => [] },
   compact: Boolean,
+  persist: { type: Boolean, default: true },
   disabled: Boolean
 })
 const emit = defineEmits(["change", "saving", "error"])
@@ -172,9 +173,10 @@ async function selectModel(value) {
   emit("saving", true)
   emit("error", "")
   try {
-    await settingsApi.saveSettings({
-      agents: { assistant: patch }
-    })
+    if (props.persist)
+      await settingsApi.saveSettings({
+        agents: { assistant: patch }
+      })
     // 保存期间其他窗口可能更新配置，只合并本次模型选择并保留较新的选择。
     if (!disposed && version === selectionVersion)
       emit("change", { ...settings.value, ...patch })

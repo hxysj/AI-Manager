@@ -17,6 +17,7 @@ tests
 !tests/manager-service.test.cjs
 /docs/*
 !/docs/provider配置中心化改造方案.md
+!/docs/速记便签功能结构设计.md
 release
 backup/
 tests/

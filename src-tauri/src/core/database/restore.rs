@@ -286,6 +286,14 @@ pub(super) fn merge_table(
         }
         // 关联历史和本机激活态继续使用本机主键，备份只更新业务字段。
         row.insert(key_column.clone(), json!(target_key));
+        // 跨设备恢复只带回提醒规则，保留本机计划或暂停新增规则，避免两台设备同时通知。
+        if table=="quick_note_reminders" {
+            row.insert("enabled".into(),existing.and_then(|old|old.get("enabled")).cloned().unwrap_or(json!(0)));
+        }
+        if table=="quick_note_captures" && row.get("status")==Some(&json!("running")) {
+            row.insert("status".into(),json!("interrupted"));
+            row.insert("error".into(),json!("从备份恢复的原文，可重新整理"));
+        }
         if ["service_provider_configs","service_provider_agent_bindings"].contains(&table) {
             row.insert("enabled".into(),existing.and_then(|old|old.get("enabled")).cloned().unwrap_or(json!(0)));
             row.insert("revision".into(),json!(existing.and_then(|old|old["revision"].as_i64()).unwrap_or(0)+1));

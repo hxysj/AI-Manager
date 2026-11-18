@@ -221,6 +221,12 @@
         @status-change="gitToolStatus = $event"
       />
       <LanShareView v-else-if="activeTool === 'lan-share'" />
+      <QuickNotes
+        v-else-if="activeTool === 'quick-notes'"
+        :providers="providers"
+        :codex-accounts="codexAccounts"
+        :runtime-models="runtimeModels"
+      />
       <NetworkQualityView v-else-if="activeTool === 'network-quality'" />
       <MultiProtocolGateway
         v-else-if="activeTool === 'multi-protocol-gateway'"
@@ -287,6 +293,10 @@ import StringDiff from "@/features/tools/stringDiff/index.vue"
 
 const JsonAgentTool = defineAsyncComponent(
   () => import("@/features/tools/jsonAgent/index.vue")
+)
+// 速记工作区按需加载，助手仅复用轻量速记入口。
+const QuickNotes = defineAsyncComponent(
+  () => import("@/features/quick-notes/index.vue")
 )
 
 // 网络诊断包含多组明细表，进入工具后再加载页面代码。

@@ -1,4 +1,12 @@
 [
+  {"module":"quick-notes","channel":"quick-notes:list","description":"查询速记便签、待办、分类分组和提醒。可按 search、groupId、categoryId、type、lifecycle、offset、limit 筛选。","payload":{}},
+  {"module":"quick-notes","channel":"quick-notes:detail","description":"读取便签原文、待办、提醒与修改历史。","payload":{"id":"便签 ID"}},
+  {"module":"quick-notes","channel":"quick-notes:save","description":"按用户要求静默记录或编辑便签。新建可只传 content；编辑必须回读当前 revision。type 为 note/todo/worklog，分类与分组 ID 从 list 读取。提醒必须有用户明确意图，使用未来毫秒时间，模糊时间不猜测。","payload":{"content":"用户要求记录的原文","type":"note","groupId":"inbox","categoryId":"uncategorized","tasks":[],"reminders":[]}},
+  {"module":"quick-notes","channel":"quick-notes:task-update","description":"完成或重开指定便签中的待办，使用 detail 返回的真实任务 ID 和便签 revision。","payload":{"id":"便签 ID","revision":1,"taskId":"任务 ID","status":"completed"}},
+  {"module":"quick-notes","channel":"quick-notes:organize","description":"根据用户明确要求新建或编辑分类和分组，kind 为 group 或 category，aliases 为关键词数组。","payload":{"kind":"group","name":"项目名称","aliases":[]}},
+  {"module":"quick-notes","channel":"quick-notes:archive","description":"归档用户指定的便签并暂停提醒，使用实际 revision。","payload":{"id":"便签 ID","revision":1}},
+  {"module":"quick-notes","channel":"quick-notes:trash","description":"将用户指定的便签移入回收站，并停止提醒，可以恢复。","payload":{"id":"便签 ID","revision":1}},
+  {"module":"quick-notes","channel":"quick-notes:restore","description":"恢复归档或回收站中的便签，提醒保持暂停。","payload":{"id":"便签 ID","revision":1}},
   {"module":"images","channel":"tools:image-accounts","description":"读取可用生图账号，只返回账号标识和状态。","payload":{}},
   {"module":"images","channel":"tools:image-models","description":"读取所选账号可用的图片模型。","payload":{"accountId":"从账号列表读取"}},
   {"module":"images","channel":"tools:image-quota","description":"查询所选账号的生图额度。","payload":{"accountId":"从账号列表读取"}},

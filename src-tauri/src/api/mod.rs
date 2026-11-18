@@ -18,6 +18,7 @@ pub mod local_models;
 pub mod multi_protocol_gateway;
 pub mod network_quality;
 pub mod proxy;
+pub mod quick_notes;
 pub mod repos;
 pub mod rules;
 pub mod runtime_provider;
