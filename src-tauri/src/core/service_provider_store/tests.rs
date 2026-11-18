@@ -1489,6 +1489,38 @@ fn service_account_rotation_keeps_quota_only_for_the_same_official_identity() {
 }
 
 #[test]
+fn service_account_refresh_error_is_bound_to_credentials_and_cleared_after_authorization() {
+    let f=Fixture::new();
+    let provider=save(&f.paths,&json!({"name":"授权状态测试","kind":"codex_account"})).unwrap();
+    let provider=text(&provider,"id");
+    let c=database::open(&f.paths).unwrap();
+    let auth=json!({"account_id":"account-a","access_token":"access-a","expires_at":1});
+    save_account(&c,provider,&auth).unwrap();
+    let generation=account(&c,provider).unwrap()["token_generation"].as_i64().unwrap();
+    c.execute("UPDATE service_provider_configs SET quota_json='{\"plan_type\":\"plus\"}' WHERE id=?1",[provider]).unwrap();
+    let error=ManagerError::OpenAiRequest{status_code:401,message:json!({"error":{"code":"token_expired","message":"Your authentication token has expired"}}).to_string()};
+    record_account_refresh_error(&c,provider,generation,&error).unwrap();
+    let failed=state(&f.paths).unwrap()["accounts"][0].clone();
+    assert_eq!(failed["refreshStatus"],"failed");
+    assert_eq!(failed["quota"]["refreshError"]["statusCode"],401);
+    assert!(text(&failed["quota"]["refreshError"],"message").contains("token_expired"));
+    assert_eq!(failed["quota"]["plan_type"],"plus");
+    // 重新授权清除错误但保留同一账号的额度，旧请求不能污染新凭据的状态。
+    save_account(&c,provider,&auth).unwrap();
+    record_account_refresh_error(&c,provider,generation,&error).unwrap();
+    let refreshed=state(&f.paths).unwrap()["accounts"][0].clone();
+    assert_eq!(refreshed["refreshStatus"],"");
+    assert!(refreshed["quota"]["refreshError"].is_null());
+    assert_eq!(refreshed["quota"]["plan_type"],"plus");
+    // 实际刷新流程在本地发现凭据过期，也必须保存到对应账号，且不发起外部请求。
+    let runtime=tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap();
+    assert!(runtime.block_on(crate::api::codex_account::refresh_service_quota(&f.paths,provider)).is_err());
+    let failed=state(&f.paths).unwrap()["accounts"][0].clone();
+    assert_eq!(failed["refreshStatus"],"failed");
+    assert!(text(&failed["quota"]["refreshError"],"message").contains("凭据已过期"));
+}
+
+#[test]
 fn service_period_usage_keeps_partial_tokens_and_mixed_currencies_unknown() {
     let f = Fixture::new();
     let provider = f.provider();

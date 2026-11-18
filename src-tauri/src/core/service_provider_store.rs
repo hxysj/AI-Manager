@@ -1008,6 +1008,19 @@ pub(crate) fn prepare_official_login(
     Ok(provider)
 }
 
+// 刷新失败附着到对应账号，保留最近额度；凭据已更新时忽略旧请求的错误。
+pub fn record_account_refresh_error(c: &Connection, provider: &str, generation: i64, error: &ManagerError) -> Result<(), ManagerError> {
+    let status_code = match error {
+        ManagerError::OpenAiRequest { status_code, .. } => *status_code,
+        _ => 0,
+    };
+    c.execute("UPDATE service_provider_configs SET refresh_status='failed',
+        quota_json=json_set(quota_json,'$.refreshError',json(?2)),account_updated_at=?3
+        WHERE id=?1 AND kind='codex_account' AND deleted_at IS NULL AND credential_generation=?4",
+        params![provider,json!({"message":error.to_string(),"statusCode":status_code}).to_string(),now(),generation])?;
+    Ok(())
+}
+
 pub fn save_account(c: &Connection, provider: &str, value: &Value) -> Result<(), ManagerError> {
     let access = value["access_token"]
         .as_str()
@@ -1038,7 +1051,7 @@ pub fn save_account(c: &Connection, provider: &str, value: &Value) -> Result<(),
     let credentials = json!({"access_token":access,"refresh_token":refresh,"id_token":id_token});
     let changed = c.execute("UPDATE service_provider_configs SET account_id=?2,account_email=?3,
         credentials_ciphertext=?4,token_expires_at=?5,credential_generation=credential_generation+1,
-        quota_json=CASE WHEN account_id=?2 THEN quota_json ELSE '{}' END,
+        quota_json=CASE WHEN account_id=?2 THEN json_remove(quota_json,'$.refreshError') ELSE '{}' END,
         refresh_status='',account_updated_at=?6 WHERE id=?1 AND kind='codex_account' AND deleted_at IS NULL",
         params![provider,identity,text(value,"email"),encrypt_provider_key(&credentials.to_string())?,expires,now()])?;
     if changed != 1 {

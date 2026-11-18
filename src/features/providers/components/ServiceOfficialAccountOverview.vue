@@ -33,10 +33,19 @@
         </span>
         <span
           class="official-status"
-          :class="{ 'official-status-warning': !provider.hasCredential }"
+          :class="{
+            'official-status-warning':
+              !provider.hasCredential || issue?.requiresReauth
+          }"
         >
           <ShieldCheck :size="14" />
-          {{ provider.hasCredential ? "已配置凭据" : "待登录" }}
+          {{
+            issue?.requiresReauth
+              ? "授权已失效"
+              : provider.hasCredential
+                ? "已配置凭据"
+                : "待登录"
+          }}
         </span>
         <span class="official-caption">使用官方模型列表</span>
       </div>
@@ -60,7 +69,7 @@
           class="btn official-button"
           type="button"
           :disabled="
-            busy || refreshing || !provider.enabled || !provider.hasCredential
+            busy || refreshing || !provider.enabled || !provider.hasCredential || issue?.requiresReauth
           "
           @click="$emit('refresh')"
         >
@@ -70,6 +79,7 @@
       </div>
       <p
         v-if="
+          issue ||
           metadata.message ||
           metadata.quotaWarning ||
           account?.refreshStatus === 'failed'
@@ -79,6 +89,7 @@
       >
         <Info :size="15" />
         <span>{{
+          issue?.message ||
           metadata.message ||
           metadata.quotaWarning ||
           "上次凭据刷新失败，请重新登录后刷新额度。"
@@ -221,7 +232,13 @@
         :disabled="busy || loginDisabled"
         @click="$emit('login')"
       >
-        <LogIn :size="15" />{{ isGoogle ? "Google 登录" : "官方登录" }}
+        <LogIn :size="15" />{{
+          issue?.requiresReauth
+            ? "重新授权"
+            : isGoogle
+              ? "Google 登录"
+              : "官方登录"
+        }}
       </button>
       <button
         v-if="!isGoogle"
@@ -279,6 +296,7 @@ const props = defineProps({
   runningAgents: { type: Array, default: () => [] },
   busy: { type: Boolean, default: false },
   refreshing: { type: Boolean, default: false },
+  issue: { type: Object, default: null },
   loginDisabled: { type: Boolean, default: false }
 })
 defineEmits(["refresh", "login", "import", "manage", "edit"])
@@ -325,7 +343,11 @@ const identityFields = computed(() => [
   { label: "订阅套餐", value: planLabel.value },
   {
     label: "凭据状态",
-    value: props.provider.hasCredential ? "已配置" : "待登录"
+    value: props.issue?.requiresReauth
+      ? "授权已失效"
+      : props.provider.hasCredential
+        ? "已配置"
+        : "待登录"
   },
   { label: "访问令牌到期", value: displayTime(props.account?.expiresAt) },
   ...(isGoogle.value

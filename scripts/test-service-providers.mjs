@@ -543,6 +543,29 @@ assert.ok(
   !listHtml.includes("account:internal-id") &&
     !listHtml.includes("已禁用服务商")
 )
+// 官方授权失败显示在对应账号，接口 JSON 不进入页面，重新授权仍指向原账号。
+const expiredFailure = 'OpenAI 请求失败：401 {"error":{"message":"Your authentication token has expired. Please try refreshing it.","code":"token_expired"},"status":401}'
+const expiredState = {
+  ...listState,
+  accounts: listState.accounts.map((account) => ({
+    ...account,
+    refreshStatus: "failed",
+    quota: { ...account.quota, refreshError: { message: expiredFailure, statusCode: 401 } }
+  }))
+}
+const expiredHtml = await renderCenter(expiredState, (value) => {
+  value.providerTab.value = "codex_account"
+})
+assert.ok(expiredHtml.includes("登录凭据已过期，请重新授权。"))
+assert.ok(expiredHtml.includes("HTTP 401"))
+assert.ok(expiredHtml.includes('class="btn provider-reauth-button"'))
+assert.ok(!expiredHtml.includes("token_expired"))
+const expiredDetailHtml = await renderCenter(expiredState, (value) => {
+  value.openProviderDetail(official)
+})
+assert.ok(expiredDetailHtml.includes("授权已失效"))
+assert.ok(expiredDetailHtml.includes("重新授权"))
+assert.ok(expiredDetailHtml.includes("登录凭据已过期，请重新授权。"))
 const namedOfficial = { ...official, name: "GPT 工作账号" }
 const namedOfficialHtml = await renderCenter(
   { ...listState, providers: [namedOfficial] },
@@ -728,7 +751,7 @@ for (const text of [
   "Google AI Pro",
   "cloud-project-id",
   "需重新登录",
-  "Google 授权已失效",
+  "登录授权已失效",
   "共享分组 · 5 小时额度",
   "共享分组 · 周额度",
   "0%",
@@ -1796,7 +1819,7 @@ await repeatedQuotaBatch
 await settle()
 assert.equal(calls.filter((item) => item.action === "refresh-quota").length, 1)
 quotaHandler = async ({ providerId }) => {
-  if (providerId === official.id) throw new Error("模拟额度接口失败")
+  if (providerId === official.id) throw new Error(expiredFailure)
   return {}
 }
 calls.length = 0
@@ -1809,12 +1832,38 @@ assert.deepEqual(
   [official.id, "google"]
 )
 assert.equal(liveBindings.refreshingQuotaIds.value.size, 0)
-assert.ok(messages.some((message) => message.includes("模拟额度接口失败")))
+assert.equal(liveBindings.officialAccountIssues.value[official.id].requiresReauth, true)
+assert.ok(liveBindings.officialAccountIssues.value[official.id].message.includes("登录凭据已过期"))
+assert.equal(liveBindings.officialAccountIssues.value.google, null)
+assert.ok(!messages.some((message) => message.includes("token_expired")))
 await liveBindings.refresh()
 await settle()
 assert.equal(calls.filter((item) => item.action === "refresh-quota").length, 2)
 await liveBindings.refresh(true)
-assert.equal(calls.filter((item) => item.action === "refresh-quota").length, 4)
+assert.equal(calls.filter((item) => item.action === "refresh-quota").length, 3)
+assert.equal(await liveBindings.refreshQuota(official), false)
+// 返回官方列表时只刷新仍有授权的账号，已出现 401 的账号不再发请求。
+liveBindings.providerTab.value = "api"
+await settle()
+liveBindings.providerTab.value = "codex_account"
+await settle()
+assert.deepEqual(
+  calls.filter((item) => item.action === "refresh-quota").map((item) => item.payload.providerId),
+  [official.id, "google", "google", "google"]
+)
+liveBindings.openOfficialLogin(official)
+assert.equal(liveBindings.officialLogin.value.provider.id, official.id)
+await liveBindings.completeOfficialLogin()
+assert.equal(liveBindings.officialAccountIssues.value[official.id], null)
+quotaHandler = async () => ({})
+assert.equal(await liveBindings.refreshQuota(official, false), true)
+quotaHandler = async () => { throw new Error("连接失败，请检查网络代理") }
+await liveBindings.refreshQuota(official, false)
+assert.equal(liveBindings.officialAccountIssues.value[official.id].requiresReauth, false)
+assert.match(liveBindings.officialAccountIssues.value[official.id].message, /连接失败/)
+quotaHandler = async () => ({})
+await liveBindings.refreshQuota(official, false)
+assert.equal(liveBindings.officialAccountIssues.value[official.id], null)
 liveBindings.providerTab.value = "api"
 await settle()
 quotaHandler = () =>
@@ -1834,6 +1883,22 @@ assert.deepEqual(
 )
 quotaHandler = undefined
 state = previousState
+
+// 重新进入页面时读取持久化的授权失败状态，同样跳过请求。
+let expiredBindings
+const expiredApp = testRenderer.createApp({
+  setup(_, context) {
+    expiredBindings = Center.setup({ initialState: expiredState, cliTargets, runtimeConfigSchemas, loginState: null }, context)
+    return () => null
+  }
+})
+calls.length = 0
+expiredApp.mount({})
+expiredBindings.providerTab.value = "codex_account"
+await settle()
+assert.equal(expiredBindings.officialAccountIssues.value[official.id].requiresReauth, true)
+assert.equal(calls.length, 0, "重新进入后，授权已过期的账号无需再次请求")
+expiredApp.unmount()
 
 // 后端成功事件可先于 IPC 返回；完成后关闭面板并更新官方列表。
 const loginProps = reactive({

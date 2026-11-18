@@ -557,15 +557,23 @@ fn save_service_login(paths:&AppPaths,target:&str,value:&Value,proxy:&str,genera
 
 pub(crate) async fn refresh_service_quota(paths:&AppPaths,provider:&str)->Result<Value,ManagerError>{
     use crate::core::{database,service_provider_store as store};
-    let auth=service_proxy_auth(paths,provider).await?;
-    let config=store::config(&database::open(paths)?,provider)?;
-    let usage=fetch_usage_info(store::text(&auth,"accessToken"),&json!({"account_id":auth["accountId"]}),store::text(&config,"proxy")).await?;
-    // 查询期间可能重新导入账号，只更新发起查询时使用的同一凭据代际。
-    let changed=database::open(paths)?.execute("UPDATE service_provider_configs SET quota_json=?2,account_updated_at=?3
-        WHERE id=?1 AND kind='codex_account' AND deleted_at IS NULL AND credential_generation=?4",
-        rusqlite::params![provider,usage.to_string(),store::now(),auth["tokenGeneration"].as_i64()])?;
-    if changed!=1{return Err(store::fail("查询额度期间账号已更新，请重新刷新"));}
-    Ok(usage)
+    let mut generation=store::account(&database::open(paths)?,provider)?["token_generation"].as_i64().unwrap_or(0);
+    let result=async {
+        let auth=service_proxy_auth(paths,provider).await?;
+        generation=auth["tokenGeneration"].as_i64().unwrap_or(0);
+        let config=store::config(&database::open(paths)?,provider)?;
+        let usage=fetch_usage_info(store::text(&auth,"accessToken"),&json!({"account_id":auth["accountId"]}),store::text(&config,"proxy")).await?;
+        // 查询期间可能重新导入账号，只更新发起查询时使用的同一凭据代际。
+        let changed=database::open(paths)?.execute("UPDATE service_provider_configs SET quota_json=?2,refresh_status='',account_updated_at=?3
+            WHERE id=?1 AND kind='codex_account' AND deleted_at IS NULL AND credential_generation=?4",
+            rusqlite::params![provider,usage.to_string(),store::now(),auth["tokenGeneration"].as_i64()])?;
+        if changed!=1{return Err(store::fail("查询额度期间账号已更新，请重新刷新"));}
+        Ok(usage)
+    }.await;
+    if let Err(error)=&result {
+        store::record_account_refresh_error(&database::open(paths)?,provider,generation,error)?;
+    }
+    result
 }
 
 pub async fn fetch_models(

@@ -131,7 +131,8 @@
         :key="provider.id"
         class="provider-card"
         :class="{
-          'provider-card-disabled': !provider.enabled
+          'provider-card-disabled': !provider.enabled,
+          'provider-card-error': officialAccountIssues[provider.id]
         }"
       >
         <span class="provider-avatar">
@@ -204,6 +205,13 @@
             :title="provider.note"
             >{{ provider.note }}</span
           >
+          <p
+            v-if="officialAccountIssues[provider.id]"
+            class="provider-account-error"
+            role="status"
+          >
+            <Info :size="15" />{{ officialAccountIssues[provider.id].message }}
+          </p>
           <span
             v-if="provider.kind === 'api'"
             class="provider-url"
@@ -269,6 +277,15 @@
           </span>
         </div>
         <div class="provider-actions">
+          <button
+            v-if="officialAccountIssues[provider.id]?.requiresReauth"
+            class="btn provider-reauth-button"
+            type="button"
+            :disabled="busy"
+            @click="openOfficialLogin(provider)"
+          >
+            <LogIn :size="15" />重新授权
+          </button>
           <div class="icon-actions">
             <button
               v-if="provider.kind !== 'api'"
@@ -288,6 +305,7 @@
                 busy ||
                 !provider.enabled ||
                 !provider.hasCredential ||
+                officialAccountIssues[provider.id]?.requiresReauth ||
                 refreshingQuotaIds.has(provider.id)
               "
               @click="refreshQuota(provider)"
@@ -392,6 +410,7 @@
             "
             :busy="busy"
             :refreshing="refreshingQuotaIds.has(detailProvider.id)"
+            :issue="officialAccountIssues[detailProvider.id]"
             :login-disabled="
               detailProvider.kind === 'codex_account' &&
               data.backend !== 'service'
@@ -1153,6 +1172,7 @@ import {
   EyeOff,
   Info,
   KeyRound,
+  LogIn,
   Plus,
   RefreshCw,
   Server,
@@ -1197,6 +1217,7 @@ const showCreateOptions = ref(false)
 const officialLogin = ref(null)
 const officialLoginState = ref(null)
 const refreshingQuotaIds = ref(new Set())
+const officialQuotaErrors = ref({})
 const countdownNow = ref(Date.now())
 let countdownTimer
 let officialLoginRequest = 0
@@ -1408,6 +1429,66 @@ const providerAccount = (id) =>
   data.value.accounts?.find((item) => item.providerId === id)
 const googleAccount = (id) =>
   data.value.googleAccounts?.find((item) => item.providerId === id)
+// 错误按账号展示；只提取接口的原因，授权失效和网络故障使用不同的操作入口。
+const officialAccountIssues = computed(() =>
+  Object.fromEntries(
+    data.value.providers
+      .filter((provider) => provider.kind !== "api")
+      .map((provider) => {
+        const account =
+          provider.kind === "google_account"
+            ? googleAccount(provider.id)
+            : providerAccount(provider.id)
+        const metadata = account?.metadata || {}
+        const failure =
+          officialQuotaErrors.value[provider.id] ||
+          account?.quota?.refreshError ||
+          (["error", "reauth_required"].includes(metadata.status) ||
+          metadata.quotaWarning
+            ? { message: metadata.message || metadata.quotaWarning }
+            : account?.refreshStatus === "failed"
+              ? { message: "官方额度刷新失败，请重试。" }
+              : null)
+        if (!failure) return [provider.id, null]
+        const raw = failure.message || "官方额度刷新失败，请重试。"
+        let detail
+        try {
+          if (raw.includes("{"))
+            detail = JSON.parse(raw.slice(raw.indexOf("{")))
+        } catch {
+          // 连接失败等错误没有 JSON 响应，直接使用简短的错误原因。
+        }
+        const status = Number(
+          failure.statusCode ||
+            detail?.status ||
+            raw.match(/(?:HTTP\s*|请求失败[：:]\s*)(\d{3})/i)?.[1]
+        )
+        const requiresReauth =
+          metadata.status === "reauth_required" ||
+          status === 401 ||
+          /token_expired|refresh_token_(?:expired|reused|invalidated)|invalid_grant|授权已失效|访问凭据无效|凭据已过期|缺少 refresh_token/i.test(
+            raw
+          )
+        const reason = requiresReauth
+          ? /token_expired|token has expired|凭据已过期/i.test(raw)
+            ? "登录凭据已过期，请重新授权。"
+            : "登录授权已失效，请重新授权。"
+          : detail?.error?.message ||
+            detail?.detail?.message ||
+            detail?.message ||
+            (detail
+              ? "官方额度刷新失败，请稍后重试。"
+              : raw.replace(/^系统调用失败[：:]\s*/, ""))
+        return [
+          provider.id,
+          {
+            message: `${reason}${status ? `（HTTP ${status}）` : ""}`,
+            requiresReauth
+          }
+        ]
+      })
+  )
+)
 const providerDisplayName = (provider) =>
   formatServiceProviderName(provider, data.value)
 const providerModels = (id) =>
@@ -1578,10 +1659,12 @@ async function refreshOfficialQuotas() {
 }
 
 async function refreshQuota(provider, notify = true) {
+  // 授权失效后等待重新登录，切换标签和手动刷新都不再重复请求已失效的凭据。
   if (
     disposed ||
     !provider.enabled ||
     !provider.hasCredential ||
+    officialAccountIssues.value[provider.id]?.requiresReauth ||
     refreshingQuotaIds.value.has(provider.id)
   )
     return false
@@ -1590,14 +1673,18 @@ async function refreshQuota(provider, notify = true) {
     await serviceProviderApi.invoke("refresh-quota", {
       providerId: provider.id
     })
+    delete officialQuotaErrors.value[provider.id]
     if (!disposed) data.value = await serviceProviderApi.invoke("state")
     if (!disposed && notify) createMessage.success("官方额度已刷新")
     return true
   } catch (error) {
-    if (!disposed)
-      createMessage.error(
-        `${providerDisplayName(provider)}：${error?.message || String(error)}`
-      )
+    if (!disposed) {
+      officialQuotaErrors.value[provider.id] = {
+        message: error?.message || String(error)
+      }
+      const latest = await serviceProviderApi.invoke("state").catch(() => null)
+      if (!disposed && latest) data.value = latest
+    }
     return false
   } finally {
     refreshingQuotaIds.value.delete(provider.id)
@@ -1697,6 +1784,8 @@ async function closeOfficialLogin() {
 }
 
 async function completeOfficialLogin() {
+  if (officialLogin.value?.provider?.id)
+    delete officialQuotaErrors.value[officialLogin.value.provider.id]
   officialLogin.value = null
   officialLoginState.value = null
   providerTab.value = "codex_account"
@@ -2446,6 +2535,9 @@ async function showBackup(id) {
         box-shadow: none;
         opacity: 0.72;
       }
+      &.provider-card-error {
+        border-color: var(--color-danger-line);
+      }
       .provider-avatar {
         display: flex;
         flex: none;
@@ -2468,6 +2560,15 @@ async function showBackup(id) {
         min-width: 0;
         flex-direction: column;
         gap: 8px;
+        .provider-account-error {
+          display: flex;
+          align-items: flex-start;
+          gap: 6px;
+          margin: 0;
+          color: var(--color-danger);
+          font-size: var(--font-size-sm);
+          overflow-wrap: anywhere;
+        }
         .provider-title {
           display: flex;
           min-width: 0;
@@ -2633,6 +2734,11 @@ async function showBackup(id) {
         flex-direction: column;
         align-items: flex-end;
         gap: 12px;
+        .provider-reauth-button {
+          gap: 6px;
+          color: var(--color-primary);
+          border-color: var(--color-primary);
+        }
         .icon-actions {
           display: flex;
           align-items: center;
