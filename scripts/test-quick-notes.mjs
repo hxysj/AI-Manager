@@ -42,7 +42,7 @@ export const quickNotesApi={onChanged:async fn=>{handlers.add(fn);return()=>hand
  if(action==='task-update'){const n=state.notes.find(n=>n.id===p.id);n.tasks.find(t=>t.id===p.taskId).status=p.status;n.revision++;changed();return structuredClone(n)}
  if(action==='archive'||action==='trash'||action==='restore'){const n=state.notes.find(n=>n.id===p.id);n.lifecycle=action==='archive'?'archived':action==='trash'?'trash':'active';n.revision++;changed();return structuredClone(n)}
  if(action==='capture'){globalThis.lastCapture=p;return {id:'capture',requestId:p.requestId,status:'running'}}
- if(action==='capture-state'){return {id:'capture',requestId:p.requestId,status:'completed',result:structuredClone(state.notes[0])}}
+ if(action==='capture-state'){if(globalThis.deferCaptureState)await new Promise(resolve=>{globalThis.releaseCaptureState=resolve});return {id:'capture',requestId:p.requestId,status:'completed',result:structuredClone(state.notes[0])}}
  if(action==='organize'){state.folders.push({...p,id:crypto.randomUUID()});changed();return {id:'folder'}}
  return {ok:true}
 }}
@@ -61,7 +61,18 @@ const button=(label,scope=document)=>[...scope.querySelectorAll('button')].find(
 const set=(element,value)=>{element.value=value;element.dispatchEvent(new Event(element.tagName==='SELECT'?'change':'input',{bubbles:true}))}
 createApp(Notes,{providers:[],codexAccounts:[],runtimeModels:[]}).mount('#app')
 async function test(){
- for(let i=0;i<30&&!document.querySelector('.quick-note-card');i++)await pause()
+ for(let i=0;i<30&&!document.querySelector('.calendar-day');i++)await pause()
+ assert(document.querySelector('.notes-nav-active').textContent.includes('日历日程')&&document.querySelectorAll('.calendar-day').length===42,'默认没有进入日历日程')
+ assert(!document.querySelector('.notes-header')&&!document.querySelector('.notes-filters')&&!document.querySelector('.notes-filter-dates'),'日历页不应显示内部头部和筛选栏')
+ assert(!document.querySelector('.notes-main .notes-composer'),'记录输入区不应常驻日历页面')
+ const headerButtons=[...document.querySelectorAll('.calendar-agenda-actions button')]
+ assert(headerButtons.findIndex(n=>n.textContent.includes('智能记录'))+1===headerButtons.findIndex(n=>n.textContent.includes('新建便签')),'智能记录没有放在新建便签旁边')
+ assert(getComputedStyle(document.querySelector('.notes-capture-modal')).display==='none','智能记录弹框不应默认打开')
+ button('智能记录').click();await settle()
+ assert(getComputedStyle(document.querySelector('.notes-capture-modal')).display!=='none','日历中的智能记录入口不可用')
+ document.querySelector('.notes-capture-modal .base-modal__close').click();await settle()
+ button('全部记录').click();await settle()
+ assert(document.querySelector('.notes-header')&&document.querySelector('.notes-filters')&&document.querySelector('.notes-filter-dates'),'其他记录视图应保留头部和筛选栏')
  assert(document.querySelectorAll('.quick-note-card').length===2,'首屏没有显示两条记录')
  // 已有便签的入口直接新增提醒，提交前拒绝过去、当前分钟和过期的提前提醒。
  document.querySelector('.quick-note-card [aria-label=添加提醒]').click();await settle()
@@ -88,7 +99,7 @@ async function test(){
  const offsetSelect=[...reminderForm.querySelectorAll('.note-reminder select')].find(n=>[...n.options].some(o=>o.textContent.includes('独立指定时间')));await settle();set(offsetSelect,'5');await settle()
  const beforeOffset=saveCount();reminderForm.dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));await settle()
  assert(saveCount()===beforeOffset&&document.querySelector('.note-error')?.textContent.includes('必须晚于当前时间'),'提前提醒落在过去没有阻止保存')
- document.querySelector('.base-modal__close').click();await settle()
+ document.querySelector('.quick-note-editor .base-modal__close').click();await settle()
  button('待办事项').click();await settle();assert(document.querySelectorAll('.quick-note-card').length===2,'待办筛选失败')
  const checkbox=document.querySelector('.note-card-task input');checkbox.click();await settle()
  assert(calls.some(c=>c.action==='task-update'&&c.p.status==='completed'),'勾选待办没有保存')
@@ -103,7 +114,16 @@ async function test(){
  const saved=calls.find(c=>c.action==='save'&&c.p.title==='浏览器回归记录')
  assert(saved?.p.tasks[0].title==='检查速记功能','待办内容没有保存')
  assert(saved.p.reminders[0].nextFireAt>Date.now(),'提醒时间没有转换成未来时间点')
- const quick=document.querySelector('.notes-quick-input');set(quick,'明天下午三点提醒我回归测试');await settle()
+ button('智能记录').click();await settle()
+ const captureModal=document.querySelector('.notes-capture-modal')
+ const quick=captureModal.querySelector('.notes-quick-input')
+ assert(getComputedStyle(captureModal).display!=='none'&&document.activeElement===quick,'智能记录弹框没有打开并聚焦输入')
+ set(quick,'关闭后保留的草稿');await settle();captureModal.querySelector('.base-modal__close').click();await settle()
+ assert(getComputedStyle(captureModal).display==='none','关闭按钮没有收起智能记录')
+ button('智能记录').click();await settle();assert(quick.value==='关闭后保留的草稿','重开弹框丢失了草稿')
+ quick.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape',bubbles:true}));await settle()
+ assert(getComputedStyle(captureModal).display==='none','Esc 没有关闭弹框')
+ button('智能记录').click();await settle();set(quick,'明天下午三点提醒我回归测试');await settle()
  button('速记').click();await settle();await settle()
  assert(globalThis.lastCapture.text==='明天下午三点提醒我回归测试','速记没有捕获当前输入')
  assert(!globalThis.lastCapture.model,'跟随助手时应由后台读取当前模型，不能提交过时选择')
@@ -112,7 +132,18 @@ async function test(){
  set(quick,'使用本地模型整理');await settle();button('速记').click();set(quick,'保存过程中继续输入');await settle();await settle()
  assert(globalThis.lastCapture.model.targetId==='local','独立速记模型没有使用本地来源')
  assert(quick.value==='保存过程中继续输入','速记不应清除用户随后输入的内容')
- set(quick,'');await settle()
+ // 弹框隐藏时保留整理组件，让后台回包仍能清理对应草稿并显示结果。
+ globalThis.deferCaptureState=true;set(quick,'关闭弹框后继续整理');await settle();button('速记').click();await settle()
+ assert(typeof globalThis.releaseCaptureState==='function','没有进入后台整理')
+ captureModal.querySelector('.base-modal__close').click();await settle()
+ globalThis.deferCaptureState=false;globalThis.releaseCaptureState();await settle();await settle()
+ assert(quick.value===''&&!calls.some(c=>c.action==='capture-cancel'),'关闭弹框取消了任务或丢失整理回包')
+ button('智能记录').click();await settle();set(quick,'直接记录弹框中的原始内容');await settle()
+ button('直接记录',captureModal).click();await settle()
+ assert(getComputedStyle(captureModal).display==='none'&&document.querySelector('.note-form textarea').value==='直接记录弹框中的原始内容','直接记录没有带入草稿并进入编辑器')
+ document.querySelector('.quick-note-editor .base-modal__close').click();await settle()
+ button('智能记录').click();await settle();assert(quick.value==='直接记录弹框中的原始内容','取消手动编辑后草稿丢失')
+ set(quick,'');captureModal.querySelector('.base-modal__close').click();await settle()
  const grouping=document.querySelector('[aria-label=分组显示]');set(grouping,'groupId');await settle()
  assert(document.querySelector('.notes-group-title')?.textContent.includes('AI-Manager'),'项目分组显示失败')
  button('工作留痕').click();await settle();assert(document.querySelectorAll('.quick-note-card').length===1,'工作留痕筛选失败')
@@ -131,10 +162,10 @@ async function test(){
  assert(document.querySelector('.calendar-agenda').textContent.includes('完成速记模块的存储设计'),'事项日期没有关联便签')
  const entry=[...document.querySelectorAll('.calendar-entry')].find(n=>n.textContent.includes('完成速记模块的存储设计'))
  entry.click();await settle();assert(document.querySelector('.note-form'),'日历事项没有打开现有编辑器')
- document.querySelector('.base-modal__close').click();await settle()
+ document.querySelector('.quick-note-editor .base-modal__close').click();await settle()
  day('2026-11-19').click();await settle()
  assert(document.querySelector('.calendar-agenda').textContent.includes('验证重启后的提醒恢复'),'截止日没有显示待办')
- button('在这天新建便签').click();await settle()
+ document.querySelector('[aria-label=在这天新建便签]').click();await settle()
  assert(document.querySelector('.note-form input[type=date]').value==='2026-11-19','日历新建没有带入所选日期')
  set(document.querySelector('.note-form textarea'),'在日历中安排的事情')
  document.querySelector('.note-form').dispatchEvent(new Event('submit',{bubbles:true,cancelable:true}));await settle()
@@ -147,12 +178,6 @@ async function test(){
  assert(document.querySelector('.calendar-agenda-empty'),'无事项日期没有显示空状态')
  day('2026-11-22').click();await settle()
  assert(document.querySelector('.calendar-entry-time').textContent==='00:10'&&document.querySelector('.calendar-entry').textContent.includes('午夜交付检查'),'跨午夜的截止时间没有按本地日期归属')
- const range=document.querySelectorAll('.notes-filter-dates input[type=date]')
- set(range[0],'2026-11-19');set(range[1],'2026-11-20');await settle()
- day('2026-11-19').click();await settle()
- assert(document.querySelector('.calendar-agenda').textContent.includes('验证重启后的提醒恢复'),'日期区间误用便签日期过滤，丢失了截止日内的待办')
- day('2026-11-18').click();await settle();assert(!document.querySelector('.calendar-entry'),'日期区间外的便签没有过滤')
- set(range[0],'');set(range[1],'');await settle()
  period(2026,1);await settle();day('2026-01-31').click();document.querySelector('[aria-label=下个月]').click();await settle()
  assert(day('2026-02-28').getAttribute('aria-pressed')==='true','非闰年月末切换日期错误')
  period(2028,1);await settle();day('2028-01-31').click();document.querySelector('[aria-label=下个月]').click();await settle()
@@ -166,9 +191,27 @@ async function test(){
  assert(day(new Date().toLocaleDateString('sv-SE')).getAttribute('aria-current')==='date','回到今天失败')
  button('全部记录').click();await settle()
  assert(document.querySelectorAll('.quick-note-card').length===4,'退出日历后便签视图异常')
+ // 列表筛选继续生效，切回日历后不应被不可见的筛选条件漏掉事项。
+ const range=document.querySelectorAll('.notes-filter-dates input[type=date]')
+ set(document.querySelector('.notes-search input'),'不匹配的列表筛选')
+ set(document.querySelector('[aria-label=分类筛选]'),'debugging')
+ set(range[0],'2099-01-01');set(range[1],'2099-12-31')
+ set(document.querySelector('[aria-label=记录类型]'),'worklog');await settle()
+ assert(!document.querySelector('.quick-note-card'),'列表中的筛选没有生效')
+ button('日历日程').click();await settle();period(2026,11);await settle();day('2026-11-18').click();await settle()
+ const calendarQuery=calls.findLast(c=>c.action==='list').p
+ assert(calendarQuery.search===''&&calendarQuery.categoryId==='','日历请求不应沿用隐藏的搜索和分类')
+ assert(document.querySelector('.calendar-agenda').textContent.includes('完成速记模块的存储设计'),'列表筛选影响了日历事项')
+ assert(!document.querySelector('.notes-header')&&!document.querySelector('.notes-filters')&&!document.querySelector('.notes-filter-dates'),'切换后日历重新出现了头部')
+ button('全部记录').click();await settle()
+ assert(!document.querySelector('.quick-note-card'),'返回列表后丢失了列表筛选')
+ set(document.querySelector('.notes-search input'),'');set(document.querySelector('[aria-label=分类筛选]'),'')
+ const clearRange=document.querySelectorAll('.notes-filter-dates input[type=date]')
+ set(clearRange[0],'');set(clearRange[1],'');set(document.querySelector('[aria-label=记录类型]'),'');await settle()
+ assert(document.querySelectorAll('.quick-note-card').length===4,'清除列表筛选后记录没有恢复')
  button('日历日程').click();await settle();period(2026,11);await settle();day('2026-11-18').click();await settle()
  assert(![...document.querySelectorAll('.calendar-day')].some(n=>n.scrollWidth>n.clientWidth),'日期格出现横向溢出')
- document.getElementById('result').textContent='PASS: 手动记录、待办、提醒编辑、本地模型速记、分类分组与工作留痕筛选；日历月份切换、农历、日期归属、编辑、新建、闰年与跨年'
+ document.getElementById('result').textContent='PASS: 手动记录、待办、提醒编辑、本地模型速记、分类分组与工作留痕筛选；日历隐藏头部与筛选、保留记录入口、隔离列表筛选；默认日历、智能记录弹框、草稿保留、后台整理；日历月份切换、农历、日期归属、编辑、新建、闰年与跨年'
 }
 test().catch(error=>{document.getElementById('result').textContent='FAIL: '+error.stack})
 `

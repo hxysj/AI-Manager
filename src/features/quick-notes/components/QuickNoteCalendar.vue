@@ -128,6 +128,23 @@
         <span class="calendar-caption"
           >{{ selectedEntries.length }} 项事项</span
         >
+        <div class="calendar-agenda-actions">
+          <button
+            class="calendar-button"
+            type="button"
+            @click="$emit('smart-record')"
+          >
+            <Sparkles :size="13" />智能记录
+          </button>
+          <button
+            class="calendar-button"
+            type="button"
+            aria-label="在这天新建便签"
+            @click="$emit('create', selectedDate)"
+          >
+            <Plus :size="13" />新建便签
+          </button>
+        </div>
       </header>
       <div v-if="selectedEntries.length" class="calendar-agenda-list">
         <button
@@ -173,13 +190,6 @@
         <span>这一天，留一点空白</span>
         <span class="calendar-caption">写下想法，或安排一件要做的事。</span>
       </div>
-      <button
-        class="calendar-button calendar-create"
-        type="button"
-        @click="$emit('create', selectedDate)"
-      >
-        <Plus :size="14" />在这天新建便签
-      </button>
       <p class="calendar-agenda-foot">
         便签按事项日期归属，待办按截止日期归属；提醒显示下一次触发时间。
       </p>
@@ -196,18 +206,17 @@ import {
   ChevronRight,
   ListTodo,
   NotebookPen,
-  Plus
+  Plus,
+  Sparkles
 } from "lucide-vue-next"
 import { localInput } from "@/features/quick-notes/constant"
 import { formatDateTime } from "@/utils/formatters"
 
 const props = defineProps({
   notes: { type: Array, default: () => [] },
-  reminders: { type: Array, default: () => [] },
-  fromDate: { type: String, default: "" },
-  toDate: { type: String, default: "" }
+  reminders: { type: Array, default: () => [] }
 })
-defineEmits(["open", "create"])
+defineEmits(["open", "create", "smart-record"])
 const today = ref(localInput(Date.now()).slice(0, 10))
 const selectedDate = ref(today.value)
 const year = ref(Number(today.value.slice(0, 4)))
@@ -229,7 +238,6 @@ const years = computed(() =>
 const entriesByDate = computed(() => {
   const result = new Map()
   const append = (date, entry) => {
-    if ((props.fromDate && date < props.fromDate) || (props.toDate && date > props.toDate)) return
     if (!result.has(date)) result.set(date, [])
     result.get(date).push(entry)
   }
@@ -330,9 +338,11 @@ onBeforeUnmount(() => clearInterval(clock))
 <style scoped lang="less">
 .note-calendar {
   display: flex;
+  flex: 1;
   align-items: stretch;
   gap: 20px;
   min-width: 0;
+  min-height: 0;
   .calendar-button,
   .calendar-icon,
   .calendar-select {
@@ -382,14 +392,18 @@ onBeforeUnmount(() => clearInterval(clock))
     }
   }
   .calendar-month {
+    display: flex;
+    flex-direction: column;
     flex: 1;
     min-width: 0;
+    min-height: 0;
     padding: 18px;
     border: 1px solid var(--color-line);
     border-radius: 13px;
     background: var(--color-panel);
     .calendar-toolbar {
       display: flex;
+      flex: none;
       align-items: center;
       justify-content: space-between;
       gap: 10px;
@@ -407,6 +421,7 @@ onBeforeUnmount(() => clearInterval(clock))
       gap: 5px;
     }
     .calendar-week {
+      flex: none;
       margin-bottom: 8px;
       .calendar-weekday {
         padding: 7px 0;
@@ -419,12 +434,15 @@ onBeforeUnmount(() => clearInterval(clock))
       }
     }
     .calendar-days {
+      flex: 1;
+      min-height: 0;
+      grid-template-rows: repeat(6, minmax(0, 1fr));
       .calendar-day {
         display: flex;
         align-items: center;
         flex-direction: column;
         min-width: 0;
-        height: 77px;
+        min-height: 0;
         gap: 3px;
         padding: 9px 3px 5px;
         border: 1px solid transparent;
@@ -492,6 +510,7 @@ onBeforeUnmount(() => clearInterval(clock))
     }
     .calendar-legend {
       display: flex;
+      flex: none;
       align-items: center;
       gap: 17px;
       margin-top: 16px;
@@ -514,6 +533,7 @@ onBeforeUnmount(() => clearInterval(clock))
     flex-direction: column;
     flex: 0 0 255px;
     min-width: 0;
+    min-height: 0;
     padding: 21px 17px 16px;
     border: 1px solid var(--color-line);
     border-radius: 13px;
@@ -521,12 +541,24 @@ onBeforeUnmount(() => clearInterval(clock))
     .calendar-agenda-head {
       display: flex;
       flex-direction: column;
+      flex: none;
       gap: 9px;
       padding: 0 3px 18px;
       border-bottom: 1px solid var(--color-line);
       .calendar-agenda-date {
         font-size: 25px;
         letter-spacing: -0.7px;
+      }
+      .calendar-agenda-actions {
+        display: flex;
+        gap: 8px;
+        margin-top: 4px;
+        .calendar-button {
+          flex: 1;
+          padding: 7px 6px;
+          font-size: 11px;
+          white-space: nowrap;
+        }
       }
     }
     .calendar-agenda-list {
@@ -535,7 +567,7 @@ onBeforeUnmount(() => clearInterval(clock))
       flex: 1;
       gap: 9px;
       padding: 16px 0;
-      max-height: 384px;
+      min-height: 0;
       overflow: auto;
       .calendar-entry {
         display: flex;
@@ -590,17 +622,14 @@ onBeforeUnmount(() => clearInterval(clock))
       flex-direction: column;
       flex: 1;
       gap: 12px;
-      min-height: 210px;
+      min-height: 0;
       color: var(--color-text-muted);
       font-size: 12px;
     }
-    .calendar-create {
-      width: 100%;
-      margin-top: auto;
-      color: var(--color-primary);
-    }
     .calendar-agenda-foot {
-      margin: 12px 0 0;
+      flex: none;
+      margin: auto 0 0;
+      padding-top: 12px;
       color: var(--color-text-muted);
       font-size: 10px;
       line-height: 1.8;

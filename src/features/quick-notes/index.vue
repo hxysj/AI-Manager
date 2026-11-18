@@ -50,24 +50,27 @@
         <HardDrive :size="13" />本机保存 · 托盘运行可提醒
       </p>
     </aside>
-    <main class="notes-main">
-      <header class="notes-header">
+    <main
+      class="notes-main"
+      :class="{ 'notes-main-calendar': view === 'calendar' }"
+    >
+      <header v-if="view !== 'calendar'" class="notes-header">
         <div>
           <span class="notes-eyebrow">QUICK NOTES / 工作与生活</span>
           <h2 class="notes-title">{{ heading }}</h2>
           <p class="notes-subtitle">
             {{
-              view === "calendar"
-                ? "把记录放进日历，让每一天的安排清楚可见。"
-                : view === "worklog"
-                  ? "沿着日期回看过程、结果和下一步。"
-                  : "想法、待办与工作进展，都有自己的位置。"
+              view === "worklog"
+                ? "沿着日期回看过程、结果和下一步。"
+                : "想法、待办与工作进展，都有自己的位置。"
             }}
           </p>
         </div>
         <div class="notes-header-actions">
           <button class="notes-button" type="button" @click="organizer = true">
             <Layers :size="14" />分类与分组</button
+          ><button class="notes-button" type="button" @click="openSmartCapture">
+            <Sparkles :size="14" />智能记录</button
           ><button
             class="notes-button notes-primary"
             type="button"
@@ -77,52 +80,6 @@
           </button>
         </div>
       </header>
-      <section
-        v-if="view !== 'reminders' && !['trash', 'archived'].includes(view)"
-        class="notes-composer"
-      >
-        <textarea
-          v-model="draft"
-          class="notes-quick-input"
-          rows="2"
-          placeholder="记下今天的进展，或者输入：明天下午三点提醒我回归测试…"
-          aria-label="快速记录"
-          maxlength="100000"
-        ></textarea>
-        <div class="notes-composer-actions">
-          <span class="notes-caption">直接保存原文，或让 AI 整理分类与待办</span
-          ><select
-            v-model="useCustomModel"
-            class="notes-select"
-            aria-label="速记模型模式"
-          >
-            <option :value="false">跟随助手模型</option>
-            <option :value="true">单独选择模型</option></select
-          ><AssistantModelSelect
-            v-if="useCustomModel"
-            :settings="model"
-            :providers="providers"
-            :codex-accounts="codexAccounts"
-            :runtime-models="runtimeModels"
-            :persist="false"
-            @change="model = $event"
-            @error="error = $event"
-          /><QuickNoteCapture
-            :draft="draft"
-            :model="model"
-            :follow-model="!useCustomModel"
-            surface="tool"
-            @captured="clearCapturedDraft"
-          /><button
-            class="notes-button"
-            type="button"
-            :disabled="!draft.trim()"
-            @click="manualDraft"
-          >
-            直接记录
-          </button>
-        </div>
-      </section>
       <p v-if="error" class="notes-error" role="alert">
         {{ error
         }}<button class="notes-text" type="button" @click="error = ''">
@@ -195,7 +152,7 @@
         </div>
       </section>
       <template v-else>
-        <div class="notes-filters">
+        <div v-if="view !== 'calendar'" class="notes-filters">
           <label class="notes-search"
             ><Search :size="15" /><input
               v-model="search"
@@ -244,7 +201,7 @@
             <RefreshCw :size="15" />
           </button>
         </div>
-        <div class="notes-filter-dates">
+        <div v-if="view !== 'calendar'" class="notes-filter-dates">
           <label>从 <input v-model="fromDate" type="date" /></label
           ><label>至 <input v-model="toDate" type="date" /></label
           ><select
@@ -374,10 +331,9 @@
             v-if="view === 'calendar'"
             :notes="filtered"
             :reminders="state.reminders"
-            :from-date="fromDate"
-            :to-date="toDate"
             @open="edit"
             @create="newNote"
+            @smart-record="openSmartCapture"
           />
           <template v-else>
             <section
@@ -429,6 +385,60 @@
         </div>
       </template>
     </main>
+    <BaseModal
+      v-show="smartCaptureOpen"
+      class="notes-capture-modal"
+      title="智能记录"
+      description="记下原始想法，让 AI 整理成便签、分类和待办。"
+      @close="smartCaptureOpen = false"
+      @keydown.esc.stop="smartCaptureOpen = false"
+    >
+      <section class="notes-composer">
+        <textarea
+          ref="captureInput"
+          v-model="draft"
+          class="notes-quick-input"
+          rows="6"
+          placeholder="记下今天的进展，或者输入：明天下午三点提醒我回归测试…"
+          aria-label="快速记录"
+          maxlength="100000"
+        ></textarea>
+        <div class="notes-composer-actions">
+          <span class="notes-caption">直接保存原文，或让 AI 整理分类与待办</span
+          ><select
+            v-model="useCustomModel"
+            class="notes-select"
+            aria-label="速记模型模式"
+          >
+            <option :value="false">跟随助手模型</option>
+            <option :value="true">单独选择模型</option></select
+          ><AssistantModelSelect
+            v-if="useCustomModel"
+            :settings="model"
+            :providers="providers"
+            :codex-accounts="codexAccounts"
+            :runtime-models="runtimeModels"
+            :persist="false"
+            @change="model = $event"
+            @error="error = $event"
+          /><QuickNoteCapture
+            :draft="draft"
+            :model="model"
+            :follow-model="!useCustomModel"
+            surface="tool"
+            @captured="clearCapturedDraft"
+          /><button
+            class="notes-button"
+            type="button"
+            :disabled="!draft.trim()"
+            @click="manualDraft"
+          >
+            直接记录
+          </button>
+        </div>
+      </section>
+      <p v-if="error" class="notes-capture-error" role="alert">{{ error }}</p>
+    </BaseModal>
     <QuickNoteEditor
       v-if="editing"
       ref="noteEditor"
@@ -586,7 +596,7 @@ const state = ref({
   events: [],
   captures: []
 })
-const view = ref("all")
+const view = ref("calendar")
 const groupId = ref("")
 const categoryId = ref("")
 const groupBy = ref(localStorage.getItem("quick-notes:group-by") || "none")
@@ -596,6 +606,8 @@ const fromDate = ref("")
 const toDate = ref("")
 const search = ref("")
 const draft = ref("")
+const smartCaptureOpen = ref(false)
+const captureInput = ref(null)
 const model = ref({})
 const useCustomModel = ref(false)
 const selected = ref(new Set())
@@ -661,12 +673,13 @@ const visibleCaptures = computed(() =>
 )
 const filtered = computed(() =>
   state.value.notes.filter((note) => {
+    // 日历显示完整事项，列表视图的筛选条件不影响日历。
+    if (view.value === "calendar") return true
     const date =
       note.occurredOn || new Date(note.createdAt).toLocaleDateString("sv-SE")
     if (
-      view.value !== "calendar" &&
-      ((fromDate.value && date < fromDate.value) ||
-        (toDate.value && date > toDate.value))
+      (fromDate.value && date < fromDate.value) ||
+      (toDate.value && date > toDate.value)
     )
       return false
     if (typeFilter.value && note.type !== typeFilter.value) return false
@@ -749,9 +762,9 @@ async function load(more = false) {
       lifecycle: ["trash", "archived"].includes(view.value)
         ? view.value
         : "active",
-      search: search.value,
+      search: view.value === "calendar" ? "" : search.value,
       groupId: groupId.value,
-      categoryId: categoryId.value,
+      categoryId: view.value === "calendar" ? "" : categoryId.value,
       offset: more === true ? state.value.notes.length : 0,
       limit: 300
     })
@@ -796,9 +809,16 @@ function newNote(occurredOn) {
     occurredOn: typeof occurredOn === "string" ? occurredOn : ""
   }
 }
+// 弹框保留输入与整理组件实例，关闭后草稿和后台整理继续保留。
+async function openSmartCapture() {
+  smartCaptureOpen.value = true
+  await nextTick()
+  captureInput.value.focus()
+}
 function manualDraft() {
   recoverCapture = null
   manualSnapshot = draft.value
+  smartCaptureOpen.value = false
   editing.value = { content: draft.value, groupId: groupId.value || "inbox" }
 }
 function clearCapturedDraft(snapshot) {
@@ -1235,6 +1255,9 @@ onBeforeUnmount(() => {
     overflow: auto;
     padding: 24px 25px 20px;
     gap: 18px;
+    &.notes-main-calendar {
+      overflow: hidden;
+    }
     .notes-header {
       display: flex;
       align-items: center;
@@ -1258,36 +1281,6 @@ onBeforeUnmount(() => {
       .notes-header-actions {
         display: flex;
         gap: 8px;
-      }
-    }
-    .notes-composer {
-      flex: none;
-      border: 1px solid var(--color-line);
-      border-radius: 10px;
-      padding: 13px 15px;
-      border-left: 3px solid #b68c3b;
-      .notes-quick-input {
-        width: 100%;
-        box-sizing: border-box;
-        padding: 0;
-        border: 0;
-        outline: 0;
-        resize: vertical;
-        background: transparent;
-        color: var(--color-text);
-        font: inherit;
-        line-height: 1.8;
-        min-height: 50px;
-      }
-      .notes-composer-actions {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 8px;
-        margin-top: 10px;
-        .notes-caption {
-          margin-right: auto;
-        }
       }
     }
     .notes-error {
@@ -1384,6 +1377,10 @@ onBeforeUnmount(() => {
       display: flex;
       flex-direction: column;
       gap: 22px;
+      &.notes-display-calendar {
+        flex: 1;
+        min-height: 0;
+      }
       .notes-group {
         .notes-group-title {
           display: flex;
@@ -1479,6 +1476,45 @@ onBeforeUnmount(() => {
           gap: 5px;
         }
       }
+    }
+  }
+  .notes-capture-modal {
+    :deep(.base-modal__panel) {
+      width: 760px;
+    }
+    .notes-composer {
+      border: 1px solid var(--color-line);
+      border-left: 3px solid #b68c3b;
+      border-radius: 10px;
+      padding: 13px 15px;
+      .notes-quick-input {
+        width: 100%;
+        min-height: 150px;
+        box-sizing: border-box;
+        padding: 0;
+        border: 0;
+        outline: 0;
+        resize: vertical;
+        background: transparent;
+        color: var(--color-text);
+        font: inherit;
+        line-height: 1.8;
+      }
+      .notes-composer-actions {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        gap: 8px;
+        margin-top: 10px;
+        .notes-caption {
+          margin-right: auto;
+        }
+      }
+    }
+    .notes-capture-error {
+      margin: 12px 0 0;
+      color: var(--color-danger);
+      font-size: 12px;
     }
   }
   .notes-organizer {

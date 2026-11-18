@@ -280,7 +280,7 @@
           </div>
         </div>
         <p class="note-caption">
-          按本机时区提醒。保留应用在托盘运行可按时通知；完全退出后，下次启动补发。归档或删除会暂停提醒。
+          提醒时间必须晚于当前时间。按本机时区提醒。保留应用在托盘运行可按时通知；完全退出后，下次启动补发。归档或删除会暂停提醒。
         </p>
       </section>
       <details v-if="note.captures?.length" class="note-section">
