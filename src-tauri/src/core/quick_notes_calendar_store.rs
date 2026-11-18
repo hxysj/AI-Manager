@@ -39,12 +39,12 @@ pub fn save_in(c: &Connection,input: &Value,actor: &str) -> Result<Value,Manager
     if title.is_empty() || title.chars().count()>80{return Err(fail("日历标签名称须为 1 至 80 字"));}
     rule["title"]=json!(title);
     let kind=text(&rule,"kind").to_owned();
-    if !["label","rest","holiday","workday","makeup","birthday"].contains(&kind.as_str()){return Err(fail("日历规则类型无效"));}
-    let status=match kind.as_str(){"rest"|"holiday"=>"rest","workday"=>"work","makeup"=>text(&rule,"workStatus"),_=>""}.to_owned();
+    if !["label","work","rest","holiday","workday","makeup","birthday"].contains(&kind.as_str()){return Err(fail("日历规则类型无效"));}
+    let status=match kind.as_str(){"rest"|"holiday"=>"rest","work"|"workday"=>"work","makeup"=>text(&rule,"workStatus"),_=>""}.to_owned();
     if kind=="makeup" && !["rest","work"].contains(&status.as_str()){return Err(fail("调休规则必须明确选择补班或补假休息"));}
     rule["workStatus"]=json!(status);
     if input.get("color").is_none() && previous.is_none() {
-        rule["color"]=json!(match kind.as_str(){"rest"=>"#579b80","holiday"=>"#df6676","workday"=>"#cc893d","makeup"=>if rule["workStatus"]=="rest"{"#8b74bc"}else{"#cc893d"},"birthday"=>"#ad72ae",_=>"#568bb6"});
+        rule["color"]=json!(match kind.as_str(){"work"=>"#14213a","rest"=>"#579b80","holiday"=>"#df6676","workday"=>"#cc893d","makeup"=>if rule["workStatus"]=="rest"{"#8b74bc"}else{"#cc893d"},"birthday"=>"#ad72ae",_=>"#568bb6"});
     }
     let color=text(&rule,"color");
     if color.len()!=7 || !color.starts_with('#') || !color.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit){return Err(fail("规则颜色必须为 #RRGGBB"));}

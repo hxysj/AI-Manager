@@ -9,9 +9,6 @@
     <form class="note-form" @submit.prevent="save">
       <header class="note-editor-header">
         <div class="editor-heading">
-          <span class="editor-eyebrow"
-            >QUICK NOTES / {{ note.id ? "便签详情" : "新的记录" }}</span
-          >
           <h2 class="editor-title">
             <NotebookPen :size="24" />{{ note.id ? "便签详情" : "新建便签" }}
           </h2>
@@ -892,16 +889,11 @@ async function save() {
       gap: 15px;
       padding: 22px 26px;
       .editor-heading {
-        .editor-eyebrow {
-          color: var(--color-text-muted);
-          font-size: 10px;
-          letter-spacing: 1.2px;
-        }
         .editor-title {
           display: flex;
           align-items: center;
           gap: 9px;
-          margin: 8px 0 0;
+          margin: 0;
           font-size: 24px;
         }
       }
@@ -914,6 +906,8 @@ async function save() {
     .note-editor-columns {
       display: flex;
       flex: 1;
+      // 两栏按内容撑高，避免表单内容溢出白色容器后露出底层背景。
+      align-items: flex-start;
       gap: 16px;
       min-height: 0;
       padding: 0 25px 22px;
@@ -1161,6 +1155,7 @@ async function save() {
   &:not(.note-editor-inline) {
     .note-form {
       .note-editor-columns {
+        align-items: stretch;
         flex-direction: column;
         .note-editor-aside {
           min-width: 0;

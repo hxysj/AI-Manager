@@ -77,9 +77,11 @@
           <span data-emphasis class="tools-view-detail-name">{{
             activeToolMeta?.label || "工具"
           }}</span>
-          <span class="tools-view-detail-summary">{{
-            activeToolMeta?.summary || ""
-          }}</span>
+          <span
+            v-if="activeTool !== 'quick-notes'"
+            class="tools-view-detail-summary"
+            >{{ activeToolMeta?.summary || "" }}</span
+          >
         </div>
         <div v-if="activeTool === 'git'" class="tools-view-git-status">
           <template v-for="(item, index) in gitToolStatus" :key="item.label">
@@ -1176,12 +1178,12 @@ onMounted(() => {
   }
 }
 .tools-view-detail-page.tools-view-notes {
-  gap: 16px;
+  gap: 8px;
   .tools-view-detail-head {
-    padding: 12px 12px 15px;
+    padding: 4px 12px 8px;
     border-bottom: 0;
     .tools-view-detail-name {
-      font-size: 22px;
+      font-size: var(--font-size-base);
     }
     .tools-view-detail-summary {
       font-size: 13px;

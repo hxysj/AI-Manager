@@ -19,7 +19,7 @@
           <button
             class="calendar-button"
             type="button"
-            @click="rulesVisible = !rulesVisible"
+            @click="rulesVisible = true"
           >
             休假规则
           </button>
@@ -33,21 +33,33 @@
           <button
             class="calendar-button"
             type="button"
-            @click="$emit('create', selectedDate)"
+            :aria-label="agendaVisible ? '收起当日事项' : '展开当日事项'"
+            :title="agendaVisible ? '收起当日事项' : '展开当日事项'"
+            :aria-expanded="agendaVisible"
+            aria-controls="calendar-agenda"
+            @click="agendaVisible = !agendaVisible"
           >
-            <SquarePen :size="15" />新增便签
-          </button>
-          <button
-            class="calendar-button calendar-primary"
-            type="button"
-            aria-label="快速新建便签"
-            @click="$emit('create', selectedDate)"
-          >
-            <Plus :size="20" />
+            <component
+              :is="agendaVisible ? PanelRightClose : PanelRightOpen"
+              :size="17"
+            />
           </button>
         </div>
       </div>
-      <CalendarRuleSettings v-if="rulesVisible" :rules="rules" />
+      <Teleport to="body">
+        <BaseModal
+          v-if="rulesVisible"
+          class="calendar-rules-modal"
+          title="休假规则"
+          role="dialog"
+          aria-modal="true"
+          aria-label="休假规则"
+          @close="rulesVisible = false"
+          @keydown.esc.stop="rulesVisible = false"
+        >
+          <CalendarRuleSettings :rules="rules" />
+        </BaseModal>
+      </Teleport>
       <header class="calendar-toolbar">
         <div class="calendar-period">
           <button
@@ -119,8 +131,12 @@
           }"
           type="button"
           :data-date="day.key"
-          :style="day.schedule ? { color: day.schedule.color } : {}"
-          :aria-label="`${day.key}，农历${day.lunar}，${day.entries.length} 项事项`"
+          :style="
+            day.schedule && day.schedule.kind !== 'work'
+              ? { color: day.schedule.color }
+              : {}
+          "
+          :aria-label="`${day.key}，农历${day.lunar}${day.scheduleLabel ? `，${day.scheduleLabel}` : ''}，${day.entries.length} 项事项`"
           :aria-current="day.key === today ? 'date' : undefined"
           :aria-pressed="day.key === selectedDate"
           @click="selectDate(day.key)"
@@ -131,24 +147,33 @@
               >今</span
             >
           </span>
-          <span v-if="day.schedule" class="calendar-lunar">{{
-            day.schedule.title
-          }}</span>
           <span class="calendar-lunar">{{ day.lunar }}</span>
-          <span v-if="day.entries.length" class="calendar-markers">
+          <span
+            v-if="day.scheduleLabel || day.entries.length"
+            class="calendar-corner"
+          >
             <span
-              v-if="day.entries.some((item) => item.kind === 'note')"
-              class="calendar-dot calendar-dot-note"
-            ></span>
-            <span
-              v-if="day.entries.some((item) => item.kind === 'task')"
-              class="calendar-dot calendar-dot-task"
-            ></span>
-            <span
-              v-if="day.entries.some((item) => item.kind === 'reminder')"
-              class="calendar-dot calendar-dot-reminder"
-            ></span>
-            <span class="calendar-day-count">{{ day.entries.length }}</span>
+              v-if="day.scheduleLabel"
+              class="calendar-schedule-label"
+              :style="{ '--calendar-schedule-color': day.schedule.color }"
+              :title="day.schedule.title"
+              >{{ day.scheduleLabel }}</span
+            >
+            <span v-if="day.entries.length" class="calendar-markers">
+              <span
+                v-if="day.entries.some((item) => item.kind === 'note')"
+                class="calendar-dot calendar-dot-note"
+              ></span>
+              <span
+                v-if="day.entries.some((item) => item.kind === 'task')"
+                class="calendar-dot calendar-dot-task"
+              ></span>
+              <span
+                v-if="day.entries.some((item) => item.kind === 'reminder')"
+                class="calendar-dot calendar-dot-reminder"
+              ></span>
+              <span class="calendar-day-count">{{ day.entries.length }}</span>
+            </span>
           </span>
           <span v-if="calendarView === 'week'" class="calendar-week-entries"
             ><span
@@ -226,7 +251,12 @@
         >
       </footer>
     </div>
-    <aside class="calendar-agenda" aria-label="当日事项">
+    <aside
+      v-show="agendaVisible"
+      id="calendar-agenda"
+      class="calendar-agenda"
+      aria-label="当日事项"
+    >
       <header class="calendar-agenda-head">
         <span class="calendar-caption"
           >{{ selectedDate === today ? "今天" : "所选日期" }} ·
@@ -310,9 +340,6 @@
         <span>这一天，留一点空白</span>
         <span class="calendar-caption">写下想法，或安排一件要做的事。</span>
       </div>
-      <p class="calendar-agenda-foot">
-        便签按事项日期归属，待办按截止日期归属；提醒显示下一次触发时间。
-      </p>
     </aside>
   </section>
 </template>
@@ -330,14 +357,17 @@ import {
   Sparkles,
   CalendarRange,
   List,
-  SquarePen
+  PanelRightClose,
+  PanelRightOpen
 } from "lucide-vue-next"
 import { localInput } from "@/features/quick-notes/constant"
 import { formatDateTime } from "@/utils/formatters"
 
+import BaseModal from "@/components/BaseModal.vue"
 import CalendarRuleSettings from "./CalendarRuleSettings.vue"
 import { calendarDay } from "../calendar-rules"
 const rulesVisible = ref(false)
+const agendaVisible = ref(true)
 const props = defineProps({
   rules: { type: Array, default: () => [] },
   notes: { type: Array, default: () => [] },
@@ -418,9 +448,20 @@ const days = computed(() => {
     const key = localInput(date.getTime()).slice(0, 10)
     const lunar = lunarFormatter.formatToParts(date)
     const lunarDay = Number(lunar.find((part) => part.type === "day").value)
+    const schedule = calendarDay(date, props.rules)
     return {
       key,
-      schedule: calendarDay(date, props.rules),
+      schedule,
+      // 日期格只展示简短状态，规则名称保留在标签悬浮提示和规则设置中。
+      scheduleLabel:
+        schedule && schedule.kind !== "work"
+          ? {
+              rest: "休息",
+              holiday: "节假日",
+              workday: "补班",
+              makeup: schedule.workStatus === "work" ? "补班" : "补假"
+            }[schedule.kind] || "标记"
+          : "",
       number: date.getDate(),
       outside: date.getMonth() !== month.value,
       weekend: index % 7 > 4,
@@ -478,6 +519,31 @@ onBeforeUnmount(() => clearInterval(clock))
 </script>
 
 <style scoped lang="less">
+.calendar-rules-modal {
+  :deep(.base-modal__panel) {
+    width: min(1020px, calc(100vw - 48px));
+    height: min(780px, calc(100vh - 48px));
+    border-radius: 16px;
+  }
+  :deep(.base-modal__header) {
+    align-items: center;
+    padding: 12px 24px;
+    border-bottom: 1px solid var(--color-line);
+  }
+  :deep(.base-modal__header h2) {
+    font: inherit;
+    font-size: var(--font-size-base);
+  }
+  :deep(.base-modal__close) {
+    width: 28px;
+    height: 28px;
+    font-size: var(--font-size-lg);
+  }
+  :deep(.base-modal__content) {
+    padding: 0;
+  }
+}
+
 .note-calendar {
   display: flex;
   flex: 1;
@@ -708,10 +774,29 @@ onBeforeUnmount(() => clearInterval(clock))
             overflow-wrap: anywhere;
           }
         }
-        .calendar-markers {
+        .calendar-corner {
           position: absolute;
-          top: 4px;
-          right: 5px;
+          top: 3px;
+          right: 4px;
+          display: flex;
+          flex-direction: column;
+          align-items: flex-end;
+          gap: 2px;
+          .calendar-schedule-label {
+            padding: 0 3px;
+            border-radius: 3px;
+            color: var(--calendar-schedule-color);
+            background: color-mix(
+              in srgb,
+              var(--calendar-schedule-color) 12%,
+              var(--color-panel)
+            );
+            font-size: 9px;
+            line-height: 13px;
+            white-space: nowrap;
+          }
+        }
+        .calendar-markers {
           display: flex;
           align-items: center;
           justify-content: center;
@@ -914,14 +999,6 @@ onBeforeUnmount(() => clearInterval(clock))
       min-height: 0;
       color: var(--color-text-muted);
       font-size: 12px;
-    }
-    .calendar-agenda-foot {
-      flex: none;
-      margin: auto 0 0;
-      padding-top: 12px;
-      color: var(--color-text-muted);
-      font-size: 10px;
-      line-height: 1.8;
     }
   }
 }

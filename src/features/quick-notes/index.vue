@@ -60,9 +60,6 @@
           <Folder :size="14" /><span>{{ folder.name }}</span>
         </button>
       </nav>
-      <p class="notes-sidebar-foot">
-        <HardDrive :size="13" />本机保存 · 托盘运行可提醒
-      </p>
     </aside>
     <main
       class="notes-main"
@@ -81,15 +78,7 @@
       <template v-else>
         <header v-if="view !== 'calendar'" class="notes-header">
           <div>
-            <span class="notes-eyebrow">QUICK NOTES / 工作与生活</span>
             <h2 class="notes-title">{{ heading }}</h2>
-            <p class="notes-subtitle">
-              {{
-                view === "worklog"
-                  ? "沿着日期回看过程、结果和下一步。"
-                  : "想法、待办与工作进展，都有自己的位置。"
-              }}
-            </p>
           </div>
           <div class="notes-header-actions">
             <button
@@ -572,7 +561,6 @@ import {
   Clock3,
   Download,
   Folder,
-  HardDrive,
   Mail,
   ListFilter,
   Layers,
@@ -1253,15 +1241,6 @@ onBeforeUnmount(() => {
         }
       }
     }
-    .notes-sidebar-foot {
-      display: flex;
-      align-items: center;
-      gap: 5px;
-      padding: 10px 5px;
-      margin: auto 0 0;
-      color: var(--color-text-muted);
-      font-size: 9px;
-    }
   }
   .notes-main {
     display: flex;
@@ -1293,21 +1272,13 @@ onBeforeUnmount(() => {
       flex: none;
       gap: 15px;
       padding: 0 0 2px;
-      .notes-eyebrow {
-        font-size: 10px;
-        letter-spacing: 1.6px;
-        color: var(--color-text-muted);
-      }
+
       .notes-title {
-        margin: 10px 0 8px;
-        font-size: 27px;
+        margin: 0;
+        font-size: var(--font-size-lg);
         line-height: 1.2;
       }
-      .notes-subtitle {
-        margin: 0;
-        color: var(--color-text-muted);
-        font-size: 12px;
-      }
+
       .notes-header-actions {
         display: flex;
         gap: 10px;

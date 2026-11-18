@@ -10,6 +10,8 @@
       class="assistant-model-field"
       aria-label="当前模型"
       placeholder="选择 Provider 和模型"
+      :popper-class="compact ? 'assistant-model-compact-popper' : ''"
+      :popper-style="compact ? { maxWidth: 'calc(100vw - 24px)' } : undefined"
       placement="top-end"
       :fallback-placements="['top-end', 'bottom-end']"
       filterable
@@ -236,5 +238,16 @@ onBeforeUnmount(() => {
   &:focus-within {
     border-color: var(--color-primary);
   }
+}
+// 桌面窗口高度固定，缩小列表并在弹层内滚动，避免被原生窗口裁切。
+:global(.assistant-model-compact-popper .el-select-dropdown__wrap) {
+  max-height: 120px;
+}
+:global(.assistant-model-compact-popper .el-select-dropdown__item),
+:global(.assistant-model-compact-popper .el-select-group__title) {
+  max-width: calc(100vw - 48px);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 </style>
