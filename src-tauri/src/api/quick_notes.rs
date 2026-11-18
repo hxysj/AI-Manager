@@ -174,7 +174,8 @@ async fn generate_and_save(context: &AssistantContext,capture: &Value,input: &Va
                 let notes=parts.iter().map(|part|normalize_item(part.clone(),&folders,capture,input)).collect::<Result<Vec<_>,_>>()?;
                 json!({"notes":notes})
             }else{normalize_item(parsed,&folders,capture,input)?};
-            store::complete_capture(&context.paths,store::text(capture,"id"),&note)
+            if input["preview"]==true {store::preview_capture(&context.paths,store::text(capture,"id"),&note)}
+            else {store::complete_capture(&context.paths,store::text(capture,"id"),&note)}
         })();
         let error=match result {Ok(note)=>return Ok(note),Err(error)=>error};
         if corrections>=2 || !matches!(&error,ManagerError::System(_)){return Err(error);}

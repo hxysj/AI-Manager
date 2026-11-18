@@ -214,3 +214,32 @@ fn split_capture_is_atomic_and_every_note_keeps_the_source() {
     }
     assert!(complete_capture(&f.paths,text(&first,"id"),&json!({"notes":[{"content":"不能重复"}]})).is_err());
 }
+
+#[test]
+fn ai_preview_validates_without_writing_and_confirmation_preserves_source() {
+    let f=Fixture::new();
+    let raw="修复分值同步问题并补充验证";
+    let capture=capture(&f.paths,&json!({"requestId":"preview","text":raw}),&json!({})).unwrap();
+    let key=text(&capture,"id");
+    assert!(dispatch(&f.paths,"capture-save",&json!({"id":key,"note":{"content":"未经分析"}})).is_err());
+    assert!(preview_capture(&f.paths,key,&json!({"content":"无效预览","occurredOn":"今天","newGroup":{"name":"预览项目"}})).is_err());
+    assert_eq!(capture_state(&f.paths,key).unwrap()["status"],"running");
+    let draft=json!({"title":"模型标题","content":"整理正文","newGroup":{"name":"预览项目"},"tasks":[{"id":"task","title":"回归验证","status":"pending"}]});
+    preview_capture(&f.paths,key,&draft).unwrap();
+    let state=capture_state(&f.paths,key).unwrap();
+    assert_eq!(state["status"],"preview");assert_eq!(state["result"],draft);
+    assert!(list(&f.paths,&json!({})).unwrap()["notes"].as_array().unwrap().is_empty());
+    assert!(!dispatch(&f.paths,"folders",&json!({})).unwrap()["folders"].as_array().unwrap().iter().any(|folder|folder["name"]=="预览项目"));
+    assert!(dispatch(&f.paths,"capture-save",&json!({"id":key,"note":{"content":""}})).is_err());
+    assert_eq!(capture_state(&f.paths,key).unwrap()["status"],"preview");
+    let mut edited=draft.clone();edited["title"]=json!("确认后的标题");
+    let note=dispatch(&f.paths,"capture-save",&json!({"id":key,"note":edited})).unwrap();
+    assert_eq!(note["title"],"确认后的标题");assert_eq!(note["createdAt"],capture["capturedAt"]);
+    assert_eq!(detail(&f.paths,text(&note,"id")).unwrap()["captures"][0]["sourceText"],raw);
+    assert_eq!(capture_state(&f.paths,key).unwrap()["status"],"completed");
+    assert!(dispatch(&f.paths,"capture-save",&json!({"id":key,"note":draft})).is_err());
+    let dismissed=super::capture(&f.paths,&json!({"requestId":"dismiss-preview","text":"保留原文"}),&json!({})).unwrap();
+    preview_capture(&f.paths,text(&dismissed,"id"),&json!({"content":"待确认"})).unwrap();
+    dispatch(&f.paths,"capture-discard",&json!({"id":dismissed["id"]})).unwrap();
+    assert!(dispatch(&f.paths,"capture-save",&json!({"id":dismissed["id"],"note":{"content":"不应保存"}})).is_err());
+}

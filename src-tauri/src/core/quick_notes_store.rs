@@ -271,11 +271,24 @@ fn resolve_ai_folders(c: &Connection,item: &mut Value) -> Result<(),ManagerError
     Ok(())
 }
 
+// 预览先在回滚事务中验证，便签与新目录仅在用户确认后落盘。
+pub fn preview_capture(paths: &AppPaths,key: &str,result: &Value) -> Result<Value,ManagerError> {
+    let mut c=open(paths)?;
+    let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    let status:String=tx.query_row("SELECT status FROM quick_note_captures WHERE id=?1",[key],|r|r.get(0))?;
+    if status!="running"{return Err(fail("速记已取消或已处理，原文仍保留"));}
+    let items=if let Some(parts)=result["notes"].as_array(){parts.clone()}else{vec![result.clone()]};
+    for mut item in items {resolve_ai_folders(&tx,&mut item)?;save_in(&tx,&item,"ai")?;}
+    tx.rollback()?;
+    if c.execute("UPDATE quick_note_captures SET status='preview',result_json=?2 WHERE id=?1 AND status='running'",params![key,result.to_string()])?!=1{return Err(fail("速记已取消或已处理，原文仍保留"));}
+    Ok(result.clone())
+}
+
 pub fn complete_capture(paths: &AppPaths,key: &str,result: &Value) -> Result<Value,ManagerError> {
     let mut c=open(paths)?;
     let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let capture=query(&tx,"SELECT note_id AS noteId,status,captured_at AS capturedAt FROM quick_note_captures WHERE id=?1",&[&key])?.pop().ok_or_else(||fail("速记任务不存在"))?;
-    if capture["status"]!="running"{return Err(fail("速记已取消或已处理，原文仍保留"));}
+    if capture["status"]!="running" && capture["status"]!="preview"{return Err(fail("速记已取消或已处理，原文仍保留"));}
     if let Some(parts)=result["notes"].as_array() {
         if parts.is_empty() || parts.len()>20 || !capture["noteId"].is_null(){return Err(fail("拆分便签数量或来源无效"));}
         let mut notes=Vec::new();
@@ -373,6 +386,11 @@ pub fn dispatch(paths: &AppPaths,action: &str,input: &Value) -> Result<Value,Man
         "list"=>list(paths,input), "detail"=>detail(paths,text(input,"id")),
         "folders"=>Ok(json!({"folders":query(&open(paths)?,"SELECT id,kind,name,aliases_json AS aliasesJson,sort_order AS sortOrder,archived FROM quick_note_folders WHERE (?1='' OR kind=?1) ORDER BY sort_order,name",&[&text(input,"kind")])?})),
         "save"=>save(paths,input,"user"), "organize"=>organize(paths,input),
+        "capture-save"=>{
+            let capture=capture_state(paths,text(input,"id"))?;
+            if capture["status"]!="preview"{return Err(fail("请先完成 AI 分析，再确认保存"));}
+            complete_capture(paths,text(&capture,"id"),&input["note"])
+        },
         "capture-state"=>capture_state(paths,text(input,"requestId")),
         "capture-discard"=>{let c=open(paths)?;c.execute("UPDATE quick_note_captures SET status='dismissed' WHERE id=?1 AND status<>'running'",[text(input,"id")])?;Ok(json!({"ok":true}))},
         "task-update"=>{

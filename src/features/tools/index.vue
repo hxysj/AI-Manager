@@ -30,7 +30,11 @@
       </div>
     </section>
 
-    <section v-else class="tools-view-detail-page">
+    <section
+      v-else
+      class="tools-view-detail-page"
+      :class="{ 'tools-view-notes': activeTool === 'quick-notes' }"
+    >
       <header class="tools-view-detail-head">
         <button
           v-if="!standalone"
@@ -42,7 +46,7 @@
           工具列表
         </button>
         <div
-          v-if="activeTool === 'port-monitor'"
+          v-if="activeTool === 'port-monitor' || activeTool === 'quick-notes'"
           class="tools-view-header-divider"
         />
         <div v-if="activeTool === 'git'" class="tools-view-git-badge">
@@ -190,6 +194,40 @@
             <RefreshCw :size="15" :class="{ spinning: isGatewayLoading }" />
           </button>
         </div>
+        <div v-if="activeTool === 'quick-notes'" class="tools-notes-actions">
+          <button
+            class="tools-notes-icon"
+            type="button"
+            aria-label="搜索便签"
+            @click="notesRef?.focusSearch()"
+          >
+            <Search :size="18" />
+          </button>
+          <button
+            class="tools-notes-icon"
+            type="button"
+            aria-label="便签筛选"
+            @click="notesRef?.toggleFilters()"
+          >
+            <ListFilter :size="18" />
+          </button>
+          <button
+            class="tools-notes-icon"
+            type="button"
+            aria-label="刷新便签"
+            @click="notesRef?.refresh()"
+          >
+            <RefreshCw :size="18" />
+          </button>
+          <button
+            class="tools-notes-icon"
+            type="button"
+            aria-label="管理便签目录"
+            @click="notesRef?.openOrganizer()"
+          >
+            <MoreHorizontal :size="18" />
+          </button>
+        </div>
         <button
           v-if="standalone"
           class="tools-view-open-main"
@@ -223,6 +261,7 @@
       <LanShareView v-else-if="activeTool === 'lan-share'" />
       <QuickNotes
         v-else-if="activeTool === 'quick-notes'"
+        ref="notesRef"
         :providers="providers"
         :codex-accounts="codexAccounts"
         :runtime-models="runtimeModels"
@@ -280,6 +319,9 @@ import {
   PanelsTopLeft,
   RefreshCw,
   ScanLine,
+  Search,
+  ListFilter,
+  MoreHorizontal,
   Sun
 } from "lucide-vue-next"
 import { getToolItems } from "@/features/tools/constant"
@@ -298,6 +340,7 @@ const JsonAgentTool = defineAsyncComponent(
 const QuickNotes = defineAsyncComponent(
   () => import("@/features/quick-notes/index.vue")
 )
+const notesRef = ref(null)
 
 // 网络诊断包含多组明细表，进入工具后再加载页面代码。
 const NetworkQualityView = defineAsyncComponent(
@@ -1130,6 +1173,41 @@ onMounted(() => {
 @keyframes tools-spin {
   to {
     transform: rotate(360deg);
+  }
+}
+.tools-view-detail-page.tools-view-notes {
+  gap: 16px;
+  .tools-view-detail-head {
+    padding: 12px 12px 15px;
+    border-bottom: 0;
+    .tools-view-detail-name {
+      font-size: 22px;
+    }
+    .tools-view-detail-summary {
+      font-size: 13px;
+    }
+    .tools-notes-actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      margin-left: auto;
+      .tools-notes-icon {
+        display: inline-flex;
+        align-items: center;
+        justify-content: center;
+        width: 37px;
+        height: 37px;
+        border: 1px solid var(--color-line);
+        border-radius: 10px;
+        color: var(--color-text-muted);
+        background: var(--color-panel);
+        cursor: pointer;
+        &:hover {
+          color: var(--color-primary);
+          border-color: var(--color-primary);
+        }
+      }
+    }
   }
 }
 </style>

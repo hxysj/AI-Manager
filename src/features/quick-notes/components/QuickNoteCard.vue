@@ -13,7 +13,9 @@
           :checked="selected"
           aria-label="选择便签"
           @change="$emit('select', note.id)"
-        /><span>{{ typeName }}</span></label
+        /><span class="note-type-badge"
+          ><NotebookPen :size="12" />{{ typeName }}</span
+        ></label
       ><button
         class="note-card-icon"
         type="button"
@@ -56,7 +58,7 @@
       <Clock3 :size="12" />提醒时间待确认
     </p>
     <div class="note-card-tags">
-      <span>{{ groupName }}</span
+      <span>#{{ groupName }}</span
       ><span v-if="categoryName && categoryName !== '未分类'">{{
         categoryName
       }}</span
@@ -92,7 +94,7 @@
 
 <script setup>
 import { computed } from "vue"
-import { ArrowUpRight, Bell, Clock3, Pin } from "lucide-vue-next"
+import { ArrowUpRight, Bell, Clock3, Pin, NotebookPen } from "lucide-vue-next"
 import { noteTypes } from "@/features/quick-notes/constant"
 import { formatDateTime } from "@/utils/formatters"
 const props = defineProps({
@@ -124,14 +126,18 @@ const categoryName = computed(
   display: flex;
   flex-direction: column;
   gap: 13px;
-  width: 284px;
-  flex: 1 0 250px;
-  max-width: 420px;
-  padding: 16px 17px 12px;
+  width: 520px;
+  flex: 0 1 560px;
+  max-width: 100%;
+  padding: 20px 23px 17px;
   border: 1px solid var(--color-line);
   border-top: 3px solid var(--note-accent);
-  border-radius: 10px;
-  background: var(--color-panel);
+  border-radius: 15px;
+  background: linear-gradient(
+    135deg,
+    var(--color-panel),
+    var(--color-panel-soft)
+  );
   box-shadow: 0 3px 12px #18304706;
   transition: border-color 0.15s;
   &.note-color-mint {
@@ -161,6 +167,15 @@ const categoryName = computed(
       font-size: 11px;
     }
   }
+  .note-type-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 10px;
+    border-radius: 20px;
+    background: var(--color-primary-soft);
+    color: var(--color-primary);
+  }
   .note-card-icon {
     display: inline-flex;
     align-items: center;
@@ -185,7 +200,7 @@ const categoryName = computed(
     font: inherit;
     cursor: pointer;
     .note-card-title {
-      font-size: 15px;
+      font-size: 17px;
       line-height: 1.6;
       overflow-wrap: anywhere;
     }
@@ -251,8 +266,8 @@ const categoryName = computed(
     :deep(span) {
       background: var(--color-panel-soft);
       color: var(--color-text-muted);
-      padding: 3px 6px;
-      border-radius: 4px;
+      padding: 4px 9px;
+      border-radius: 20px;
       font-size: 10px;
     }
   }

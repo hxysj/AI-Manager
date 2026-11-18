@@ -1,29 +1,39 @@
 <template>
   <section class="quick-notes">
     <aside class="notes-sidebar">
-      <div class="notes-brand">
-        <StickyNote :size="23" />
-        <div>
-          <span class="notes-brand-title">速记便签</span
-          ><span class="notes-brand-caption">记录事情，留下进展</span>
+      <section
+        v-for="section in navSections"
+        :key="section.title"
+        class="notes-nav-section"
+      >
+        <div class="notes-sidebar-heading">
+          <span>{{ section.title }}</span
+          ><ListFilter :size="15" />
         </div>
-      </div>
-      <nav class="notes-nav" aria-label="便签视图">
-        <button
-          v-for="item in views"
-          :key="item.id"
-          type="button"
-          class="notes-nav-item"
-          :class="{ 'notes-nav-active': view === item.id && !groupId }"
-          @click="selectView(item.id)"
-        >
-          <component :is="item.icon" :size="15" /><span>{{ item.label }}</span
-          ><span v-if="item.id === 'reminders' && unread" class="notes-count">{{
-            unread
-          }}</span>
-        </button>
-      </nav>
-      <div class="notes-sidebar-heading">
+        <nav class="notes-nav" :aria-label="section.title">
+          <button
+            v-for="item in views.filter((item) =>
+              section.ids.includes(item.id)
+            )"
+            :key="item.id"
+            type="button"
+            class="notes-nav-item"
+            :class="{ 'notes-nav-active': view === item.id && !groupId }"
+            @click="selectView(item.id)"
+          >
+            <component :is="item.icon" :size="19" /><span>{{ item.label }}</span
+            ><span
+              v-if="item.id === 'reminders' && unread"
+              class="notes-count"
+              >{{ unread }}</span
+            >
+          </button>
+        </nav>
+      </section>
+      <div
+        v-if="groups.some((folder) => folder.id !== 'inbox')"
+        class="notes-sidebar-heading"
+      >
         <span>项目分组</span
         ><button
           class="notes-icon"
@@ -34,7 +44,11 @@
           <Settings2 :size="14" />
         </button>
       </div>
-      <nav class="notes-nav" aria-label="项目分组">
+      <nav
+        v-if="groups.some((folder) => folder.id !== 'inbox')"
+        class="notes-nav"
+        aria-label="项目分组"
+      >
         <button
           v-for="folder in groups"
           :key="folder.id"
@@ -52,395 +66,390 @@
     </aside>
     <main
       class="notes-main"
-      :class="{ 'notes-main-calendar': view === 'calendar' }"
+      :class="{ 'notes-main-calendar': view === 'calendar' || !!editing?.id }"
     >
-      <header v-if="view !== 'calendar'" class="notes-header">
-        <div>
-          <span class="notes-eyebrow">QUICK NOTES / 工作与生活</span>
-          <h2 class="notes-title">{{ heading }}</h2>
-          <p class="notes-subtitle">
-            {{
-              view === "worklog"
-                ? "沿着日期回看过程、结果和下一步。"
-                : "想法、待办与工作进展，都有自己的位置。"
-            }}
-          </p>
-        </div>
-        <div class="notes-header-actions">
-          <button class="notes-button" type="button" @click="organizer = true">
-            <Layers :size="14" />分类与分组</button
-          ><button class="notes-button" type="button" @click="openSmartCapture">
-            <Sparkles :size="14" />智能记录</button
-          ><button
-            class="notes-button notes-primary"
-            type="button"
-            @click="newNote"
-          >
-            <Plus :size="15" />新建便签
-          </button>
-        </div>
-      </header>
-      <p v-if="error" class="notes-error" role="alert">
-        {{ error
-        }}<button class="notes-text" type="button" @click="error = ''">
-          收起
-        </button>
-      </p>
-      <section v-if="view === 'reminders'" class="notes-reminders">
-        <div class="notes-reminder-intro">
-          <Bell :size="18" /><span
-            >系统通知与应用内记录同步保存。应用完全退出时暂停通知，下次启动补发。</span
-          >
-        </div>
-        <article
-          v-for="event in state.events"
-          :key="event.id"
-          class="notes-event"
-          :class="{ 'notes-event-unread': !event.readAt }"
-        >
-          <Bell :size="17" />
-          <div class="notes-event-body">
-            <span>{{ event.title }}</span
-            ><span class="notes-caption"
-              >{{ formatDateTime(event.scheduledAt) }} ·
-              {{ eventLabels[event.status] || event.status }}</span
-            ><span v-if="event.error" class="notes-error">{{
-              event.error
-            }}</span>
-          </div>
-          <button
-            class="notes-button"
-            type="button"
-            @click="edit({ id: event.noteId })"
-          >
-            查看</button
-          ><button
-            v-if="!event.readAt"
-            class="notes-text"
-            type="button"
-            @click="reminderAction(event, 'read')"
-          >
-            已读</button
-          ><select
-            v-if="event.status !== 'cancelled'"
-            class="notes-select"
-            aria-label="稍后提醒"
-            @change="snooze(event, $event)"
-          >
-            <option value="">稍后提醒</option>
-            <option
-              v-for="minutes in [5, 10, 30, 60]"
-              :key="minutes"
-              :value="minutes"
-            >
-              {{ minutes }} 分钟后
-            </option></select
-          ><button
-            v-if="eventTask(event)"
-            class="notes-text"
-            type="button"
-            @click="completeEvent(event)"
-          >
-            完成任务
-          </button>
-        </article>
-        <div v-if="!state.events.length" class="notes-empty">
-          <Bell :size="30" /><span>还没有提醒记录</span
-          ><span class="notes-caption"
-            >为便签或待办设置时间，到点后会在这里留下记录。</span
-          >
-        </div>
-      </section>
+      <QuickNoteEditor
+        v-if="editing?.id"
+        ref="noteEditor"
+        :key="editing.id"
+        inline
+        :note="editing"
+        :folders="state.folders"
+        @close="editing = null"
+        @saved="saved"
+      />
       <template v-else>
-        <div v-if="view !== 'calendar'" class="notes-filters">
-          <label class="notes-search"
-            ><Search :size="15" /><input
-              v-model="search"
-              placeholder="搜索内容、标签、工作记录"
-              @input="scheduleLoad" /></label
-          ><select
-            v-model="categoryId"
-            class="notes-select"
-            aria-label="分类筛选"
-            @change="load"
-          >
-            <option value="">所有分类</option>
-            <option
-              v-for="folder in categories"
-              :key="folder.id"
-              :value="folder.id"
+        <header v-if="view !== 'calendar'" class="notes-header">
+          <div>
+            <span class="notes-eyebrow">QUICK NOTES / 工作与生活</span>
+            <h2 class="notes-title">{{ heading }}</h2>
+            <p class="notes-subtitle">
+              {{
+                view === "worklog"
+                  ? "沿着日期回看过程、结果和下一步。"
+                  : "想法、待办与工作进展，都有自己的位置。"
+              }}
+            </p>
+          </div>
+          <div class="notes-header-actions">
+            <button
+              class="notes-button"
+              type="button"
+              @click="organizer = true"
             >
-              {{ folder.name }}
-            </option></select
-          ><select
-            v-if="view !== 'calendar'"
-            v-model="groupBy"
-            class="notes-select"
-            aria-label="分组显示"
-          >
-            <option value="none">不分组</option>
-            <option value="groupId">按项目分组</option>
-            <option value="categoryId">按分类</option>
-            <option value="date">按日期</option>
-            <option value="status">按任务状态</option></select
-          ><select
-            v-if="view !== 'calendar'"
-            v-model="display"
-            class="notes-select"
-            aria-label="显示方式"
-          >
-            <option value="cards">便签卡片</option>
-            <option value="list">紧凑列表</option>
-            <option value="timeline">工作时间线</option></select
-          ><button
-            class="notes-icon"
-            type="button"
-            title="刷新便签"
-            @click="load"
-          >
-            <RefreshCw :size="15" />
-          </button>
-        </div>
-        <div v-if="view !== 'calendar'" class="notes-filter-dates">
-          <label>从 <input v-model="fromDate" type="date" /></label
-          ><label>至 <input v-model="toDate" type="date" /></label
-          ><select
-            v-model="typeFilter"
-            class="notes-select"
-            aria-label="记录类型"
-          >
-            <option value="">全部类型</option>
-            <option v-for="type in noteTypes" :key="type.id" :value="type.id">
-              {{ type.label }}
-            </option></select
-          ><span class="notes-caption">{{ filtered.length }} 条记录</span>
-        </div>
-        <div v-if="selected.size" class="notes-bulk">
-          <span>已选 {{ selected.size }} 条</span
-          ><button class="notes-text" type="button" @click="selectAll">
-            选择当前视图</button
-          ><select
-            class="notes-select"
-            aria-label="批量移动分组"
-            @change="moveSelected($event)"
-          >
-            <option value="">移动到…</option>
-            <option
-              v-for="folder in groups"
-              :key="folder.id"
-              :value="folder.id"
+              <Layers :size="14" />分类与分组</button
+            ><button
+              class="notes-button"
+              type="button"
+              @click="openSmartCapture"
             >
-              {{ folder.name }}
-            </option></select
-          ><button
-            class="notes-text"
-            type="button"
-            @click="exportNotes('markdown')"
-          >
-            <Download :size="14" />导出 Markdown</button
-          ><button
-            class="notes-text"
-            type="button"
-            @click="exportNotes('json')"
-          >
-            JSON</button
-          ><button class="notes-text" type="button" @click="summary">
-            生成工作小结</button
-          ><button class="notes-text" type="button" @click="classifySelected">
-            AI 补分类</button
-          ><button
-            class="notes-text"
-            type="button"
-            @click="
-              batchLifecycle(
-                view === 'trash' || view === 'archived' ? 'restore' : 'archive'
-              )
-            "
-          >
-            {{
-              view === "trash" || view === "archived" ? "恢复记录" : "归档"
-            }}</button
-          ><button
-            class="notes-text notes-danger"
-            type="button"
-            @click="batchLifecycle(view === 'trash' ? 'purge' : 'trash')"
-          >
-            {{ view === "trash" ? "彻底删除" : "删除" }}</button
-          ><button
-            class="notes-text"
-            type="button"
-            @click="selected = new Set()"
-          >
-            取消选择
+              <Sparkles :size="14" />智能记录</button
+            ><button
+              class="notes-button notes-primary"
+              type="button"
+              @click="newNote"
+            >
+              <Plus :size="15" />新建便签
+            </button>
+          </div>
+        </header>
+        <p v-if="error" class="notes-error" role="alert">
+          {{ error
+          }}<button class="notes-text" type="button" @click="error = ''">
+            收起
           </button>
-        </div>
-        <section
-          v-if="visibleCaptures.length && view === 'all' && !groupId"
-          class="notes-pending"
-        >
-          <div class="notes-section-title">
-            <Sparkles :size="14" />待整理 · 原文已保留
+        </p>
+        <section v-if="view === 'reminders'" class="notes-reminders">
+          <div class="notes-reminder-intro">
+            <Bell :size="18" /><span
+              >系统通知与应用内记录同步保存。应用完全退出时暂停通知，下次启动补发。</span
+            >
           </div>
           <article
-            v-for="capture in visibleCaptures"
-            :key="capture.id"
-            class="notes-pending-item"
+            v-for="event in state.events"
+            :key="event.id"
+            class="notes-event"
+            :class="{ 'notes-event-unread': !event.readAt }"
           >
-            <div>
-              <span>{{ capture.sourceText.slice(0, 70) }}</span
-              ><span class="notes-caption">{{
-                capture.status === "running" ? "AI 正在整理…" : capture.error
+            <Bell :size="17" />
+            <div class="notes-event-body">
+              <span>{{ event.title }}</span
+              ><span class="notes-caption"
+                >{{ formatDateTime(event.scheduledAt) }} ·
+                {{ eventLabels[event.status] || event.status }}</span
+              ><span v-if="event.error" class="notes-error">{{
+                event.error
               }}</span>
             </div>
             <button
-              v-if="capture.status === 'running'"
+              class="notes-button"
+              type="button"
+              @click="edit({ id: event.noteId })"
+            >
+              查看</button
+            ><button
+              v-if="!event.readAt"
               class="notes-text"
               type="button"
-              @click="cancelCapture(capture)"
+              @click="reminderAction(event, 'read')"
             >
-              取消</button
-            ><template v-else
-              ><button class="notes-text" type="button" @click="retry(capture)">
-                重试</button
-              ><button
-                class="notes-text"
-                type="button"
-                @click="recover(capture)"
-              >
-                保存原文</button
-              ><button
-                class="notes-text"
-                type="button"
-                @click="dismiss(capture)"
-              >
-                忽略
-              </button></template
+              已读</button
+            ><select
+              v-if="event.status !== 'cancelled'"
+              class="notes-select"
+              aria-label="稍后提醒"
+              @change="snooze(event, $event)"
             >
+              <option value="">稍后提醒</option>
+              <option
+                v-for="minutes in [5, 10, 30, 60]"
+                :key="minutes"
+                :value="minutes"
+              >
+                {{ minutes }} 分钟后
+              </option></select
+            ><button
+              v-if="eventTask(event)"
+              class="notes-text"
+              type="button"
+              @click="completeEvent(event)"
+            >
+              完成任务
+            </button>
           </article>
-        </section>
-        <div
-          class="notes-workspace"
-          :class="
-            view === 'calendar'
-              ? 'notes-display-calendar'
-              : `notes-display-${display}`
-          "
-          :aria-busy="loading"
-        >
-          <QuickNoteCalendar
-            v-if="view === 'calendar'"
-            :notes="filtered"
-            :reminders="state.reminders"
-            @open="edit"
-            @create="newNote"
-            @smart-record="openSmartCapture"
-          />
-          <template v-else>
-            <section
-              v-for="section in sections"
-              :key="section.id"
-              class="notes-group"
+          <div v-if="!state.events.length" class="notes-empty">
+            <Bell :size="30" /><span>还没有提醒记录</span
+            ><span class="notes-caption"
+              >为便签或待办设置时间，到点后会在这里留下记录。</span
             >
-              <h3 v-if="section.title" class="notes-group-title">
-                {{ section.title }}<span>{{ section.items.length }}</span>
-              </h3>
-              <div class="notes-cards">
-                <QuickNoteCard
-                  v-for="note in section.items"
-                  :key="note.id"
-                  :note="note"
-                  :folders="state.folders"
-                  :next-reminder="nextReminder(note.id)"
-                  :selected="selected.has(note.id)"
-                  @open="edit"
-                  @reminder="edit($event, true)"
-                  @select="toggleSelect"
-                  @pin="pin"
-                  @task="toggleTask"
-                />
-              </div>
-            </section>
-            <div v-if="!filtered.length && !loading" class="notes-empty">
-              <NotebookPen :size="34" /><span>{{
-                search ? "没有找到匹配的记录" : "从一条便签开始"
-              }}</span
-              ><span class="notes-caption"
-                >记住要做的事，也留下已经完成的事。</span
-              ><button class="notes-button" type="button" @click="newNote">
-                写一条便签
-              </button>
-            </div>
-          </template>
-          <p v-if="view === 'calendar' && state.hasMore" class="notes-caption">
-            日历显示已加载的记录，加载更多可查看其余事项。
-          </p>
-          <button
-            v-if="state.hasMore"
-            class="notes-button notes-load"
-            type="button"
-            @click="loadMore"
+          </div>
+        </section>
+        <template v-else>
+          <div
+            v-if="view !== 'calendar' && filtersVisible"
+            class="notes-filters"
           >
-            加载更多
-          </button>
-        </div>
+            <label class="notes-search"
+              ><Search :size="15" /><input
+                v-model="search"
+                ref="searchInput"
+                placeholder="搜索内容、标签、工作记录"
+                @input="scheduleLoad" /></label
+            ><select
+              v-model="categoryId"
+              class="notes-select"
+              aria-label="分类筛选"
+              @change="load"
+            >
+              <option value="">所有分类</option>
+              <option
+                v-for="folder in categories"
+                :key="folder.id"
+                :value="folder.id"
+              >
+                {{ folder.name }}
+              </option></select
+            ><select
+              v-if="view !== 'calendar'"
+              v-model="groupBy"
+              class="notes-select"
+              aria-label="分组显示"
+            >
+              <option value="none">不分组</option>
+              <option value="groupId">按项目分组</option>
+              <option value="categoryId">按分类</option>
+              <option value="date">按日期</option>
+              <option value="status">按任务状态</option></select
+            ><select
+              v-if="view !== 'calendar'"
+              v-model="display"
+              class="notes-select"
+              aria-label="显示方式"
+            >
+              <option value="cards">便签卡片</option>
+              <option value="list">紧凑列表</option>
+              <option value="timeline">工作时间线</option></select
+            ><button
+              class="notes-icon"
+              type="button"
+              title="刷新便签"
+              @click="load"
+            >
+              <RefreshCw :size="15" />
+            </button>
+          </div>
+          <div
+            v-if="view !== 'calendar' && filtersVisible"
+            class="notes-filter-dates"
+          >
+            <label>从 <input v-model="fromDate" type="date" /></label
+            ><label>至 <input v-model="toDate" type="date" /></label
+            ><select
+              v-model="typeFilter"
+              class="notes-select"
+              aria-label="记录类型"
+            >
+              <option value="">全部类型</option>
+              <option v-for="type in noteTypes" :key="type.id" :value="type.id">
+                {{ type.label }}
+              </option></select
+            ><span class="notes-caption">{{ filtered.length }} 条记录</span>
+          </div>
+          <div v-if="selected.size" class="notes-bulk">
+            <span>已选 {{ selected.size }} 条</span
+            ><button class="notes-text" type="button" @click="selectAll">
+              选择当前视图</button
+            ><select
+              class="notes-select"
+              aria-label="批量移动分组"
+              @change="moveSelected($event)"
+            >
+              <option value="">移动到…</option>
+              <option
+                v-for="folder in groups"
+                :key="folder.id"
+                :value="folder.id"
+              >
+                {{ folder.name }}
+              </option></select
+            ><button
+              class="notes-text"
+              type="button"
+              @click="exportNotes('markdown')"
+            >
+              <Download :size="14" />导出 Markdown</button
+            ><button
+              class="notes-text"
+              type="button"
+              @click="exportNotes('json')"
+            >
+              JSON</button
+            ><button class="notes-text" type="button" @click="summary">
+              生成工作小结</button
+            ><button class="notes-text" type="button" @click="classifySelected">
+              AI 补分类</button
+            ><button
+              class="notes-text"
+              type="button"
+              @click="
+                batchLifecycle(
+                  view === 'trash' || view === 'archived'
+                    ? 'restore'
+                    : 'archive'
+                )
+              "
+            >
+              {{
+                view === "trash" || view === "archived" ? "恢复记录" : "归档"
+              }}</button
+            ><button
+              class="notes-text notes-danger"
+              type="button"
+              @click="batchLifecycle(view === 'trash' ? 'purge' : 'trash')"
+            >
+              {{ view === "trash" ? "彻底删除" : "删除" }}</button
+            ><button
+              class="notes-text"
+              type="button"
+              @click="selected = new Set()"
+            >
+              取消选择
+            </button>
+          </div>
+          <section
+            v-if="visibleCaptures.length && view === 'all' && !groupId"
+            class="notes-pending"
+          >
+            <div class="notes-section-title">
+              <Sparkles :size="14" />待整理 · 原文已保留
+            </div>
+            <article
+              v-for="capture in visibleCaptures"
+              :key="capture.id"
+              class="notes-pending-item"
+            >
+              <div>
+                <span>{{ capture.sourceText.slice(0, 70) }}</span
+                ><span class="notes-caption">{{
+                  capture.status === "running"
+                    ? "AI 正在整理…"
+                    : capture.status === "preview"
+                      ? "AI 已整理，待确认保存"
+                      : capture.error
+                }}</span>
+              </div>
+              <button
+                v-if="capture.status === 'running'"
+                class="notes-text"
+                type="button"
+                @click="cancelCapture(capture)"
+              >
+                取消</button
+              ><template v-else
+                ><button
+                  class="notes-text"
+                  type="button"
+                  @click="retry(capture)"
+                >
+                  重试</button
+                ><button
+                  class="notes-text"
+                  type="button"
+                  @click="recover(capture)"
+                >
+                  保存原文</button
+                ><button
+                  class="notes-text"
+                  type="button"
+                  @click="dismiss(capture)"
+                >
+                  忽略
+                </button></template
+              >
+            </article>
+          </section>
+          <div
+            class="notes-workspace"
+            :class="
+              view === 'calendar'
+                ? 'notes-display-calendar'
+                : `notes-display-${display}`
+            "
+            :aria-busy="loading"
+          >
+            <QuickNoteCalendar
+              v-if="view === 'calendar'"
+              :notes="filtered"
+              :reminders="state.reminders"
+              @open="edit"
+              @create="newNote"
+              @smart-record="openSmartCapture"
+            />
+            <template v-else>
+              <section
+                v-for="section in sections"
+                :key="section.id"
+                class="notes-group"
+              >
+                <h3 v-if="section.title" class="notes-group-title">
+                  {{ section.title }}<span>{{ section.items.length }}</span>
+                </h3>
+                <div class="notes-cards">
+                  <QuickNoteCard
+                    v-for="note in section.items"
+                    :key="note.id"
+                    :note="note"
+                    :folders="state.folders"
+                    :next-reminder="nextReminder(note.id)"
+                    :selected="selected.has(note.id)"
+                    @open="edit"
+                    @reminder="edit($event, true)"
+                    @select="toggleSelect"
+                    @pin="pin"
+                    @task="toggleTask"
+                  />
+                </div>
+              </section>
+              <div v-if="!filtered.length && !loading" class="notes-empty">
+                <NotebookPen :size="34" /><span>{{
+                  search ? "没有找到匹配的记录" : "从一条便签开始"
+                }}</span
+                ><span class="notes-caption"
+                  >记住要做的事，也留下已经完成的事。</span
+                ><button class="notes-button" type="button" @click="newNote">
+                  写一条便签
+                </button>
+              </div>
+            </template>
+            <p
+              v-if="view === 'calendar' && state.hasMore"
+              class="notes-caption"
+            >
+              日历显示已加载的记录，加载更多可查看其余事项。
+            </p>
+            <button
+              v-if="state.hasMore"
+              class="notes-button notes-load"
+              type="button"
+              @click="loadMore"
+            >
+              加载更多
+            </button>
+          </div>
+        </template>
       </template>
     </main>
-    <BaseModal
-      v-show="smartCaptureOpen"
-      class="notes-capture-modal"
-      title="智能记录"
-      description="记下原始想法，让 AI 整理成便签、分类和待办。"
+    <QuickNoteSmartCapture
+      :open="smartCaptureOpen"
+      :folders="state.folders"
+      :providers="providers"
+      :codex-accounts="codexAccounts"
+      :runtime-models="runtimeModels"
       @close="smartCaptureOpen = false"
-      @keydown.esc.stop="smartCaptureOpen = false"
-    >
-      <section class="notes-composer">
-        <textarea
-          ref="captureInput"
-          v-model="draft"
-          class="notes-quick-input"
-          rows="6"
-          placeholder="记下今天的进展，或者输入：明天下午三点提醒我回归测试…"
-          aria-label="快速记录"
-          maxlength="100000"
-        ></textarea>
-        <div class="notes-composer-actions">
-          <span class="notes-caption">直接保存原文，或让 AI 整理分类与待办</span
-          ><select
-            v-model="useCustomModel"
-            class="notes-select"
-            aria-label="速记模型模式"
-          >
-            <option :value="false">跟随助手模型</option>
-            <option :value="true">单独选择模型</option></select
-          ><AssistantModelSelect
-            v-if="useCustomModel"
-            :settings="model"
-            :providers="providers"
-            :codex-accounts="codexAccounts"
-            :runtime-models="runtimeModels"
-            :persist="false"
-            @change="model = $event"
-            @error="error = $event"
-          /><QuickNoteCapture
-            :draft="draft"
-            :model="model"
-            :follow-model="!useCustomModel"
-            surface="tool"
-            @captured="clearCapturedDraft"
-          /><button
-            class="notes-button"
-            type="button"
-            :disabled="!draft.trim()"
-            @click="manualDraft"
-          >
-            直接记录
-          </button>
-        </div>
-      </section>
-      <p v-if="error" class="notes-capture-error" role="alert">{{ error }}</p>
-    </BaseModal>
+      @saved="load()"
+    />
     <QuickNoteEditor
-      v-if="editing"
+      v-if="editing && !editing.id"
       ref="noteEditor"
       :key="editing.id || 'new'"
       :note="editing"
@@ -563,7 +572,8 @@ import {
   Download,
   Folder,
   HardDrive,
-  Inbox,
+  Mail,
+  ListFilter,
   Layers,
   ListTodo,
   NotebookPen,
@@ -576,10 +586,9 @@ import {
   Trash2
 } from "lucide-vue-next"
 import BaseModal from "@/components/BaseModal.vue"
-import AssistantModelSelect from "@/features/assistant/components/AssistantModelSelect.vue"
+import QuickNoteSmartCapture from "./components/QuickNoteSmartCapture.vue"
 import QuickNoteCard from "./components/QuickNoteCard.vue"
 import QuickNoteEditor from "./components/QuickNoteEditor.vue"
-import QuickNoteCapture from "./components/QuickNoteCapture.vue"
 import QuickNoteCalendar from "./components/QuickNoteCalendar.vue"
 import { quickNotesApi } from "@/api/modules/quick-notes"
 import { noteTypes } from "./constant"
@@ -605,11 +614,9 @@ const typeFilter = ref("")
 const fromDate = ref("")
 const toDate = ref("")
 const search = ref("")
-const draft = ref("")
+const searchInput = ref(null)
+const filtersVisible = ref(true)
 const smartCaptureOpen = ref(false)
-const captureInput = ref(null)
-const model = ref({})
-const useCustomModel = ref(false)
 const selected = ref(new Set())
 const loading = ref(false)
 const error = ref("")
@@ -627,7 +634,7 @@ const folderDraft = ref({
 const views = [
   { id: "all", label: "全部记录", icon: StickyNote },
   { id: "calendar", label: "日历日程", icon: CalendarDays },
-  { id: "inbox", label: "收件箱", icon: Inbox },
+  { id: "inbox", label: "收件箱", icon: Mail },
   { id: "todo", label: "待办事项", icon: ListTodo },
   { id: "today", label: "今日提醒", icon: Bell },
   { id: "overdue", label: "已逾期", icon: Clock3 },
@@ -636,6 +643,14 @@ const views = [
   { id: "reminders", label: "提醒中心", icon: Bell },
   { id: "archived", label: "已归档", icon: Archive },
   { id: "trash", label: "回收站", icon: Trash2 }
+]
+const navSections = [
+  { title: "工作区", ids: ["all", "calendar", "inbox", "todo"] },
+  { title: "提醒", ids: ["today", "overdue"] },
+  {
+    title: "归档",
+    ids: ["worklog", "completed", "reminders", "archived", "trash"]
+  }
 ]
 const eventLabels = {
   pending: "等待通知",
@@ -752,7 +767,6 @@ let unsubscribe
 let unsubscribeOpen
 let searchTimer
 let recoverCapture = null
-let manualSnapshot = null
 // 模块事件只读取便签数据；序号保护筛选切换和多窗口更新不会被旧请求覆盖。
 async function load(more = false) {
   const current = ++sequence
@@ -787,13 +801,32 @@ function scheduleLoad() {
 function loadMore() {
   load(true)
 }
+// 顶部工具栏只控制当前便签工作区，其他工具保留各自的交互。
+async function focusSearch() {
+  selectView("all")
+  filtersVisible.value = true
+  await nextTick()
+  searchInput.value.focus()
+}
+function toggleFilters() {
+  if (view.value === "calendar" || editing.value) {
+    selectView("all")
+    filtersVisible.value = true
+  } else filtersVisible.value = !filtersVisible.value
+}
+function openOrganizer() {
+  organizer.value = true
+}
+defineExpose({ refresh: load, focusSearch, toggleFilters, openOrganizer })
 function selectView(id) {
+  editing.value = null
   view.value = id
   groupId.value = ""
   selected.value = new Set()
   load()
 }
 function selectGroup(id) {
+  editing.value = null
   view.value = "all"
   groupId.value = id
   selected.value = new Set()
@@ -801,7 +834,6 @@ function selectGroup(id) {
 }
 function newNote(occurredOn) {
   recoverCapture = null
-  manualSnapshot = null
   editing.value = {
     groupId: groupId.value || "inbox",
     type: view.value === "worklog" ? "worklog" : "note",
@@ -809,24 +841,12 @@ function newNote(occurredOn) {
     occurredOn: typeof occurredOn === "string" ? occurredOn : ""
   }
 }
-// 弹框保留输入与整理组件实例，关闭后草稿和后台整理继续保留。
-async function openSmartCapture() {
+// 智能记录由本模块的预览组件处理，窗口关闭不取消后台分析。
+function openSmartCapture() {
   smartCaptureOpen.value = true
-  await nextTick()
-  captureInput.value.focus()
-}
-function manualDraft() {
-  recoverCapture = null
-  manualSnapshot = draft.value
-  smartCaptureOpen.value = false
-  editing.value = { content: draft.value, groupId: groupId.value || "inbox" }
-}
-function clearCapturedDraft(snapshot) {
-  if (snapshot && draft.value === snapshot) draft.value = ""
 }
 async function edit(note, reminder = false) {
   recoverCapture = null
-  manualSnapshot = null
   try {
     editing.value = await quickNotesApi.invoke("detail", { id: note.id })
     if (reminder) {
@@ -838,9 +858,6 @@ async function edit(note, reminder = false) {
   }
 }
 async function saved() {
-  if (manualSnapshot !== null && draft.value === manualSnapshot)
-    draft.value = ""
-  manualSnapshot = null
   editing.value = null
   if (recoverCapture) {
     await dismiss(recoverCapture)
@@ -943,8 +960,7 @@ async function summary() {
   try {
     await quickNotesApi.invoke("summary", {
       ids: [...selected.value],
-      requestId: crypto.randomUUID(),
-      model: useCustomModel.value ? model.value : undefined
+      requestId: crypto.randomUUID()
     })
     view.value = "all"
     groupId.value = ""
@@ -959,8 +975,7 @@ async function classifySelected() {
     for (const id of selected.value)
       await quickNotesApi.invoke("classify", {
         noteId: id,
-        requestId: crypto.randomUUID(),
-        model: useCustomModel.value ? model.value : undefined
+        requestId: crypto.randomUUID()
       })
     await load()
   } catch (failure) {
@@ -972,7 +987,6 @@ async function retry(capture) {
     await quickNotesApi.invoke("capture", {
       text: capture.sourceText,
       requestId: crypto.randomUUID(),
-      model: useCustomModel.value ? model.value : undefined,
       source: {
         type: "retry",
         captureId: capture.id,
@@ -1064,13 +1078,7 @@ watch([groupBy, display], () => {
 })
 onMounted(async () => {
   try {
-    const stop = await quickNotesApi.onChanged(async () => {
-      if (!useCustomModel.value) {
-        const options = await quickNotesApi.invoke("options")
-        if (!disposed) model.value = options.model
-      }
-      await load()
-    })
+    const stop = await quickNotesApi.onChanged(load)
     if (disposed) return stop()
     unsubscribe = stop
     unsubscribeOpen = await quickNotesApi.onOpen((note) => {
@@ -1083,7 +1091,6 @@ onMounted(async () => {
     }
     await load()
     const options = await quickNotesApi.invoke("options")
-    if (!disposed) model.value = options.model
     if (options.openNoteId) await edit({ id: options.openNoteId })
     else if (typeof options.draft === "string")
       editing.value = { content: options.draft }
@@ -1103,47 +1110,59 @@ onBeforeUnmount(() => {
 .quick-notes {
   display: flex;
   flex: 1;
+  gap: 16px;
   min-height: 0;
   height: 100%;
   overflow: hidden;
   color: var(--color-text);
   font-size: 13px;
+  background: var(--color-panel-soft);
+  padding: 0 10px 12px 0;
   .notes-button,
   .notes-icon,
   .notes-text {
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    gap: 6px;
+    gap: 7px;
     flex: none;
-    padding: 7px 10px;
+    padding: 9px 13px;
     border: 1px solid var(--color-line);
-    border-radius: 7px;
+    border-radius: 10px;
     background: var(--color-panel);
     color: var(--color-text);
     font: inherit;
+    font-size: 12px;
     cursor: pointer;
+    white-space: nowrap;
+    transition:
+      border-color 150ms,
+      background 150ms;
+    &:hover {
+      border-color: var(--color-primary);
+      color: var(--color-primary);
+    }
     &:disabled {
       opacity: 0.5;
       cursor: default;
     }
   }
   .notes-primary {
-    background: var(--color-primary-solid);
-    border-color: var(--color-primary-solid);
+    background: linear-gradient(140deg, #3d7dbc, #245b96);
+    border-color: #3471ae;
     color: white;
+    box-shadow: 0 3px 8px #22548a12;
+    &:hover {
+      color: white;
+    }
   }
-  .notes-icon,
+  .notes-icon {
+    padding: 8px;
+  }
   .notes-text {
     padding: 4px;
     border: 0;
     background: transparent;
-    color: var(--color-text-muted);
-    &:hover {
-      color: var(--color-primary);
-    }
-  }
-  .notes-text {
     color: var(--color-primary);
     font-size: 12px;
   }
@@ -1156,11 +1175,11 @@ onBeforeUnmount(() => {
     line-height: 1.7;
   }
   .notes-select {
-    min-width: 90px;
-    max-width: 220px;
+    min-width: 100px;
+    max-width: 200px;
     border: 1px solid var(--color-line);
-    border-radius: 6px;
-    padding: 6px 8px;
+    border-radius: 10px;
+    padding: 9px 11px;
     background: var(--color-panel);
     color: var(--color-text);
     font: inherit;
@@ -1169,109 +1188,119 @@ onBeforeUnmount(() => {
   .notes-sidebar {
     display: flex;
     flex-direction: column;
-    flex: 0 0 185px;
-    gap: 18px;
-    padding: 23px 13px 12px;
-    border-right: 1px solid var(--color-line);
+    flex: 0 0 202px;
+    min-height: 0;
+    gap: 14px;
+    padding: 20px 13px 10px;
+    border-radius: 0 20px 20px 0;
     overflow: auto;
-    background: var(--color-panel-soft);
-    .notes-brand {
-      display: flex;
-      align-items: center;
-      gap: 10px;
-      padding: 0 8px 8px;
-      color: var(--color-primary);
-      :deep(div) {
-        display: flex;
-        flex-direction: column;
-        gap: 5px;
-      }
-      .notes-brand-title {
-        color: var(--color-text);
-        font-size: 16px;
-      }
-      .notes-brand-caption {
-        color: var(--color-text-muted);
-        font-size: 10px;
-      }
-    }
-    .notes-nav {
-      display: flex;
-      flex-direction: column;
-      gap: 3px;
-      .notes-nav-item {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        border: 1px solid transparent;
-        border-radius: 7px;
-        padding: 10px;
-        font: inherit;
-        font-size: 12px;
-        text-align: left;
-        color: var(--color-text-muted);
-        background: transparent;
-        cursor: pointer;
-        &:hover {
-          background: var(--color-panel);
-        }
-        &.notes-nav-active {
-          background: var(--color-panel);
-          color: var(--color-primary);
-          border-color: var(--color-line);
-        }
-        .notes-count {
-          margin-left: auto;
-          border-radius: 20px;
-          background: var(--color-primary-soft);
-          padding: 0 5px;
-        }
+    background: linear-gradient(
+      135deg,
+      var(--color-panel-soft),
+      var(--color-primary-soft)
+    );
+    .notes-nav-section {
+      padding-bottom: 14px;
+      border-bottom: 1px solid var(--color-line);
+      &:last-of-type {
+        border-bottom: 0;
       }
     }
     .notes-sidebar-heading {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      padding: 0 10px;
-      color: var(--color-text-muted);
-      font-size: 11px;
+      gap: 10px;
+      padding: 6px 13px 12px;
+      font-size: 13px;
+    }
+    .notes-nav {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      .notes-nav-item {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-height: 39px;
+        padding: 9px 13px;
+        border: 1px solid transparent;
+        border-radius: 10px;
+        background: transparent;
+        color: var(--color-text);
+        text-align: left;
+        font: inherit;
+        font-size: 13px;
+        cursor: pointer;
+        &:hover {
+          background: var(--color-panel);
+        }
+        &.notes-nav-active {
+          color: var(--color-primary);
+          background: color-mix(
+            in srgb,
+            var(--color-primary) 13%,
+            var(--color-panel)
+          );
+        }
+        .notes-count {
+          margin-left: auto;
+          font-size: 10px;
+          border-radius: 20px;
+          background: var(--color-primary-soft);
+          padding: 2px 6px;
+        }
+      }
     }
     .notes-sidebar-foot {
       display: flex;
       align-items: center;
       gap: 5px;
-      margin-top: auto;
-      padding: 8px 0;
+      padding: 10px 5px;
+      margin: auto 0 0;
       color: var(--color-text-muted);
-      font-size: 10px;
+      font-size: 9px;
     }
   }
   .notes-main {
     display: flex;
+    flex-direction: column;
     flex: 1;
     min-width: 0;
     min-height: 0;
-    flex-direction: column;
-    overflow: auto;
-    padding: 24px 25px 20px;
     gap: 18px;
+    padding: 23px 25px;
+    border: 1px solid var(--color-line);
+    border-radius: 20px;
+    background: linear-gradient(
+      125deg,
+      var(--color-panel),
+      var(--color-panel-soft)
+    );
+    overflow: auto;
     &.notes-main-calendar {
+      padding: 0;
+      border: 0;
+      border-radius: 0;
       overflow: hidden;
+      background: transparent;
     }
     .notes-header {
       display: flex;
       align-items: center;
       justify-content: space-between;
       flex: none;
-      gap: 16px;
+      gap: 15px;
+      padding: 0 0 2px;
       .notes-eyebrow {
-        color: var(--color-text-muted);
-        font-size: 9px;
+        font-size: 10px;
         letter-spacing: 1.6px;
+        color: var(--color-text-muted);
       }
       .notes-title {
-        margin: 7px 0;
-        font-size: 23px;
+        margin: 10px 0 8px;
+        font-size: 27px;
+        line-height: 1.2;
       }
       .notes-subtitle {
         margin: 0;
@@ -1280,7 +1309,7 @@ onBeforeUnmount(() => {
       }
       .notes-header-actions {
         display: flex;
-        gap: 8px;
+        gap: 10px;
       }
     }
     .notes-error {
@@ -1290,48 +1319,50 @@ onBeforeUnmount(() => {
       margin: 0;
       color: var(--color-danger);
       font-size: 12px;
-      line-height: 1.7;
     }
     .notes-filters {
       display: flex;
       align-items: center;
       flex: none;
-      gap: 8px;
+      gap: 10px;
       .notes-search {
         display: flex;
         align-items: center;
-        gap: 8px;
         flex: 1;
+        min-width: 100px;
+        gap: 9px;
+        padding: 9px 12px;
         border: 1px solid var(--color-line);
-        border-radius: 7px;
-        padding: 7px 9px;
+        border-radius: 11px;
         color: var(--color-text-muted);
+        background: var(--color-panel);
         :deep(input) {
+          flex: 1;
+          min-width: 0;
           width: 100%;
           border: 0;
           outline: 0;
-          background: transparent;
-          color: var(--color-text);
           font: inherit;
           font-size: 12px;
+          background: transparent;
+          color: var(--color-text);
         }
       }
     }
     .notes-filter-dates {
       display: flex;
-      gap: 12px;
       align-items: center;
       flex: none;
-      margin-top: -7px;
-      font-size: 11px;
+      gap: 13px;
+      font-size: 12px;
       color: var(--color-text-muted);
       :deep(input) {
-        border: 0;
-        border-bottom: 1px solid var(--color-line);
-        padding: 3px;
-        color: var(--color-text-muted);
+        padding: 8px;
+        border: 1px solid var(--color-line);
+        border-radius: 9px;
         font: inherit;
-        background: transparent;
+        color: var(--color-text-muted);
+        background: var(--color-panel);
       }
       .notes-caption {
         margin-left: auto;
@@ -1339,44 +1370,50 @@ onBeforeUnmount(() => {
     }
     .notes-bulk {
       display: flex;
-      align-items: center;
       flex-wrap: wrap;
+      align-items: center;
       gap: 12px;
       padding: 8px 12px;
       background: var(--color-primary-soft);
-      border-radius: 7px;
-      flex: none;
+      border-radius: 9px;
     }
     .notes-pending {
       flex: none;
-      padding: 12px;
+      padding: 15px 17px;
       border: 1px solid var(--color-warning-line);
-      border-radius: 8px;
+      border-radius: 12px;
+      background: linear-gradient(
+        115deg,
+        var(--color-warning-soft),
+        var(--color-panel)
+      );
       .notes-section-title {
         display: flex;
-        gap: 7px;
+        gap: 8px;
         align-items: center;
         color: var(--color-warning);
-        font-size: 12px;
+        font-size: 13px;
       }
       .notes-pending-item {
         display: flex;
-        gap: 10px;
         align-items: center;
-        padding-top: 10px;
+        gap: 12px;
+        padding-top: 12px;
         :deep(div) {
           flex: 1;
+          min-width: 0;
           display: flex;
           flex-direction: column;
-          gap: 3px;
+          gap: 4px;
           font-size: 12px;
+          overflow-wrap: anywhere;
         }
       }
     }
     .notes-workspace {
       display: flex;
       flex-direction: column;
-      gap: 22px;
+      gap: 20px;
       &.notes-display-calendar {
         flex: 1;
         min-height: 0;
@@ -1386,18 +1423,18 @@ onBeforeUnmount(() => {
           display: flex;
           align-items: center;
           gap: 9px;
-          margin: 0 0 12px;
+          margin: 0 0 13px;
           font-size: 13px;
           :deep(span) {
-            color: var(--color-text-muted);
             font-size: 10px;
+            color: var(--color-text-muted);
           }
         }
         .notes-cards {
           display: flex;
           flex-wrap: wrap;
           align-items: flex-start;
-          gap: 14px;
+          gap: 16px;
         }
       }
       &.notes-display-list {
@@ -1408,7 +1445,6 @@ onBeforeUnmount(() => {
               width: 100%;
               max-width: none;
               flex: auto;
-              box-sizing: border-box;
             }
             :deep(.note-card-body) {
               -webkit-line-clamp: 2;
@@ -1418,20 +1454,8 @@ onBeforeUnmount(() => {
       }
       &.notes-display-timeline {
         .notes-group {
-          border-left: 1px solid var(--color-line-strong);
           padding-left: 20px;
-          position: relative;
-          &::before {
-            content: "";
-            position: absolute;
-            width: 7px;
-            height: 7px;
-            background: var(--color-primary);
-            border: 3px solid var(--color-panel);
-            border-radius: 50%;
-            left: -7px;
-            top: 1px;
-          }
+          border-left: 1px solid var(--color-line-strong);
         }
       }
       .notes-load {
@@ -1441,12 +1465,11 @@ onBeforeUnmount(() => {
     }
     .notes-empty {
       display: flex;
-      flex: 1;
-      min-height: 220px;
       flex-direction: column;
       align-items: center;
       justify-content: center;
-      gap: 14px;
+      min-height: 220px;
+      gap: 13px;
       color: var(--color-text-muted);
     }
     .notes-reminders {
@@ -1454,8 +1477,8 @@ onBeforeUnmount(() => {
         display: flex;
         align-items: center;
         gap: 10px;
-        padding: 13px;
-        border-radius: 8px;
+        padding: 15px;
+        border-radius: 10px;
         background: var(--color-primary-soft);
         color: var(--color-primary);
         font-size: 12px;
@@ -1463,7 +1486,7 @@ onBeforeUnmount(() => {
       .notes-event {
         display: flex;
         align-items: center;
-        gap: 14px;
+        gap: 13px;
         padding: 18px 10px;
         border-bottom: 1px solid var(--color-line);
         &.notes-event-unread {
@@ -1471,50 +1494,11 @@ onBeforeUnmount(() => {
         }
         .notes-event-body {
           display: flex;
-          flex: 1;
           flex-direction: column;
+          flex: 1;
           gap: 5px;
         }
       }
-    }
-  }
-  .notes-capture-modal {
-    :deep(.base-modal__panel) {
-      width: 760px;
-    }
-    .notes-composer {
-      border: 1px solid var(--color-line);
-      border-left: 3px solid #b68c3b;
-      border-radius: 10px;
-      padding: 13px 15px;
-      .notes-quick-input {
-        width: 100%;
-        min-height: 150px;
-        box-sizing: border-box;
-        padding: 0;
-        border: 0;
-        outline: 0;
-        resize: vertical;
-        background: transparent;
-        color: var(--color-text);
-        font: inherit;
-        line-height: 1.8;
-      }
-      .notes-composer-actions {
-        display: flex;
-        flex-wrap: wrap;
-        align-items: center;
-        gap: 8px;
-        margin-top: 10px;
-        .notes-caption {
-          margin-right: auto;
-        }
-      }
-    }
-    .notes-capture-error {
-      margin: 12px 0 0;
-      color: var(--color-danger);
-      font-size: 12px;
     }
   }
   .notes-organizer {
@@ -1529,7 +1513,7 @@ onBeforeUnmount(() => {
         align-items: center;
         gap: 9px;
         width: 100%;
-        padding: 10px;
+        padding: 11px;
         border: 0;
         border-bottom: 1px solid var(--color-line);
         background: transparent;
@@ -1549,12 +1533,13 @@ onBeforeUnmount(() => {
       gap: 10px;
       :deep(input:not([type="checkbox"])) {
         flex: 1;
-        padding: 8px;
+        min-width: 0;
+        padding: 9px;
         border: 1px solid var(--color-line);
-        border-radius: 6px;
-        font: inherit;
-        background: var(--color-panel);
+        border-radius: 7px;
         color: var(--color-text);
+        background: var(--color-panel);
+        font: inherit;
       }
     }
     .notes-error {

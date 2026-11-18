@@ -22,6 +22,7 @@ fn model_folder_ids_require_matching_kind_and_names_can_reuse_aliases() {
 fn capture_uses_real_model_proxy_for_chat_responses_and_claude() {
     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
         for (cli,api,endpoint) in [("codex","chat","/v1/chat/completions"),("codex","responses","/v1/responses"),("claude","messages","/v1/messages")] {
+          for preview in [false,true] {
             let root=std::env::temp_dir().join(format!("quick-note-ai-{}",uuid::Uuid::new_v4()));
             let paths=crate::core::paths::resolve_app_paths(&root);
             store::initialize(&paths).unwrap();
@@ -44,14 +45,20 @@ fn capture_uses_real_model_proxy_for_chat_responses_and_claude() {
                 })).await.unwrap();
             });
             let context=AssistantContext{paths:paths.clone(),workspace_root:root.clone(),resource_dir:root.clone(),cli_targets:json!([]),settings:AssistantSettings{target_id:"test".into(),model:"notes-model".into(),protocol:if api=="messages"{"auto"}else{api}.into(),..Default::default()},local_models:Default::default()};
-            let input=json!({"requestId":"capture","text":"明天提醒我回归测试","source":{"timeZone":"Asia/Shanghai"}});
+            let input=json!({"requestId":"capture","text":"明天提醒我回归测试","source":{"timeZone":"Asia/Shanghai"},"preview":preview});
             let capture=store::capture(&paths,&input,&json!({"model":"notes-model"})).unwrap();
-            let note=generate_and_save(&context,&capture,&input).await.unwrap();
+            let generated=generate_and_save(&context,&capture,&input).await.unwrap();
+            let note=if preview {
+                assert_eq!(store::capture_state(&paths,"capture").unwrap()["status"],"preview");
+                assert!(store::list(&paths,&json!({})).unwrap()["notes"].as_array().unwrap().is_empty());
+                store::dispatch(&paths,"capture-save",&json!({"id":capture["id"],"note":generated})).unwrap()
+            }else{generated};
             assert_eq!(note["groupId"],"inbox");assert_eq!(note["categoryId"],"debugging");
             assert_eq!(note["createdAt"],capture["capturedAt"]);
             assert_eq!(store::detail(&paths,store::text(&note,"id")).unwrap()["reminders"][0]["nextFireAt"],future);
             server.abort();
             assert_eq!(root.parent(),Some(std::env::temp_dir().as_path()));std::fs::remove_dir_all(root).unwrap();
+          }
         }
     });
 }
