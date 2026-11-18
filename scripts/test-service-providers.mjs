@@ -8,7 +8,7 @@ import {
   parse
 } from "@vue/compiler-sfc"
 import { transformSync } from "esbuild"
-import { createRenderer, createSSRApp, h, nextTick, reactive } from "vue"
+import { createRenderer, createSSRApp, h, nextTick, reactive, ref } from "vue"
 import { renderToString } from "@vue/server-renderer"
 
 const require = createRequire(import.meta.url)
@@ -857,22 +857,24 @@ assert.ok(!richApiHtml.includes("other-provider-model"))
 // 全局费用只作为展示投影，服务商编辑仍保留空报价。
 const inheritedApiState = {
   ...state,
-  models: [{
-    ...state.models[0],
-    inputPriceMicros: null,
-    cachedInputPriceMicros: null,
-    outputPriceMicros: null,
-    currency: "USD",
-    effectivePricing: {
-      source: "global",
-      inputPriceMicros: 7500000,
-      cachedInputPriceMicros: 750000,
-      outputPriceMicros: 15000000,
-      currency: "CNY"
+  models: [
+    {
+      ...state.models[0],
+      inputPriceMicros: null,
+      cachedInputPriceMicros: null,
+      outputPriceMicros: null,
+      currency: "USD",
+      effectivePricing: {
+        source: "global",
+        inputPriceMicros: 7500000,
+        cachedInputPriceMicros: 750000,
+        outputPriceMicros: 15000000,
+        currency: "CNY"
+      }
     }
-  }]
+  ]
 }
-const inheritedApiHtml = await renderCenter(inheritedApiState, value =>
+const inheritedApiHtml = await renderCenter(inheritedApiState, (value) =>
   value.openProviderDetail(inheritedApiState.providers[0])
 )
 for (const text of ["继承全局费用", "7.5 CNY", "0.75 CNY", "15 CNY"]) {
@@ -1762,8 +1764,7 @@ const settle = async () => {
 calls.length = 0
 liveApp.mount({})
 await settle()
-assert.ok(calls.some((item) => item.action === "refresh-agents"))
-assert.ok(!calls.some((item) => item.action === "refresh-quota"))
+assert.equal(calls.length, 0, "进入 Provider 使用已有状态，不自动触发刷新")
 liveBindings.providerTab.value = "api"
 await settle()
 await liveBindings.refresh()
@@ -1809,6 +1810,11 @@ assert.deepEqual(
 )
 assert.equal(liveBindings.refreshingQuotaIds.value.size, 0)
 assert.ok(messages.some((message) => message.includes("模拟额度接口失败")))
+await liveBindings.refresh()
+await settle()
+assert.equal(calls.filter((item) => item.action === "refresh-quota").length, 2)
+await liveBindings.refresh(true)
+assert.equal(calls.filter((item) => item.action === "refresh-quota").length, 4)
 liveBindings.providerTab.value = "api"
 await settle()
 quotaHandler = () =>
@@ -1957,6 +1963,14 @@ for (const { filename, code } of selectorComponents) {
   const compiled = { exports: {} }
   new Function("require", "module", "exports", code)(
     (name) => {
+      // 此处验证官方模型归属，本地模型列表使用空缓存，避免调用桌面接口。
+      if (name === "@/features/assistant/local-models")
+        return {
+          useAssistantLocalModels: () => ({
+            localModels: ref([]),
+            localModelsError: ref("")
+          })
+        }
       if (name.startsWith("@/"))
         return name.endsWith(".vue") ? localRequire(name) : {}
       if (name.endsWith(".css") || name.endsWith("/style/css")) return {}

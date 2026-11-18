@@ -529,6 +529,7 @@ pub async fn fetch_models(paths: &AppPaths, value: &Value) -> Result<Value, Mana
     let (target, revision) = configured_target(paths, store::text(value, "providerId"))?;
     if target.kind == TargetKind::GoogleAccount {
         crate::api::google_account::refresh(paths, &target.id).await?;
+        crate::api::service_provider::sync_provider(paths, &target.id)?;
         return store::state(paths);
     }
     let auth = target_auth(paths, &target).await?;
@@ -600,10 +601,8 @@ pub async fn fetch_models(paths: &AppPaths, value: &Value) -> Result<Value, Mana
         "UPDATE service_provider_configs SET revision=revision+1,updated_at=?2 WHERE id=?1",
         params![target.id, store::now()],
     )?;
-    tx.execute("UPDATE service_agent_instances SET sync_status='pending',updated_at=?2 WHERE provider_id=?1 AND status='active'
-        AND EXISTS(SELECT 1 FROM service_managed_files f WHERE f.instance_id=service_agent_instances.id AND f.restore_status<>'restored')",
-        params![target.id,store::now()])?;
     tx.commit()?;
+    crate::api::service_provider::sync_provider(paths, &target.id)?;
     Ok(catalog)
 }
 

@@ -1610,6 +1610,90 @@ fn service_legacy_gate_blocks_switch_until_all_requests_finish() {
 }
 
 #[test]
+fn service_client_token_survives_provider_edits_switches_and_recovery_until_detached() {
+    let f = Fixture::new();
+    let first = f.provider();
+    let second = f.provider();
+    service_provider::switch_backend(&f.paths,"service").unwrap();
+    let c = database::open(&f.paths).unwrap();
+    for agent in ["codex","claude"] {
+        let directory = f.root.join(agent);
+        std::fs::create_dir_all(&directory).unwrap();
+        let file = directory.join(if agent=="codex" {"config.toml"} else {"settings.json"});
+        let original = if agent=="codex" {"model = 'original'\n# 保留原配置\n"} else {"{\"env\":{\"USER_VAR\":\"original\"}}"};
+        std::fs::write(&file, original).unwrap();
+        let targets = json!([{"id":agent,"installed":true,"configPath":directory}]);
+        let active = service_provider::quick_switch(&f.paths,&targets,&json!({"agentType":agent,"providerId":first})).unwrap();
+        let read_token = || {
+            let content = std::fs::read_to_string(&file).unwrap();
+            let value: Value = if agent=="codex" {toml_edit::de::from_str(&content).unwrap()} else {serde_json::from_str(&content).unwrap()};
+            if agent=="codex" {value["model_providers"]["ai_manager_service"]["experimental_bearer_token"].as_str().unwrap().to_string()}
+            else {value["env"]["ANTHROPIC_AUTH_TOKEN"].as_str().unwrap().to_string()}
+        };
+        let token = read_token();
+        let token_id = service::authorize(&c,&token).unwrap()["tokenId"].clone();
+        let mut config = super::config(&c,&first).unwrap();
+        config["name"] = json!("改名仍可用");
+        config["apiKey"] = json!("updated-upstream-secret");
+        config["baseUrl"] = json!("http://127.0.0.1:2/v1");
+        config["models"] = json!(["model","new-model"]);
+        save(&f.paths,&config).unwrap();
+        assert_eq!(read_token(),token);
+        assert_eq!(service::authorize(&c,&token).unwrap()["tokenId"],token_id);
+        if agent=="codex" {
+            let catalog: Value = serde_json::from_str(&std::fs::read_to_string(directory.join(".ai_manager_service_models.json")).unwrap()).unwrap();
+            assert!(catalog["models"].as_array().unwrap().iter().any(|model|model["slug"]=="new-model"));
+        }
+        service_provider::quick_switch(&f.paths,&targets,&json!({"agentType":agent,"providerId":second})).unwrap();
+        assert_eq!(read_token(),token);
+        let identity = service::authorize(&c,&token).unwrap();
+        assert_eq!(identity["providerId"],second);
+        assert_eq!(identity["tokenId"],token_id);
+        // 旧版 pending 在重启恢复时自动同步，不能要求重新配置客户端。
+        c.execute("UPDATE service_agent_instances SET sync_status='pending' WHERE id=?1",[text(&active,"instanceId")]).unwrap();
+        service_provider::recover(&f.paths).unwrap();
+        assert_eq!(read_token(),token);
+        assert!(service::authorize(&c,&token).is_ok());
+        service_provider::configure_agent(&f.paths,&targets,&json!({"agentType":agent,"providerId":second,
+            "revision":super::config(&c,&second).unwrap()["revision"],"defaultModelName":"model",
+            "options":if agent=="codex" {json!({"syncModelList":false})} else {json!({})}})).unwrap();
+        assert_eq!(read_token(),token);
+        assert!(service::authorize(&c,&token).is_ok());
+        if agent=="codex" {assert!(!directory.join(".ai_manager_service_models.json").exists());}
+        service_provider::detach(&f.paths,text(&active,"instanceId")).unwrap();
+        assert!(service::authorize(&c,&token).is_err());
+        assert_eq!(std::fs::read_to_string(&file).unwrap(),original);
+        service_provider::quick_switch(&f.paths,&targets,&json!({"agentType":agent,"providerId":second})).unwrap();
+        assert_ne!(read_token(),token);
+        assert!(service::authorize(&c,&token).is_err(),"已撤销的令牌不能因再次启用而复活");
+        service_provider::detach(&f.paths,text(&active,"instanceId")).unwrap();
+    }
+}
+
+#[test]
+fn service_sync_failure_keeps_client_token_and_previous_file_snapshots() {
+    let f=Fixture::new();
+    let first=f.provider();
+    let second=f.provider();
+    service_provider::switch_backend(&f.paths,"service").unwrap();
+    let directory=f.root.join("client");
+    let targets=json!([{"id":"codex","configPath":directory}]);
+    let instance=service_provider::quick_switch(&f.paths,&targets,&json!({"agentType":"codex","providerId":first})).unwrap();
+    let file=directory.join("config.toml");
+    let applied=std::fs::read_to_string(&file).unwrap();
+    let value=toml_edit::de::from_str::<Value>(&applied).unwrap();
+    let token=value["model_providers"]["ai_manager_service"]["experimental_bearer_token"].as_str().unwrap();
+    let c=database::open(&f.paths).unwrap();
+    let ledger=query(&c,"SELECT * FROM service_managed_files WHERE instance_id=?1",&[&text(&instance,"instanceId")]).unwrap();
+    std::fs::write(&file,"invalid = [").unwrap();
+    assert!(service_provider::quick_switch(&f.paths,&targets,&json!({"agentType":"codex","providerId":second})).is_err());
+    assert_eq!(service::authorize(&c,token).unwrap()["providerId"],first);
+    assert_eq!(query(&c,"SELECT * FROM service_managed_files WHERE instance_id=?1",&[&text(&instance,"instanceId")]).unwrap(),ledger);
+    std::fs::write(&file,applied).unwrap();
+    service_provider::detach(&f.paths,text(&instance,"instanceId")).unwrap();
+}
+
+#[test]
 fn service_quick_switch_uses_default_directory_and_restores_original() {
     let f = Fixture::new();
     let first = f.provider();

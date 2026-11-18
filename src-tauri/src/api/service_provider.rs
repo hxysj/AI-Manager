@@ -90,6 +90,7 @@ pub async fn dispatch(
                 params![provider, store::now()],
             )?;
             tx.commit()?;
+            sync_provider(paths, provider)?;
         }
         "activate" => return activate(paths, targets, &value),
         "quick-switch" => return quick_switch(paths, targets, &value),
@@ -118,7 +119,7 @@ pub async fn dispatch(
     store::state(paths)
 }
 
-// Agent 的使用来源只有一个，切换前恢复此前接管的全部客户端目录。
+// 同一客户端切换来源时保留令牌；迁移到新目录时恢复旧目录配置。
 pub(crate) fn quick_switch(
     paths: &AppPaths,
     targets: &Value,
@@ -154,18 +155,24 @@ pub(crate) fn quick_switch(
     if agent != "claude-desktop" {
         normalized(Path::new(directory))?;
     }
+    let mut current = None;
     for instance in store::query(
         &c,
-        "SELECT id FROM service_agent_instances WHERE agent_type=?1 AND status<>'detached'
+        "SELECT id,config_path,status FROM service_agent_instances WHERE agent_type=?1 AND status<>'detached'
         AND config_path NOT LIKE 'internal:%' AND config_path NOT LIKE 'test:%'",
         &[&agent],
     )? {
-        detach(paths, store::text(&instance, "id"))?;
+        if agent == "claude-desktop" || normalized(Path::new(store::text(&instance,"config_path")))? == normalized(Path::new(directory))? {
+            current = Some(instance);
+        } else {
+            detach(paths, store::text(&instance, "id"))?;
+        }
     }
-    activate(
+    apply(
         paths,
         targets,
         &json!({"agentType":agent,"providerId":provider,"modelId":model["id"],"configPath":directory}),
+        current.as_ref(),
     )
 }
 
@@ -234,10 +241,6 @@ pub(crate) fn configure_agent(
         ON CONFLICT(provider_id,agent_type) DO UPDATE SET enabled=1,default_model_id=excluded.default_model_id,
         options_json=excluded.options_json,revision=revision+1,updated_at=excluded.updated_at",
         params![provider, agent, model, value["options"].to_string(), store::now()])?;
-    tx.execute("UPDATE service_agent_instances SET sync_status='pending',last_error='Agent 配置已更新，请重新应用'
-        WHERE provider_id=?1 AND agent_type=?2 AND status='active'
-        AND EXISTS(SELECT 1 FROM service_managed_files f WHERE f.instance_id=service_agent_instances.id AND f.restore_status<>'restored')",
-        params![provider, agent])?;
     tx.commit()?;
     if agent == "gateway" {
         return store::state(paths);
@@ -293,8 +296,9 @@ fn normalized(path: &Path) -> Result<String, ManagerError> {
     }
     let resolved = if path.exists() {
         path.canonicalize()?
-    } else if let Some(parent) = path.parent().filter(|p| p.exists()) {
-        parent.canonicalize()?.join(
+    } else if let Some(parent) = path.parent() {
+        // 从已存在的祖先解析新目录，避免创建文件后才出现 Windows 长路径前缀。
+        PathBuf::from(normalized(parent)?).join(
             path.file_name()
                 .ok_or_else(|| store::fail("配置文件名无效"))?,
         )
@@ -315,10 +319,47 @@ fn active_requests(paths: &AppPaths, instance: Option<&str>) -> Result<bool, Man
         [instance],|r|r.get(0))?)
 }
 
+// 服务商参数只影响后台转发；同步现有实例时沿用令牌和接管前备份，客户端无需重新登录。
+pub(crate) fn sync_provider(paths: &AppPaths, provider: &str) -> Result<(), ManagerError> {
+    if !store::active(paths)? { return Ok(()); }
+    let c = database::open(paths)?;
+    let instances = store::query(&c,"SELECT i.id,i.agent_type,i.config_path,i.agent_version,b.enabled,
+        coalesce((SELECT id FROM service_provider_models WHERE provider_id=i.provider_id AND id=b.default_model_id AND enabled=1),
+        (SELECT id FROM service_provider_models WHERE provider_id=i.provider_id AND id=i.model_id AND enabled=1),
+        (SELECT id FROM service_provider_models WHERE provider_id=i.provider_id AND enabled=1 ORDER BY created_at,id LIMIT 1)) AS model_id
+        FROM service_agent_instances i JOIN service_provider_agent_bindings b ON b.provider_id=i.provider_id AND b.agent_type=i.agent_type
+        WHERE i.provider_id=?1 AND i.status='active' AND i.config_path NOT LIKE 'internal:%'
+        AND i.config_path NOT LIKE 'test:%' AND i.config_path NOT LIKE 'external:%'",&[&provider])?;
+    let mut failures = Vec::new();
+    for instance in instances {
+        let result = if instance["enabled"] != 1 {
+            detach(paths, store::text(&instance,"id"))
+        } else {
+            let agent = store::text(&instance,"agent_type");
+            apply(paths,&json!([{"id":agent,"version":instance["agent_version"]}]),
+                &json!({"agentType":agent,"providerId":provider,"modelId":instance["model_id"],"configPath":instance["config_path"]}),Some(&instance)).map(|_|())
+        };
+        if let Err(error) = result {
+            c.execute("UPDATE service_agent_instances SET last_error=?2 WHERE id=?1",params![store::text(&instance,"id"),error.to_string()])?;
+            failures.push(format!("{}：{error}",store::text(&instance,"agent_type")));
+        }
+    }
+    if failures.is_empty() { Ok(()) } else { Err(store::fail(format!("服务商已保存，部分客户端配置同步失败：{}",failures.join("；")))) }
+}
+
 pub(crate) fn activate(
     paths: &AppPaths,
     targets: &Value,
     value: &Value,
+) -> Result<Value, ManagerError> {
+    apply(paths, targets, value, None)
+}
+
+fn apply(
+    paths: &AppPaths,
+    targets: &Value,
+    value: &Value,
+    refresh: Option<&Value>,
 ) -> Result<Value, ManagerError> {
     if !store::active(paths)? {
         return Err(store::fail("请先启用服务商配置中心"));
@@ -367,11 +408,46 @@ pub(crate) fn activate(
             .filter(|v| !v.is_empty())
             .unwrap_or(default_path),
     );
-    let token = format!(
+    let mut managed = if let Some(instance) = refresh {
+        store::query(&c, "SELECT * FROM service_managed_files WHERE instance_id=?1 AND restore_status<>'restored'", &[&store::text(instance,"id")])?
+    } else { Vec::new() };
+    // 兼容旧版本在配置目录尚不存在时记录的非规范路径。
+    for file in &mut managed {
+        file["file_path"] = json!(normalized(Path::new(store::text(file,"file_path")))?);
+    }
+    // 客户端令牌绑定实例。更新和切换只改变后台路由，已启动的 Agent 可继续使用原令牌。
+    let mut retained_token = None;
+    for file in &managed {
+        let content = runtime_provider::decrypt_provider_key(store::text(file,"after_ciphertext"))?;
+        let token = if agent == "codex" && Path::new(store::text(file,"file_path")).extension().is_some_and(|extension|extension=="toml") {
+            let config = toml_edit::de::from_str::<Value>(&content).map_err(|_|store::fail("接管备份的 TOML 配置无效"))?;
+            config["model_providers"]["ai_manager_service"]["experimental_bearer_token"].as_str().map(str::to_owned)
+        } else if agent != "codex" {
+            let config: Value = serde_json::from_str(&content)?;
+            config["env"]["ANTHROPIC_AUTH_TOKEN"].as_str().or_else(||config["inferenceGatewayApiKey"].as_str()).map(str::to_owned)
+        } else { None };
+        if let Some(token) = token.filter(|token|!token.is_empty()) {
+            let valid: bool = c.query_row("SELECT EXISTS(SELECT 1 FROM service_gateway_tokens WHERE instance_id=?1 AND token_hash=?2 AND status='active'
+                AND (expires_at IS NULL OR expires_at>?3))",params![refresh.unwrap()["id"].as_str(),store::hash(&token),store::now()],|row|row.get(0))?;
+            if valid { retained_token = Some(token); break; }
+        }
+    }
+    if refresh.is_some() && retained_token.is_none() {
+        return Err(store::fail("此实例没有可用的接管令牌，请停止使用后重新启用"));
+    }
+    let token = retained_token.unwrap_or_else(||format!(
         "sk-am-{}{}",
         uuid::Uuid::new_v4().simple(),
         uuid::Uuid::new_v4().simple()
-    );
+    ));
+    let baseline = |path: &Path, current: &Option<String>| -> Result<Option<String>,ManagerError> {
+        let path_text = normalized(path)?;
+        if let Some(file) = managed.iter().find(|file|file["file_path"]==path_text) {
+            let before = runtime_provider::decrypt_provider_key(store::text(file,"before_ciphertext"))?;
+            let after = runtime_provider::decrypt_provider_key(store::text(file,"after_ciphertext"))?;
+            restored_content(path, if file["before_exists"]==1 {Some(&before)} else {None}, &after, current.as_deref())
+        } else { Ok(current.clone()) }
+    };
     let base_url = format!("http://127.0.0.1:{}", store::PORT);
     let name = store::text(model, "upstreamModelId");
     let mut files: Vec<(PathBuf, String)> = Vec::new();
@@ -379,9 +455,10 @@ pub(crate) fn activate(
     if agent == "codex" {
         let file = directory.join("config.toml");
         let before = read_file(&file)?;
+        let original = baseline(&file, &before)?;
         // 原文另存加密备份，应用文件只保留当前网关节点，清理旧模式生成的节点及子表。
         let mut content = codex_account::remove_toml_sections(
-            before.as_deref().unwrap_or(""),
+            original.as_deref().unwrap_or(""),
             &[
                 "model_providers.custom",
                 "model_providers.codex_local_access",
@@ -505,7 +582,8 @@ pub(crate) fn activate(
     } else if agent == "claude" {
         let file = directory.join("settings.json");
         let before = read_file(&file)?;
-        let mut content: Value = serde_json::from_str(before.as_deref().unwrap_or("{}"))?;
+        let original = baseline(&file, &before)?;
+        let mut content: Value = serde_json::from_str(original.as_deref().unwrap_or("{}"))?;
         originals.insert(file.clone(), before);
         if !content.is_object() || content.get("env").is_some_and(|v| !v.is_object()) {
             return Err(store::fail("Claude settings.json / env 必须是对象"));
@@ -570,16 +648,17 @@ pub(crate) fn activate(
     )?;
     let existing = store::query(
         &c,
-        "SELECT id,status FROM service_agent_instances WHERE agent_type=?1 AND config_path=?2",
-        &[&agent, &instance_path],
+        "SELECT id,status,config_path FROM service_agent_instances WHERE agent_type=?1",
+        &[&agent],
     )?
-    .pop();
+    .into_iter()
+    .find(|instance|normalized(Path::new(store::text(instance,"config_path"))).is_ok_and(|path|path==instance_path));
     if let Some(item) = &existing {
         let pending:bool=c.query_row("SELECT EXISTS(SELECT 1 FROM service_managed_files WHERE instance_id=?1 AND restore_status<>'restored')",
             [store::text(item,"id")],|r|r.get(0))?;
-        if item["status"] == "active" || pending {
+        if (item["status"] == "active" || pending) && refresh.is_none() {
             return Err(store::fail(
-                "该实例已被接管，请先解除接管再切换服务商或重新同步",
+                "该实例已被接管，请使用切换或同步操作",
             ));
         }
     }
@@ -587,6 +666,9 @@ pub(crate) fn activate(
         .as_ref()
         .map(|v| store::text(v, "id").to_string())
         .unwrap_or_else(store::id);
+    if refresh.is_some_and(|previous| previous["id"] != instance) {
+        return Err(store::fail("客户端目录已变化，请刷新后重试"));
+    }
     let operation = store::id();
     let version = targets
         .as_array()
@@ -612,18 +694,23 @@ pub(crate) fn activate(
         return Err(store::fail("运行模式或服务商配置已变化，请重新应用"));
     }
     if tx.query_row("SELECT EXISTS(SELECT 1 FROM service_agent_instances
-        WHERE agent_type=?1 AND provider_id<>?2 AND status<>'detached'
+        WHERE agent_type=?1 AND provider_id<>?2 AND status<>'detached' AND id<>?3
         AND config_path NOT LIKE 'internal:%' AND config_path NOT LIKE 'test:%')",
-        params![agent, provider], |row| row.get::<_, bool>(0))? {
+        params![agent, provider, instance], |row| row.get::<_, bool>(0))? {
         return Err(store::fail("此 Agent 正在使用其他服务商，请先切换或解除接管"));
     }
     tx.execute("INSERT INTO service_agent_instances(id,agent_type,name,config_path,agent_version,client_protocol,provider_id,model_id,status,created_at,updated_at)
         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,'error',?9,?9) ON CONFLICT(id) DO UPDATE SET provider_id=excluded.provider_id,
-        model_id=excluded.model_id,status='error',sync_status='pending',agent_version=excluded.agent_version,revision=revision+1,updated_at=excluded.updated_at",
+        model_id=excluded.model_id,config_path=excluded.config_path,status='error',sync_status='pending',agent_version=excluded.agent_version,revision=revision+1,updated_at=excluded.updated_at",
         params![instance,agent,value["name"].as_str().filter(|s|!s.is_empty()).unwrap_or(agent),instance_path,version,protocol,provider,model_id,store::now()])?;
-    tx.execute("UPDATE service_gateway_tokens SET status='revoked',revoked_at=?2 WHERE instance_id=?1 AND status='active'",params![instance,store::now()])?;
-    tx.execute("INSERT INTO service_gateway_tokens(id,token_hash,token_prefix,instance_id,created_at) VALUES(?1,?2,?3,?4,?5)",
-        params![store::id(),store::hash(&token),&token[..14],instance,store::now()])?;
+    if refresh.is_none() {
+        tx.execute("UPDATE service_gateway_tokens SET status='revoked',revoked_at=?2 WHERE instance_id=?1 AND status='active'",params![instance,store::now()])?;
+        tx.execute("INSERT INTO service_gateway_tokens(id,token_hash,token_prefix,instance_id,created_at) VALUES(?1,?2,?3,?4,?5)",
+            params![store::id(),store::hash(&token),&token[..14],instance,store::now()])?;
+    } else if !tx.query_row("SELECT EXISTS(SELECT 1 FROM service_gateway_tokens WHERE instance_id=?1 AND token_hash=?2 AND status='active')",
+        params![instance,store::hash(&token)],|row|row.get::<_,bool>(0))? {
+        return Err(store::fail("实例令牌已被撤销，请刷新后重试"));
+    }
     let mut prepared = Vec::new();
     for (path, after) in files {
         let expected = originals.get(&path);
@@ -632,22 +719,43 @@ pub(crate) fn activate(
         if expected.is_some_and(|snapshot| *snapshot != before) {
             return Err(store::fail("生成配置期间客户端文件已变化，请重新应用"));
         }
-        let entry = store::id();
+        let original = baseline(Path::new(&path), &before)?;
+        let old = managed.iter().find(|file|file["file_path"]==path);
+        let entry = old.map(|file|store::text(file,"id").to_string()).unwrap_or_else(store::id);
         tx.execute("INSERT INTO service_managed_files(id,operation_id,instance_id,file_path,before_exists,before_sha256,before_ciphertext,
             after_sha256,after_ciphertext,managed_fields_json,write_status,created_at,updated_at)
-            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'prepared',?11,?11)",
-            params![entry,operation,instance,path,before.is_some(),store::hash(before.as_deref().unwrap_or("")),
-                runtime_provider::encrypt_provider_key(before.as_deref().unwrap_or(""))?,store::hash(&after),
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,'prepared',?11,?11)
+            ON CONFLICT(id) DO UPDATE SET operation_id=excluded.operation_id,file_path=excluded.file_path,before_exists=excluded.before_exists,
+            before_sha256=excluded.before_sha256,before_ciphertext=excluded.before_ciphertext,
+            after_sha256=excluded.after_sha256,after_ciphertext=excluded.after_ciphertext,write_status='prepared',restore_status='pending',error_message='',updated_at=excluded.updated_at",
+            params![entry,operation,instance,path,original.is_some(),store::hash(original.as_deref().unwrap_or("")),
+                runtime_provider::encrypt_provider_key(original.as_deref().unwrap_or(""))?,store::hash(&after),
                 runtime_provider::encrypt_provider_key(&after)?,json!({"agent":agent,"snapshot":"whole-file-with-hash-conflict-check"}).to_string(),store::now()])?;
-        prepared.push((entry, path, before, after));
+        prepared.push((entry, path, before, Some(after)));
     }
-    tx.commit()?;
-    let result = (|| {
+    // 不再引用的模型目录也按原备份恢复，不能留下上一个服务商的接管文件。
+    for file in &managed {
+        let path = store::text(file,"file_path");
+        if !prepared.iter().any(|(_,written,_,_)|written==path) {
+            let current = read_file(Path::new(path))?;
+            let restored = baseline(Path::new(path), &current)?;
+            prepared.push((store::text(file,"id").to_string(),path.to_string(),current,restored));
+            tx.execute("UPDATE service_managed_files SET restore_status='restored',error_message='',updated_at=?2 WHERE id=?1",
+                params![store::text(file,"id"),store::now()])?;
+        }
+    }
+    let write = |c: &rusqlite::Connection| {
         for (entry, path, before, after) in &prepared {
             if read_file(Path::new(path))? != *before {
                 return Err(store::fail("准备接管期间客户端文件已发生变化"));
             }
-            claude_desktop::atomic_write(Path::new(path), after.as_bytes())?;
+            if before != after {
+                if let Some(after) = after {
+                    claude_desktop::atomic_write(Path::new(path), after.as_bytes())?;
+                } else if before.is_some() {
+                    std::fs::remove_file(path)?;
+                }
+            }
             c.execute(
                 "UPDATE service_managed_files SET write_status='written',updated_at=?2 WHERE id=?1",
                 params![entry, store::now()],
@@ -660,14 +768,33 @@ pub(crate) fn activate(
         let applied_hash = store::hash(
             &prepared
                 .iter()
-                .map(|(_, path, _, after)| format!("{path}:{}", store::hash(after)))
+                .map(|(_, path, _, after)| format!("{path}:{}", store::hash(after.as_deref().unwrap_or(""))))
                 .collect::<Vec<_>>()
                 .join("\n"),
         );
         c.execute("UPDATE service_agent_instances SET status='active',sync_status='synced',applied_revision=?2,
             last_synced_at=?3,last_error='',updated_at=?3,applied_hash=?4 WHERE id=?1",params![instance,config["revision"].as_i64(),store::now(),applied_hash])?;
         Ok::<_, ManagerError>(())
-    })();
+    };
+    if refresh.is_some() {
+        // 文件与后台路由在同一事务内切换，Token 行不变；失败时还原本轮已写内容和数据库。
+        if let Err(error) = write(&tx) {
+            let mut failures = Vec::new();
+            for (_, path, before, after) in prepared.iter().rev() {
+                if read_file(Path::new(path))? == *after && before != after {
+                    let restored = if let Some(before) = before {
+                        claude_desktop::atomic_write(Path::new(path),before.as_bytes())
+                    } else { std::fs::remove_file(path).map_err(ManagerError::from) };
+                    if let Err(error) = restored { failures.push(error.to_string()); }
+                }
+            }
+            return Err(store::fail(format!("同步配置失败：{error}{}", if failures.is_empty(){String::new()}else{format!("；恢复失败：{}",failures.join("；"))})));
+        }
+        tx.commit()?;
+        return Ok(json!({"instanceId":instance,"baseUrl":base_url}));
+    }
+    tx.commit()?;
+    let result = write(&c);
     if let Err(error) = result {
         let restore = detach(paths, &instance);
         return Err(store::fail(format!(
@@ -936,6 +1063,10 @@ pub(crate) fn recover(paths: &AppPaths) -> Result<(), ManagerError> {
         WHERE (i.status='error' OR f.write_status='prepared') AND f.restore_status<>'restored'",&[])?{
         // 中断的接管按快照撤回自身改动，保留客户端后续修改。
         let _=detach(paths,store::text(&instance,"id"));
+    }
+    // 升级时自动补同步旧版本保存服务商后遗留的 pending 实例，不更换现有令牌。
+    for provider in store::query(&c,"SELECT DISTINCT provider_id FROM service_agent_instances WHERE status='active' AND sync_status='pending'",&[])? {
+        let _ = sync_provider(paths,store::text(&provider,"provider_id"));
     }
     Ok(())
 }

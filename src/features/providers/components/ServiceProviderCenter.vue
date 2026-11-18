@@ -38,7 +38,7 @@
           title="刷新列表"
           aria-label="刷新列表"
           :disabled="busy"
-          @click="refresh"
+          @click="refresh(true)"
         >
           <RefreshCw :size="17" />
         </button>
@@ -273,9 +273,17 @@
             <button
               v-if="provider.kind !== 'api'"
               class="icon-button"
+              :class="{
+                'icon-button-refreshing': refreshingQuotaIds.has(provider.id)
+              }"
               type="button"
-              title="刷新额度"
-              aria-label="刷新额度"
+              :title="
+                refreshingQuotaIds.has(provider.id) ? '刷新中…' : '刷新额度'
+              "
+              :aria-label="
+                refreshingQuotaIds.has(provider.id) ? '刷新中…' : '刷新额度'
+              "
+              :aria-busy="refreshingQuotaIds.has(provider.id)"
               :disabled="
                 busy ||
                 !provider.enabled ||
@@ -284,7 +292,7 @@
               "
               @click="refreshQuota(provider)"
             >
-              <RefreshCw :size="16" />
+              <RefreshCw class="quota-refresh-icon" :size="16" />
             </button>
             <button
               class="icon-button"
@@ -1371,7 +1379,6 @@ watch(providerTab, (tab) => {
   if (tab === "codex_account") refreshOfficialQuotas()
 })
 onMounted(() => {
-  refresh()
   // 倒计时只更新本地展示，不随每次计时请求官方额度。
   countdownTimer = setInterval(() => {
     countdownNow.value = Date.now()
@@ -1538,13 +1545,14 @@ async function toggleProviderEnabled(provider) {
   })
 }
 
-async function refresh() {
+async function refresh(refreshQuotas = false) {
   const success = await perform(
     providerTab.value === "agents" ? "refresh-agents" : "state",
     undefined,
     false
   )
-  if (success) await refreshOfficialQuotas()
+  // 自动查询由官方标签切换触发，通用状态同步只在明确手动刷新时附带查询额度。
+  if (success && refreshQuotas === true) await refreshOfficialQuotas()
   return success
 }
 
@@ -2656,6 +2664,12 @@ async function showBackup(id) {
               opacity: 0.55;
               cursor: default;
             }
+            &.icon-button-refreshing {
+              opacity: 1;
+              .quota-refresh-icon {
+                animation: quota-refresh-spin 1s linear infinite;
+              }
+            }
           }
         }
       }
@@ -3241,6 +3255,11 @@ async function showBackup(id) {
       display: flex;
       gap: 10px;
     }
+  }
+}
+@keyframes quota-refresh-spin {
+  to {
+    transform: rotate(360deg);
   }
 }
 </style>

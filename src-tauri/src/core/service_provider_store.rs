@@ -687,10 +687,6 @@ pub fn save(paths: &AppPaths, value: &Value) -> Result<Value, ManagerError> {
                 text(route,"modelId"),route["enabled"].as_bool().unwrap_or(true)])?;
         }
     }
-    if previous.is_some() {
-        tx.execute("UPDATE service_agent_instances SET sync_status='pending',last_error='服务商配置已更新，请解除接管后重新应用'
-            WHERE provider_id=?1 AND status='active' AND EXISTS(SELECT 1 FROM service_managed_files f WHERE f.instance_id=service_agent_instances.id AND f.restore_status<>'restored')",[&provider_id])?;
-    }
     if value["enabled"] == false {
         // 停用即撤销访问和启动状态；模型参数与文件备份保留用于恢复。
         tx.execute("UPDATE service_provider_agent_bindings SET enabled=0,revision=revision+1,updated_at=?2
@@ -703,6 +699,9 @@ pub fn save(paths: &AppPaths, value: &Value) -> Result<Value, ManagerError> {
             WHERE provider_id=?1 AND status<>'detached'", params![provider_id, now()])?;
     }
     tx.commit()?;
+    if previous.is_some() && value["enabled"] != false {
+        crate::api::service_provider::sync_provider(paths, &provider_id)?;
+    }
     Ok(json!({"id":provider_id}))
 }
 

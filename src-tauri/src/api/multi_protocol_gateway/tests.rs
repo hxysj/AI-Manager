@@ -434,6 +434,72 @@ fn service_agent_model_selection_overrides_the_initial_model_without_falling_bac
 }
 
 #[test]
+fn client_keeps_one_token_while_provider_route_key_and_protocol_change() {
+    run(async {
+        use crate::api::service_provider;
+        use crate::core::{database,service_provider_store as store};
+        let fixture=Fixture::new();
+        store::initialize(&fixture.paths).unwrap();
+        let (first_url,mut first_requests,first_upstream)=mock(UpstreamFormat::OpenAiResponses,StatusCode::OK,false,false,None).await;
+        let (second_url,mut second_requests,second_upstream)=mock(UpstreamFormat::OpenAiChat,StatusCode::OK,false,false,None).await;
+        let create=|url:&str,protocol:&str,key:&str|store::save(&fixture.paths,&json!({"name":"测试来源","baseUrl":url,
+            "upstreamProtocol":protocol,"apiKey":key,"models":["real-model"],
+            "bindings":[{"agentType":"codex","enabled":true,"defaultModelName":"real-model"}]})).unwrap()["id"].as_str().unwrap().to_string();
+        let first=create(&first_url,"responses","first-upstream-key");
+        let second=create(&second_url,"chat","second-upstream-key");
+        service_provider::switch_backend(&fixture.paths,"service").unwrap();
+        let directory=fixture.root.join("new-parent").join("codex-client");
+        let targets=json!([{"id":"codex","configPath":directory}]);
+        let instance=service_provider::quick_switch(&fixture.paths,&targets,&json!({"agentType":"codex","providerId":first})).unwrap();
+        let applied=toml_edit::de::from_str::<Value>(&std::fs::read_to_string(directory.join("config.toml")).unwrap()).unwrap();
+        let original_token=applied["model_providers"]["ai_manager_service"]["experimental_bearer_token"].as_str().unwrap().to_string();
+        let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base=format!("http://{}",listener.local_addr().unwrap());
+        let server=spawn_listener(listener,GatewayContext{paths:fixture.paths.clone(),cli_targets:targets.clone(),
+            store_lock:fixture.registry.store_lock.clone(),service_mode:true,legacy_request:None,_service_request:None});
+        let client=Client::builder().no_proxy().build().unwrap();
+        let c=database::open(&fixture.paths).unwrap();
+        if cfg!(windows) {
+            // 模拟旧版本首次创建目录时未记录长路径前缀的快照，更新后仍应识别同一实例。
+            for table in ["service_managed_files","service_agent_instances"] {
+                let (column,owner)=if table=="service_managed_files" {("file_path","instance_id")} else {("config_path","id")};
+                c.execute(&format!("UPDATE {table} SET {column}=substr({column},5) WHERE {owner}=?1 AND substr({column},1,4)=?2"),
+                    rusqlite::params![store::text(&instance,"instanceId"),r"\\?\"]).unwrap();
+            }
+        }
+        for step in 0..4 {
+            if step==1 {
+                let mut config=store::config(&c,&first).unwrap();
+                config["name"]=json!("编辑服务商");
+                config["baseUrl"]=json!(second_url);
+                config["upstreamProtocol"]=json!("chat");
+                config["apiKey"]=json!("rotated-upstream-key");
+                store::save(&fixture.paths,&config).unwrap();
+            } else if step==2 {
+                service_provider::quick_switch(&fixture.paths,&targets,&json!({"agentType":"codex","providerId":second})).unwrap();
+            } else if step==3 {
+                service_provider::quick_switch(&fixture.paths,&targets,&json!({"agentType":"codex","providerId":first})).unwrap();
+            }
+            // 客户端一直发送首次启动时缓存的 Token，不重读配置，不重启。
+            let response=client.post(format!("{base}/v1/responses")).bearer_auth(&original_token)
+                .json(&json!({"model":"real-model","input":"hello","stream":false})).send().await.unwrap();
+            let status=response.status();
+            let body=response.text().await.unwrap();
+            assert_eq!(status,StatusCode::OK,"step={step}: {body}");
+            let (path,headers,_)=if step==0 {first_requests.recv().await.unwrap()} else {second_requests.recv().await.unwrap()};
+            assert!(path.ends_with(if step==0 {"/responses"} else {"/chat/completions"}));
+            assert_eq!(headers["authorization"],match step {0=>"Bearer first-upstream-key",2=>"Bearer second-upstream-key",_=>"Bearer rotated-upstream-key"});
+            assert_eq!(store::query(&c,"SELECT count(*) AS count FROM service_gateway_tokens WHERE instance_id=?1",&[&store::text(&instance,"instanceId")]).unwrap()[0]["count"],1);
+        }
+        service_provider::detach(&fixture.paths,store::text(&instance,"instanceId")).unwrap();
+        let response=client.post(format!("{base}/v1/responses")).bearer_auth(&original_token)
+            .json(&json!({"model":"real-model","input":"hello"})).send().await.unwrap();
+        assert_eq!(response.status(),StatusCode::UNAUTHORIZED);
+        server.abort();first_upstream.abort();second_upstream.abort();
+    });
+}
+
+#[test]
 fn service_model_fetch_preserves_local_prices_and_rejects_stale_configuration() {
     run(async {
         use crate::core::{database, service_provider_store as store};
@@ -441,8 +507,15 @@ fn service_model_fetch_preserves_local_prices_and_rejects_stale_configuration() 
         let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url=format!("http://{}/v1",listener.local_addr().unwrap());
         let saved=store::save(&fixture.paths,&json!({"name":"模型目录测试","baseUrl":url,"apiKey":"model-test-key",
-            "models":[{"upstreamModelId":"real-model","enabled":false,"inputPriceMicros":2000000,"catalog":{"local":true}}]})).unwrap();
+            "models":[{"upstreamModelId":"real-model","enabled":false,"inputPriceMicros":2000000,"catalog":{"local":true}},"client-model"],
+            "bindings":[{"agentType":"codex","enabled":true,"defaultModelName":"client-model"}]})).unwrap();
         let provider=store::text(&saved,"id").to_string();
+        crate::api::service_provider::switch_backend(&fixture.paths,"service").unwrap();
+        let directory=fixture.root.join("fetch-client");
+        let targets=json!([{"id":"codex","configPath":directory}]);
+        crate::api::service_provider::quick_switch(&fixture.paths,&targets,&json!({"agentType":"codex","providerId":provider})).unwrap();
+        let applied=toml_edit::de::from_str::<Value>(&std::fs::read_to_string(directory.join("config.toml")).unwrap()).unwrap();
+        let token=applied["model_providers"]["ai_manager_service"]["experimental_bearer_token"].as_str().unwrap().to_string();
         let (sent,mut received)=mpsc::unbounded_channel();
         let gate=Arc::new(tokio::sync::Notify::new());
         let release=gate.clone();
@@ -480,7 +553,7 @@ fn service_model_fetch_preserves_local_prices_and_rejects_stale_configuration() 
             release.notify_one();
             let result=fetch.await.unwrap();
             let c=database::open(&fixture.paths).unwrap();
-            let model=store::query(&c,"SELECT enabled,input_price_micros,context_window FROM service_provider_models WHERE provider_id=?1",&[&provider]).unwrap().remove(0);
+            let model=store::query(&c,"SELECT enabled,input_price_micros,context_window FROM service_provider_models WHERE provider_id=?1 AND upstream_model_id='real-model'",&[&provider]).unwrap().remove(0);
             assert_eq!(model["enabled"],0);
             assert_eq!(model["input_price_micros"],2000000);
             if stale {
@@ -490,6 +563,7 @@ fn service_model_fetch_preserves_local_prices_and_rejects_stale_configuration() 
                 result.unwrap();
                 assert_eq!(model["context_window"],32000);
             }
+            assert!(service::authorize(&c,&token).is_ok(),"刷新目录不能使客户端 Token 失效");
         }
         server.abort();
     });
