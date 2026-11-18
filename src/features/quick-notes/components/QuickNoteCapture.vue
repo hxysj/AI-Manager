@@ -9,7 +9,7 @@
       :title="modelValue ? '已开启速记，发送时保存为便签' : '开启速记模式'"
       @click="$emit('update:modelValue', !modelValue)"
     >
-      <StickyNote :size="14" />速记<Check v-if="modelValue" :size="12" />
+      <StickyNote :size="14" />速记
     </button>
     <el-dropdown
       v-else
@@ -38,7 +38,11 @@
         ></template
       >
     </el-dropdown>
-    <div v-if="feedback || error" class="capture-feedback" role="status">
+    <div
+      v-if="(feedback || error) && !petFeedback"
+      class="capture-feedback"
+      role="status"
+    >
       <span :class="{ 'capture-error': error }">{{ error || feedback }}</span>
       <button v-if="running" type="button" class="capture-link" @click="cancel">
         取消
@@ -125,6 +129,10 @@ const sourceText = ref("")
 const editing = ref(null)
 const folders = ref([])
 const running = computed(() => task.value?.status === "running")
+// 桌面速记由桌宠或输入框既有回复区域反馈，不额外浮出进度面板。
+const petFeedback = computed(
+  () => props.surface === "desktop" && Boolean(task.value?.id)
+)
 watch([starting, running], () => emit("busy", starting.value || running.value))
 defineExpose({ capture })
 let poll

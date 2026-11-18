@@ -23,6 +23,27 @@ let handlers = {}
 const visibilityListeners = new Set()
 const lanShareListeners = new Set()
 const assistantListeners = new Set()
+const noteListeners = new Set()
+let noteSnapshot = {}
+const quickNotesApi = {
+  onAssistant: async (callback) => {
+    noteListeners.add(callback)
+    return () => noteListeners.delete(callback)
+  },
+  invoke: async (action, payload = {}) => {
+    calls.push({ name: `quick-notes:${action}`, payload })
+    if (action === "assistant-state") return noteSnapshot
+    if (action === "capture-cancel") {
+      noteSnapshot = {
+        ...noteSnapshot,
+        status: "cancelled",
+        error: "已取消整理，原文已保留"
+      }
+      for (const callback of noteListeners) callback(noteSnapshot)
+    }
+    return { ok: true }
+  }
+}
 const desktopOpenListeners = new Set()
 const appStateListeners = new Set()
 let assistantSnapshot = { status: "idle" }
@@ -75,6 +96,7 @@ function loadComponent(path) {
   ).code
   const module = { exports: {} }
   const localRequire = (name) => {
+    if (name === "@/api/modules/quick-notes") return { quickNotesApi }
     if (markdownModules[name]) return markdownModules[name]
     if (name === "@/api")
       return {
@@ -1120,6 +1142,72 @@ for (const center of [
   if (["left", "right"].includes(side) && center.y >= 104)
     assert.ok(top + height <= center.y - 32, "气泡抬到头部斜上方")
 }
+// 桌面速记接入相同的思考动作和回复气泡，取消走速记接口，不占用聊天运行状态。
+noteSnapshot = {
+  runId: "note-1",
+  requestId: "note-request",
+  operation: "quick-note",
+  status: "thinking",
+  surface: "desktop",
+  replyAtPet: true,
+  text: ""
+}
+for (const callback of noteListeners) callback(noteSnapshot)
+await tick()
+assert.equal(chat.state.petAction, "think")
+assert.equal(chat.state.desktopBusy, true)
+assert.equal(chat.state.desktopRunId, "note-1")
+const savedAssistantState = chat.state.assistantState
+emitAssistant({
+  type: "state",
+  state: { ...lastChatTask, text: "旧聊天更新", status: "working" }
+})
+await tick()
+assert.equal(chat.state.desktopRunId, "note-1", "旧聊天快照不能抢占速记气泡")
+await chat.state.stopDesktopChat()
+await tick()
+assert.equal(chat.state.desktopBusy, false)
+assert.ok(
+  calls.some(
+    (call) =>
+      call.name === "quick-notes:capture-cancel" &&
+      call.payload.requestId === "note-request"
+  )
+)
+assert.match(chat.state.desktopChatError, /原文已保留/)
+noteSnapshot = { ...noteSnapshot, runId: "note-2", status: "thinking" }
+for (const callback of noteListeners) callback(noteSnapshot)
+await tick()
+noteSnapshot = {
+  ...noteSnapshot,
+  status: "completed",
+  text: "已记录：排查提醒\n分类：问题排查",
+  noteId: "saved-note",
+  finishedAt: Date.now()
+}
+for (const callback of noteListeners) callback(noteSnapshot)
+await tick()
+assert.equal(chat.state.desktopReply, noteSnapshot.text)
+assert.equal(chat.state.desktopBusy, false)
+assert.match(
+  nodeText(findNodes(chat.root, "quick-switch-speech")[0]),
+  /查看便签/
+)
+// 查看便签使用文字按钮，并通过真实点击回读当前速记保存的记录。
+const viewNoteButton = findNodes(chat.root, "quick-switch-speech-link")[0]
+await viewNoteButton.props.onClick()
+assert.ok(
+  calls.some(
+    (call) =>
+      call.name === "quick-notes:open" && call.payload.id === "saved-note"
+  )
+)
+assert.equal(
+  chat.state.assistantState.operation,
+  savedAssistantState.operation,
+  "速记不能覆盖聊天状态"
+)
+
 chatState.appSettings.agents.assistant.enabled = false
 await tick()
 assert.equal(chat.state.desktopChatVisible, false)

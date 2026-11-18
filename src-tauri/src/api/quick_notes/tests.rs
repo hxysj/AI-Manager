@@ -9,6 +9,16 @@ use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 
 #[test]
+fn model_folder_ids_require_matching_kind_and_names_can_reuse_aliases() {
+    let folders=vec![json!({"id":"project","kind":"group","name":"AI Manager","aliases":["桌宠"]}),json!({"id":"debugging","kind":"category","name":"问题排查"})];
+    let capture=json!({"source":{}});
+    let normalized=normalize_item(json!({"content":"验证","groupId":"debugging","categoryId":"project"}),&folders,&capture,&json!({})).unwrap();
+    assert_eq!(normalized["groupId"],"inbox");assert_eq!(normalized["categoryId"],"uncategorized");
+    let normalized=normalize_item(json!({"content":"验证","groupId":"桌宠","categoryId":"问题排查","newCategory":{"name":"问题排查"}}),&folders,&capture,&json!({})).unwrap();
+    assert_eq!(normalized["groupId"],"project");assert_eq!(normalized["categoryId"],"debugging");
+}
+
+#[test]
 fn capture_uses_real_model_proxy_for_chat_responses_and_claude() {
     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
         for (cli,api,endpoint) in [("codex","chat","/v1/chat/completions"),("codex","responses","/v1/responses"),("claude","messages","/v1/messages")] {
@@ -36,13 +46,107 @@ fn capture_uses_real_model_proxy_for_chat_responses_and_claude() {
             let context=AssistantContext{paths:paths.clone(),workspace_root:root.clone(),resource_dir:root.clone(),cli_targets:json!([]),settings:AssistantSettings{target_id:"test".into(),model:"notes-model".into(),protocol:if api=="messages"{"auto"}else{api}.into(),..Default::default()},local_models:Default::default()};
             let input=json!({"requestId":"capture","text":"明天提醒我回归测试","source":{"timeZone":"Asia/Shanghai"}});
             let capture=store::capture(&paths,&input,&json!({"model":"notes-model"})).unwrap();
-            let output=generate(&context,&capture,&input).await.unwrap();
-            assert_eq!(output["groupId"],"inbox");assert_eq!(output["categoryId"],"debugging");
-            let note=store::complete_capture(&paths,store::text(&capture,"id"),&output).unwrap();
+            let note=generate_and_save(&context,&capture,&input).await.unwrap();
+            assert_eq!(note["groupId"],"inbox");assert_eq!(note["categoryId"],"debugging");
             assert_eq!(note["createdAt"],capture["capturedAt"]);
             assert_eq!(store::detail(&paths,store::text(&note,"id")).unwrap()["reminders"][0]["nextFireAt"],future);
             server.abort();
             assert_eq!(root.parent(),Some(std::env::temp_dir().as_path()));std::fs::remove_dir_all(root).unwrap();
+        }
+    });
+}
+
+#[test]
+fn capture_repairs_model_output_atomically_and_stops_on_limits_cancellation_and_conflicts() {
+    use std::sync::atomic::{AtomicUsize,Ordering};
+    tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+        for (cli,api) in [("codex","chat"),("codex","responses"),("claude","messages")] {
+            for case in ["single","split","json","limit","http","cancel","conflict"] {
+                let root=std::env::temp_dir().join(format!("quick-note-repair-{}",uuid::Uuid::new_v4()));
+                let paths=crate::core::paths::resolve_app_paths(&root);
+                store::initialize(&paths).unwrap();
+                let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();
+                let mut keys=serde_json::Map::new();runtime_provider::set_provider_key(&mut keys,"test","upstream-secret".into()).unwrap();
+                provider_store::write_provider_bundle(&paths,&[json!({"id":"test","name":"测试","cli":cli,"baseUrl":format!("http://{}/v1",listener.local_addr().unwrap()),"enabled":true})],&[],&[],&keys).unwrap();
+                let mut input=json!({"requestId":"repair","text":"修复登录页与预约页分值不同步的问题","source":{"timeZone":"Asia/Shanghai","scope":if case=="split"{"split"}else{"input"}}});
+                if case=="conflict" {
+                    let note=store::save(&paths,&json!({"content":"人工原文"}),"user").unwrap();
+                    input["noteId"]=note["id"].clone();input["baseRevision"]=note["revision"].clone();
+                }
+                let capture=store::capture(&paths,&input,&json!({"model":"notes-model"})).unwrap();
+                let calls=Arc::new(AtomicUsize::new(0));
+                let server_calls=calls.clone();let server_paths=paths.clone();let server_capture=capture.clone();
+                let server=tokio::spawn(async move {
+                    loop {
+                        let (stream,_)=listener.accept().await.unwrap();
+                        let calls=server_calls.clone();let paths=server_paths.clone();let capture=server_capture.clone();
+                        tokio::spawn(async move {
+                            http1::Builder::new().serve_connection(TokioIo::new(stream),service_fn(move |request:hyper::Request<hyper::body::Incoming>| {
+                                let calls=calls.clone();let paths=paths.clone();let capture=capture.clone();
+                                async move {
+                                    let attempt=calls.fetch_add(1,Ordering::SeqCst);
+                                    let bytes=request.into_body().collect().await.unwrap().to_bytes();
+                                    let body:Value=serde_json::from_slice(&bytes).unwrap();
+                                    let instruction=if api=="chat"{&body["messages"][0]["content"]}else if api=="messages"{&body["system"]}else{&body["instructions"]};
+                                    assert!(instruction.as_str().unwrap().contains("纠正原文中的错别字"));
+                                    assert!(body.get("tools").is_none());
+                                    let user=if api=="responses"{&body["input"]}else{&body["messages"][if api=="chat"{1}else{0}]["content"]};
+                                    if attempt>0 {
+                                        let feedback:Value=serde_json::from_str(user.as_str().unwrap()).unwrap();
+                                        assert_eq!(feedback["原文"],capture["sourceText"]);
+                                        assert!(!store::text(&feedback,"上次输出").is_empty());
+                                        let expected=if case=="json"{"JSON"}else if attempt==1 || case=="limit"{"occurredOn"}else{"tasks.dueDate"};
+                                        assert!(store::text(&feedback,"校验错误").contains(expected));
+                                        assert!(store::list(&paths,&json!({})).unwrap()["notes"].as_array().unwrap().is_empty());
+                                        assert!(!store::dispatch(&paths,"folders",&json!({})).unwrap()["folders"].as_array().unwrap().iter().any(|f|f["name"]=="联调项目"));
+                                    }else{assert_eq!(user,&capture["sourceText"]);}
+                                    if case=="cancel" {store::capture_failure(&paths,store::text(&capture,"id"),"cancelled","已取消整理").unwrap();}
+                                    if case=="conflict" {
+                                        let mut note=store::detail(&paths,store::text(&capture,"noteId")).unwrap();
+                                        note["content"]=json!("人工更新");store::save(&paths,&note,"user").unwrap();
+                                    }
+                                    let mut item=json!({"title":"修复分值同步问题","content":"修复登录页与预约页分值不同步的问题。","type":"todo","groupId":"debugging","categoryId":"inbox","newGroup":{"name":"联调项目"},"newCategory":{"name":"同步修复"},"occurredOn":null,"tasks":[{"title":"修复分值同步问题","status":"pending","dueDate":null}]});
+                                    if ["single","split","limit"].contains(&case) {
+                                        item["occurredOn"]=json!(if attempt==0 || case=="limit"{"今天"}else{"2026-11-18"});
+                                        item["tasks"][0]["dueDate"]=json!(if attempt<2{"2026/11/19"}else{"2026-11-19"});
+                                    }
+                                    let output=if case=="json" && attempt==0{"整理结果不是 JSON".to_string()}else if case=="split"{json!({"notes":[{"content":"独立事项","newGroup":{"name":"联调项目"}},item]}).to_string()}else{item.to_string()};
+                                    let reply=match api {"chat"=>json!({"choices":[{"message":{"content":output}}]}),"messages"=>json!({"content":[{"type":"text","text":output}]}),_=>json!({"output_text":output})};
+                                    Ok::<_,Infallible>(Response::builder().status(if case=="http"{500}else{200}).header("content-type","application/json").body(Full::new(Bytes::from(reply.to_string()))).unwrap())
+                                }
+                            })).await.unwrap();
+                        });
+                    }
+                });
+                let context=AssistantContext{paths:paths.clone(),workspace_root:root.clone(),resource_dir:root.clone(),cli_targets:json!([]),settings:AssistantSettings{target_id:"test".into(),model:"notes-model".into(),protocol:if api=="messages"{"auto"}else{api}.into(),..Default::default()},local_models:Default::default()};
+                let result=generate_and_save(&context,&capture,&input).await;
+                let expected_calls=if ["single","split","limit"].contains(&case){3}else if case=="json"{2}else{1};
+                assert_eq!(calls.load(Ordering::SeqCst),expected_calls,"{api}/{case}");
+                let notes=store::list(&paths,&json!({})).unwrap()["notes"].as_array().unwrap().clone();
+                let state=store::capture_state(&paths,"repair").unwrap();
+                assert_eq!(state["sourceText"],input["text"]);
+                if ["single","split","json"].contains(&case) {
+                    let note=result.unwrap();
+                    assert_eq!(state["status"],"completed");assert_eq!(note["createdAt"],capture["capturedAt"]);
+                    assert_eq!(notes.len(),if case=="split"{2}else{1});
+                    assert!(notes.iter().all(|n|n["revision"]==1));
+                    let saved=if case=="split"{&note["notes"][1]}else{&note};
+                    if case!="json" {assert_eq!(saved["occurredOn"],"2026-11-18");assert_eq!(saved["tasks"][0]["dueDate"],"2026-11-19");}
+                    let folders=store::dispatch(&paths,"folders",&json!({})).unwrap();
+                    assert_eq!(folders["folders"].as_array().unwrap().iter().filter(|f|f["name"]=="联调项目").count(),1);
+                    assert_eq!(folders["folders"].as_array().unwrap().iter().find(|f|f["id"]==saved["groupId"]).unwrap()["kind"],"group");
+                    assert_eq!(folders["folders"].as_array().unwrap().iter().find(|f|f["id"]==saved["categoryId"]).unwrap()["kind"],"category");
+                }else{
+                    let error=result.unwrap_err().to_string();
+                    if case=="cancel" {assert_eq!(state["status"],"cancelled");}
+                    if case=="conflict" {assert!(error.contains("其他窗口更新"));assert_eq!(notes[0]["content"],"人工更新");}
+                    else {assert!(notes.is_empty());}
+                    if case=="limit" {assert!(error.contains("occurredOn"));store::capture_failure(&paths,store::text(&capture,"id"),"failed",&error).unwrap();assert_eq!(store::capture_state(&paths,"repair").unwrap()["status"],"failed");}
+                    if case=="http" {assert!(error.contains("HTTP 500"));}
+                }
+                server.abort();
+                assert_eq!(root.parent(),Some(std::env::temp_dir().as_path()));std::fs::remove_dir_all(root).unwrap();
+            }
         }
     });
 }

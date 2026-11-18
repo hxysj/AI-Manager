@@ -354,6 +354,13 @@ async function compile(filename) {
     ).code
   )(
     function resolveModule(name) {
+      if (name === "@/api/modules/quick-notes")
+        return {
+          quickNotesApi: {
+            onAssistant: async () => () => {},
+            invoke: async () => ({})
+          }
+        }
       if (name === "@/features/assistant/local-models") {
         const imported = { exports: {} }
         new Function(

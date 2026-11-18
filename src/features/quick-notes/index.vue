@@ -57,9 +57,11 @@
           <h2 class="notes-title">{{ heading }}</h2>
           <p class="notes-subtitle">
             {{
-              view === "worklog"
-                ? "沿着日期回看过程、结果和下一步。"
-                : "想法、待办与工作进展，都有自己的位置。"
+              view === "calendar"
+                ? "把记录放进日历，让每一天的安排清楚可见。"
+                : view === "worklog"
+                  ? "沿着日期回看过程、结果和下一步。"
+                  : "想法、待办与工作进展，都有自己的位置。"
             }}
           </p>
         </div>
@@ -213,13 +215,23 @@
             >
               {{ folder.name }}
             </option></select
-          ><select v-model="groupBy" class="notes-select" aria-label="分组显示">
+          ><select
+            v-if="view !== 'calendar'"
+            v-model="groupBy"
+            class="notes-select"
+            aria-label="分组显示"
+          >
             <option value="none">不分组</option>
             <option value="groupId">按项目分组</option>
             <option value="categoryId">按分类</option>
             <option value="date">按日期</option>
             <option value="status">按任务状态</option></select
-          ><select v-model="display" class="notes-select" aria-label="显示方式">
+          ><select
+            v-if="view !== 'calendar'"
+            v-model="display"
+            class="notes-select"
+            aria-label="显示方式"
+          >
             <option value="cards">便签卡片</option>
             <option value="list">紧凑列表</option>
             <option value="timeline">工作时间线</option></select
@@ -351,42 +363,61 @@
         </section>
         <div
           class="notes-workspace"
-          :class="`notes-display-${display}`"
+          :class="
+            view === 'calendar'
+              ? 'notes-display-calendar'
+              : `notes-display-${display}`
+          "
           :aria-busy="loading"
         >
-          <section
-            v-for="section in sections"
-            :key="section.id"
-            class="notes-group"
-          >
-            <h3 v-if="section.title" class="notes-group-title">
-              {{ section.title }}<span>{{ section.items.length }}</span>
-            </h3>
-            <div class="notes-cards">
-              <QuickNoteCard
-                v-for="note in section.items"
-                :key="note.id"
-                :note="note"
-                :folders="state.folders"
-                :next-reminder="nextReminder(note.id)"
-                :selected="selected.has(note.id)"
-                @open="edit"
-                @select="toggleSelect"
-                @pin="pin"
-                @task="toggleTask"
-              />
+          <QuickNoteCalendar
+            v-if="view === 'calendar'"
+            :notes="filtered"
+            :reminders="state.reminders"
+            :from-date="fromDate"
+            :to-date="toDate"
+            @open="edit"
+            @create="newNote"
+          />
+          <template v-else>
+            <section
+              v-for="section in sections"
+              :key="section.id"
+              class="notes-group"
+            >
+              <h3 v-if="section.title" class="notes-group-title">
+                {{ section.title }}<span>{{ section.items.length }}</span>
+              </h3>
+              <div class="notes-cards">
+                <QuickNoteCard
+                  v-for="note in section.items"
+                  :key="note.id"
+                  :note="note"
+                  :folders="state.folders"
+                  :next-reminder="nextReminder(note.id)"
+                  :selected="selected.has(note.id)"
+                  @open="edit"
+                  @reminder="edit($event, true)"
+                  @select="toggleSelect"
+                  @pin="pin"
+                  @task="toggleTask"
+                />
+              </div>
+            </section>
+            <div v-if="!filtered.length && !loading" class="notes-empty">
+              <NotebookPen :size="34" /><span>{{
+                search ? "没有找到匹配的记录" : "从一条便签开始"
+              }}</span
+              ><span class="notes-caption"
+                >记住要做的事，也留下已经完成的事。</span
+              ><button class="notes-button" type="button" @click="newNote">
+                写一条便签
+              </button>
             </div>
-          </section>
-          <div v-if="!filtered.length && !loading" class="notes-empty">
-            <NotebookPen :size="34" /><span>{{
-              search ? "没有找到匹配的记录" : "从一条便签开始"
-            }}</span
-            ><span class="notes-caption"
-              >记住要做的事，也留下已经完成的事。</span
-            ><button class="notes-button" type="button" @click="newNote">
-              写一条便签
-            </button>
-          </div>
+          </template>
+          <p v-if="view === 'calendar' && state.hasMore" class="notes-caption">
+            日历显示已加载的记录，加载更多可查看其余事项。
+          </p>
           <button
             v-if="state.hasMore"
             class="notes-button notes-load"
@@ -400,6 +431,7 @@
     </main>
     <QuickNoteEditor
       v-if="editing"
+      ref="noteEditor"
       :key="editing.id || 'new'"
       :note="editing"
       :folders="state.folders"
@@ -511,10 +543,11 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import {
   Archive,
   Bell,
+  CalendarDays,
   CheckCheck,
   Clock3,
   Download,
@@ -537,6 +570,7 @@ import AssistantModelSelect from "@/features/assistant/components/AssistantModel
 import QuickNoteCard from "./components/QuickNoteCard.vue"
 import QuickNoteEditor from "./components/QuickNoteEditor.vue"
 import QuickNoteCapture from "./components/QuickNoteCapture.vue"
+import QuickNoteCalendar from "./components/QuickNoteCalendar.vue"
 import { quickNotesApi } from "@/api/modules/quick-notes"
 import { noteTypes } from "./constant"
 import { formatDateTime } from "@/utils/formatters"
@@ -569,6 +603,7 @@ const loading = ref(false)
 const error = ref("")
 const folderError = ref("")
 const editing = ref(null)
+const noteEditor = ref(null)
 const organizer = ref(false)
 const purgeConfirm = ref(false)
 const folderDraft = ref({
@@ -579,6 +614,7 @@ const folderDraft = ref({
 })
 const views = [
   { id: "all", label: "全部记录", icon: StickyNote },
+  { id: "calendar", label: "日历日程", icon: CalendarDays },
   { id: "inbox", label: "收件箱", icon: Inbox },
   { id: "todo", label: "待办事项", icon: ListTodo },
   { id: "today", label: "今日提醒", icon: Bell },
@@ -628,8 +664,9 @@ const filtered = computed(() =>
     const date =
       note.occurredOn || new Date(note.createdAt).toLocaleDateString("sv-SE")
     if (
-      (fromDate.value && date < fromDate.value) ||
-      (toDate.value && date > toDate.value)
+      view.value !== "calendar" &&
+      ((fromDate.value && date < fromDate.value) ||
+        (toDate.value && date > toDate.value))
     )
       return false
     if (typeFilter.value && note.type !== typeFilter.value) return false
@@ -749,12 +786,14 @@ function selectGroup(id) {
   selected.value = new Set()
   load()
 }
-function newNote() {
+function newNote(occurredOn) {
   recoverCapture = null
   manualSnapshot = null
   editing.value = {
     groupId: groupId.value || "inbox",
-    type: view.value === "worklog" ? "worklog" : "note"
+    type: view.value === "worklog" ? "worklog" : "note",
+    // 日历入口使用所选日期，普通新建按钮传入的点击事件不作为日期保存。
+    occurredOn: typeof occurredOn === "string" ? occurredOn : ""
   }
 }
 function manualDraft() {
@@ -765,17 +804,22 @@ function manualDraft() {
 function clearCapturedDraft(snapshot) {
   if (snapshot && draft.value === snapshot) draft.value = ""
 }
-async function edit(note) {
+async function edit(note, reminder = false) {
   recoverCapture = null
   manualSnapshot = null
   try {
     editing.value = await quickNotesApi.invoke("detail", { id: note.id })
+    if (reminder) {
+      await nextTick()
+      await noteEditor.value.openReminders()
+    }
   } catch (failure) {
     error.value = String(failure)
   }
 }
 async function saved() {
-  if (manualSnapshot !== null && draft.value === manualSnapshot) draft.value = ""
+  if (manualSnapshot !== null && draft.value === manualSnapshot)
+    draft.value = ""
   manualSnapshot = null
   editing.value = null
   if (recoverCapture) {

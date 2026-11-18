@@ -24,7 +24,11 @@
         aria-live="polite"
       >
         <MarkdownContent
-          :text="task.text || task.error || (busy ? '思考中…' : '已停止回复')"
+          :text="
+            responseTask.text ||
+            responseTask.error ||
+            (noteSaving || busy ? '思考中…' : '已停止回复')
+          "
         />
       </div>
       <AssistantImages
@@ -37,7 +41,11 @@
         v-model="draft"
         class="desktop-assistant-textarea"
         aria-label="给助手发消息"
-        placeholder="想和我说些什么？支持粘贴图片"
+        :placeholder="
+          quickNoteMode
+            ? '记下要做的事、工作进展或想法…'
+            : '想和我说些什么？支持粘贴图片'
+        "
         maxlength="30000"
         rows="2"
         @keydown="handleKeydown"
@@ -55,9 +63,19 @@
       <div class="desktop-assistant-actions">
         <span
           class="desktop-assistant-hint"
-          title="Enter 发送 · Shift+Enter 换行"
+          :title="
+            quickNoteMode
+              ? 'Enter 记录 · Shift+Enter 换行'
+              : 'Enter 发送 · Shift+Enter 换行'
+          "
           >{{
-            busy ? "回复中，可先输入下一条" : "Enter 发送 · Shift+Enter 换行"
+            quickNoteMode
+              ? noteSaving
+                ? "整理中，可继续输入"
+                : "Enter 记录 · Shift+Enter 换行"
+              : busy
+                ? "回复中，可先输入下一条"
+                : "Enter 发送 · Shift+Enter 换行"
           }}</span
         >
         <QuickNoteCapture
@@ -110,6 +128,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue"
 import { ArrowUp, Square, X } from "lucide-vue-next"
 import { appApi, assistantApi } from "@/api"
+import { quickNotesApi } from "@/api/modules/quick-notes"
 import AssistantModelSelect from "@/features/assistant/components/AssistantModelSelect.vue"
 import QuickNoteCapture from "@/features/quick-notes/components/QuickNoteCapture.vue"
 import AssistantImages from "@/features/assistant/components/AssistantImages.vue"
@@ -128,6 +147,10 @@ const images = ref([])
 const modelSaving = ref(false)
 const settings = ref({})
 const task = ref({})
+const noteTask = ref({})
+const responseTask = computed(() =>
+  noteTask.value.runId ? noteTask.value : task.value
+)
 // 桌面速记只读取当前输入和已经完成的一轮，不抓取其他会话。
 const noteMessages = computed(() =>
   task.value.status === "completed"
@@ -150,9 +173,9 @@ const busy = computed(() =>
 )
 const showResponse = computed(
   () =>
-    task.value.surface === "desktop" &&
-    task.value.replyAtPet === false &&
-    Boolean(task.value.runId)
+    responseTask.value.surface === "desktop" &&
+    responseTask.value.replyAtPet === false &&
+    Boolean(responseTask.value.runId)
 )
 const canSend = computed(() =>
   quickNoteMode.value
@@ -268,6 +291,7 @@ async function send() {
     return
   }
   const current = sequence
+  noteTask.value = {}
   const version = eventVersion
   const sentDraft = draft.value
   const message = sentDraft.trim()
@@ -318,6 +342,10 @@ async function openSettings() {
 onMounted(async () => {
   try {
     for (const subscribe of [
+      () =>
+        quickNotesApi.onAssistant((snapshot) => {
+          if (!disposed) noteTask.value = snapshot
+        }),
       () => assistantApi.onDesktopOpen(open),
       () =>
         assistantApi.onEvent((event) => {

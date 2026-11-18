@@ -261,10 +261,16 @@
               v-model="draft"
               class="assistant-input"
               aria-label="给应用助手的指令"
-              placeholder="描述你想做的事..."
+              :placeholder="
+                quickNoteMode
+                  ? '记下要做的事、工作进展或想法…'
+                  : '描述你想做的事...'
+              "
               rows="2"
               maxlength="30000"
-              :disabled="!initialized || settings.enabled === false"
+              :disabled="
+                !initialized || (!quickNoteMode && settings.enabled === false)
+              "
               @keydown="handleKeydown"
             />
             <div class="assistant-composer-foot">
@@ -308,6 +314,7 @@
               </div>
               <QuickNoteCapture
                 ref="noteCapture"
+                class="assistant-note-mode"
                 v-model="quickNoteMode"
                 mode-toggle
                 :draft="draft"
@@ -1359,10 +1366,12 @@ onBeforeUnmount(() => {
                 display: none;
               }
             }
+            .assistant-note-mode {
+              margin-left: auto;
+            }
             .assistant-model-select {
               width: 200px;
               min-width: 160px;
-              margin-left: auto;
             }
             .assistant-send,
             .assistant-stop {

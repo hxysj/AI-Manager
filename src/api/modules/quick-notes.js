@@ -4,5 +4,6 @@ import { request, subscribeReady } from "../request"
 export const quickNotesApi = {
   invoke: (action, payload = {}) => request(`quick-notes:${action}`, payload),
   onChanged: (callback) => subscribeReady("quick-notes:changed", callback),
+  onAssistant: (callback) => subscribeReady("quick-notes:assistant", callback),
   onOpen: (callback) => subscribeReady("quick-notes:open", callback)
 }

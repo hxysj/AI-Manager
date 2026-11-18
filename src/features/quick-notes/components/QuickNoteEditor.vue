@@ -129,7 +129,7 @@
           </button>
         </div>
       </section>
-      <section class="note-section">
+      <section ref="reminderSection" class="note-section">
         <div class="note-section-head">
           <span><Bell :size="15" />定时提醒</span
           ><button type="button" class="note-text-button" @click="addReminder">
@@ -138,7 +138,13 @@
         </div>
         <p v-if="form.pendingTime" class="note-warning">
           {{ form.pendingTime }}
-          <button type="button" class="note-text-button" @click="form.pendingTime = ''">已确认</button>
+          <button
+            type="button"
+            class="note-text-button"
+            @click="form.pendingTime = ''"
+          >
+            已确认
+          </button>
         </p>
         <div
           v-for="(plan, index) in form.reminders"
@@ -150,7 +156,8 @@
               >提醒时间<input
                 v-model="plan.localAt"
                 type="datetime-local"
-                required
+                :min="plan.enabled ? localInput(Date.now() + 60000) : undefined"
+                :required="plan.enabled"
             /></label>
             <label class="note-field"
               >关联事项<select v-model="plan.taskId">
@@ -190,7 +197,12 @@
             <label class="note-check"
               ><input v-model="plan.enabled" type="checkbox" />启用提醒</label
             >
-            <label class="note-check"><input v-model="plan.schedule.sound" type="checkbox" />声音提醒</label>
+            <label class="note-check"
+              ><input
+                v-model="plan.schedule.sound"
+                type="checkbox"
+              />声音提醒</label
+            >
             <button
               type="button"
               class="note-text-button"
@@ -294,7 +306,15 @@
             {{ entry.actor === "ai" ? "AI 整理" : "编辑记录" }}</span
           >
           <pre>{{ entry.after?.content }}</pre>
-          <div v-for="task in entry.after?.tasks || []" :key="task.id">{{ taskStates.find(state => state.id === task.status)?.label }} · {{ task.title }}{{ task.completedAt ? ` · 完成于 ${formatDateTime(task.completedAt)}` : '' }}</div>
+          <div v-for="task in entry.after?.tasks || []" :key="task.id">
+            {{ taskStates.find((state) => state.id === task.status)?.label }} ·
+            {{ task.title
+            }}{{
+              task.completedAt
+                ? ` · 完成于 ${formatDateTime(task.completedAt)}`
+                : ""
+            }}
+          </div>
         </div>
       </details>
       <p v-if="error" class="note-error" role="alert">{{ error }}</p>
@@ -315,7 +335,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from "vue"
+import { computed, nextTick, ref, watch } from "vue"
 import { Bell, Plus, Trash2, X } from "lucide-vue-next"
 import BaseModal from "@/components/BaseModal.vue"
 import { quickNotesApi } from "@/api/modules/quick-notes"
@@ -335,7 +355,10 @@ const emit = defineEmits(["close", "saved"])
 // 编辑草稿与详情隔离，取消不会改动卡片，提醒保留原始规则与下一次时间。
 const form = ref(JSON.parse(JSON.stringify({ ...emptyNote(), ...props.note })))
 // 新建草稿预先固定 ID，保存回包丢失后重试也不会新增重复记录。
-if (!form.value.id) { form.value.id = crypto.randomUUID(); form.value.revision = 0 }
+if (!form.value.id) {
+  form.value.id = crypto.randomUUID()
+  form.value.revision = 0
+}
 form.value.reminders = (form.value.reminders || []).map((plan) => ({
   ...plan,
   enabled: Boolean(plan.enabled),
@@ -352,6 +375,7 @@ form.value.tasks = form.value.tasks.map((task) => ({
 const tags = ref((form.value.tags || []).join("，"))
 const saving = ref(false)
 const error = ref("")
+const reminderSection = ref(null)
 const groups = computed(() =>
   props.folders.filter(
     (folder) =>
@@ -410,6 +434,18 @@ function addReminder() {
     }
   })
 }
+// 卡片提醒入口直接定位编辑器中的提醒；没有启用的计划时预填十分钟后的新提醒。
+async function openReminders() {
+  if (!form.value.reminders.some((plan) => plan.enabled)) addReminder()
+  await nextTick()
+  const index = form.value.reminders.findIndex((plan) => plan.enabled)
+  const input = reminderSection.value.querySelectorAll(
+    'input[type="datetime-local"]'
+  )[index]
+  input.scrollIntoView({ block: "center" })
+  input.focus({ preventScroll: true })
+}
+defineExpose({ openReminders })
 // 相对提醒同步展示实际时间，后端也按任务截止时间重新校验。
 function updateRelative(plan) {
   const task = form.value.tasks.find((task) => task.id === plan.taskId)
@@ -418,9 +454,13 @@ function updateRelative(plan) {
       new Date(task.localDueAt).getTime() - plan.schedule.offsetMinutes * 60000
     )
 }
-watch(() => form.value.tasks.map(task => `${task.id}:${task.localDueAt}`).join('|'), () => {
-  for (const plan of form.value.reminders) updateRelative(plan)
-})
+watch(
+  () =>
+    form.value.tasks.map((task) => `${task.id}:${task.localDueAt}`).join("|"),
+  () => {
+    for (const plan of form.value.reminders) updateRelative(plan)
+  }
+)
 function beforeDeadline(plan) {
   const task = form.value.tasks.find((item) => item.id === plan.taskId)
   if (task?.dueDate) {
@@ -431,8 +471,17 @@ function beforeDeadline(plan) {
 }
 async function save() {
   if (saving.value) return
-  saving.value = true
   error.value = ""
+  // 提交时重新核对当前时间，避免编辑期间时间已过或提前提醒落在过去。
+  if (
+    form.value.reminders.some(
+      (plan) => plan.enabled && !(new Date(plan.localAt).getTime() > Date.now())
+    )
+  ) {
+    error.value = "提醒时间必须晚于当前时间，请重新选择"
+    return
+  }
+  saving.value = true
   try {
     const payload = {
       ...form.value,

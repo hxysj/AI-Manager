@@ -68,9 +68,10 @@ pub fn list(paths: &AppPaths, filters: &Value) -> Result<Value,ManagerError> {
     Ok(json!({"notes":notes,"folders":folders,"reminders":plans,"events":events,"captures":captures,"hasMore":notes.len()==limit as usize,"offset":offset,"limit":limit}))
 }
 
-fn valid_date(value: &Value) -> Result<(),ManagerError> {
+fn valid_date(value: &Value,field: &str) -> Result<(),ManagerError> {
     if value.is_null() || value.as_str()==Some("") { return Ok(()); }
-    NaiveDate::parse_from_str(value.as_str().unwrap_or(""),"%Y-%m-%d").map_err(|_|fail("日期必须为 YYYY-MM-DD"))?;
+    let valid=value.as_str().and_then(|s|NaiveDate::parse_from_str(s,"%Y-%m-%d").ok().filter(|date|date.format("%Y-%m-%d").to_string()==s));
+    if valid.is_none(){return Err(fail(format!("{field} 日期必须为 YYYY-MM-DD 或 null，当前值：{value}")));}
     Ok(())
 }
 
@@ -95,7 +96,7 @@ pub fn save_in(c: &Connection, input: &Value, actor: &str) -> Result<Value,Manag
         if text(&note,field).is_empty(){note[field]=json!(default);}
         if !c.query_row("SELECT EXISTS(SELECT 1 FROM quick_note_folders WHERE id=?1 AND kind=?2)",params![text(&note,field),kind],|r|r.get::<_,bool>(0))? {return Err(fail("分类或分组不存在"));}
     }
-    valid_date(&note["occurredOn"])?;
+    valid_date(&note["occurredOn"],"occurredOn")?;
     note["content"]=json!(content);
     note["title"]=json!(if text(&note,"title").trim().is_empty() {content.lines().next().unwrap_or("便签").chars().take(60).collect::<String>()} else {text(&note,"title").trim().chars().take(160).collect()});
     if !note["tags"].as_array().is_some_and(|a|a.len()<=30 && a.iter().all(|t|t.as_str().is_some_and(|s|s.chars().count()<=40))) {return Err(fail("标签最多 30 项，每项最多 40 字"));}
@@ -110,7 +111,7 @@ pub fn save_in(c: &Connection, input: &Value, actor: &str) -> Result<Value,Manag
         if !task_ids.insert(text(task,"id").to_owned()){return Err(fail("待办 ID 重复"));}
         if task.get("status").is_none(){task["status"]=json!("pending");}
         if !["pending","doing","completed","cancelled"].contains(&text(task,"status")){return Err(fail("待办状态无效"));}
-        valid_date(&task["dueDate"])?;
+        valid_date(&task["dueDate"],"tasks.dueDate")?;
         if !task["dueAt"].is_null() && !task["dueAt"].is_i64(){return Err(fail("任务截止时间无效"));}
         let old=previous.as_ref().and_then(|p|p["tasks"].as_array()).and_then(|a|a.iter().find(|t|t["id"]==task["id"]));
         task["completedAt"]=if task["status"]=="completed" {old.filter(|t|t["status"]=="completed").and_then(|t|t.get("completedAt")).cloned().unwrap_or(json!(now()))} else {Value::Null};
@@ -181,10 +182,10 @@ fn save_reminder(c: &Connection,note: &Value,plan: &Value) -> Result<(),ManagerE
     }
     if Utc.timestamp_millis_opt(fire).single().is_none(){return Err(fail("提醒时间无效"));}
     if schedule["endAt"].as_i64().is_some_and(|end|end<fire){return Err(fail("结束日期不能早于提醒时间"));}
-    let old:Option<(String,String,i64)> = c.query_row("SELECT note_id,schedule_json,enabled FROM quick_note_reminders WHERE id=?1",[&key],|r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).optional()?;
+    let old:Option<(String,String)> = c.query_row("SELECT note_id,schedule_json FROM quick_note_reminders WHERE id=?1",[&key],|r|Ok((r.get(0)?,r.get(1)?))).optional()?;
     if old.as_ref().is_some_and(|o|o.0!=text(note,"id")){return Err(fail("不能修改其他便签的提醒"));}
     let enabled=plan["enabled"]!=false && plan["enabled"]!=0;
-    if enabled && fire<=now() && old.as_ref().is_none_or(|o|o.2==0 || o.1!=schedule.to_string()) {return Err(fail("提醒时间已过去，请选择未来时间"));}
+    if enabled && fire<=now() {return Err(fail("提醒时间必须晚于当前时间，请重新选择"));}
     schedule["repeat"]=json!(repeat.to_owned());
     if repeat=="monthly" && schedule["day"].as_u64().is_none() {
         let at=Local.timestamp_millis_opt(fire).single().unwrap();
@@ -245,6 +246,31 @@ pub fn capture_failure(paths: &AppPaths,key: &str,status: &str,error: &str) -> R
     Ok(())
 }
 
+// AI 新目录与便签使用同一事务，同名或别名目录优先复用，失败时一起回滚。
+fn resolve_ai_folders(c: &Connection,item: &mut Value) -> Result<(),ManagerError> {
+    for (field,proposal,kind,default) in [("groupId","newGroup","group","inbox"),("categoryId","newCategory","category","uncategorized")] {
+        let current=text(item,field);
+        let valid=c.query_row("SELECT EXISTS(SELECT 1 FROM quick_note_folders WHERE id=?1 AND kind=?2 AND archived=0)",params![current,kind],|r|r.get::<_,bool>(0))?;
+        if valid && current!=default {continue;}
+        let proposed=&item[proposal];
+        let name=proposed.as_str().unwrap_or_else(||text(proposed,"name")).trim();
+        if name.is_empty(){item[field]=json!(default);continue;}
+        if name.chars().count()>60 {return Err(fail("AI 创建的分类或分组名称最多 60 字"));}
+        let aliases=proposed.get("aliases").cloned().unwrap_or(json!([]));
+        if !aliases.as_array().is_some_and(|a|a.len()<=30 && a.iter().all(|s|s.as_str().is_some_and(|s|!s.trim().is_empty() && s.chars().count()<=60))) {return Err(fail("AI 创建的分类或分组别名格式无效"));}
+        let normalized=name.to_lowercase();
+        let existing=query(c,"SELECT id,name,aliases_json AS aliasesJson FROM quick_note_folders WHERE kind=?1 AND archived=0 ORDER BY sort_order,id",&[&kind])?.into_iter().find(|f|
+            text(f,"name").trim().to_lowercase()==normalized || f["aliases"].as_array().is_some_and(|a|a.iter().any(|v|v.as_str().is_some_and(|s|s.trim().to_lowercase()==normalized))));
+        let key=if let Some(folder)=existing {text(&folder,"id").to_string()}else{
+            let key=id();
+            c.execute("INSERT INTO quick_note_folders(id,kind,name,aliases_json,sort_order,archived) VALUES(?1,?2,?3,?4,0,0)",params![key,kind,name,aliases.to_string()])?;
+            key
+        };
+        item[field]=json!(key);
+    }
+    Ok(())
+}
+
 pub fn complete_capture(paths: &AppPaths,key: &str,result: &Value) -> Result<Value,ManagerError> {
     let mut c=open(paths)?;
     let tx=c.transaction_with_behavior(TransactionBehavior::Immediate)?;
@@ -255,6 +281,7 @@ pub fn complete_capture(paths: &AppPaths,key: &str,result: &Value) -> Result<Val
         let mut notes=Vec::new();
         for (index,part) in parts.iter().enumerate() {
             let mut item=part.clone();item["capturedAt"]=capture["capturedAt"].clone();
+            resolve_ai_folders(&tx,&mut item)?;
             let note=save_in(&tx,&item,"ai")?;
             if index>0 {
                 tx.execute("INSERT INTO quick_note_captures(id,request_id,note_id,source_text,source_json,captured_at,model_json,status,error,result_json)
@@ -281,6 +308,7 @@ pub fn complete_capture(paths: &AppPaths,key: &str,result: &Value) -> Result<Val
         if old["tags"].as_array().is_some_and(|tags|!tags.is_empty()){item["tags"]=old["tags"].clone();}
         item.as_object_mut().unwrap().remove("reminders");
     }
+    resolve_ai_folders(&tx,&mut item)?;
     let note=save_in(&tx,&item,"ai")?;
     tx.execute("UPDATE quick_note_captures SET note_id=?2,status='completed',result_json=?3 WHERE id=?1",params![key,text(&note,"id"),note.to_string()])?;
     tx.commit()?;
@@ -343,6 +371,7 @@ pub fn due_events(paths: &AppPaths,at: i64) -> Result<Vec<Value>,ManagerError> {
 pub fn dispatch(paths: &AppPaths,action: &str,input: &Value) -> Result<Value,ManagerError> {
     match action {
         "list"=>list(paths,input), "detail"=>detail(paths,text(input,"id")),
+        "folders"=>Ok(json!({"folders":query(&open(paths)?,"SELECT id,kind,name,aliases_json AS aliasesJson,sort_order AS sortOrder,archived FROM quick_note_folders WHERE (?1='' OR kind=?1) ORDER BY sort_order,name",&[&text(input,"kind")])?})),
         "save"=>save(paths,input,"user"), "organize"=>organize(paths,input),
         "capture-state"=>capture_state(paths,text(input,"requestId")),
         "capture-discard"=>{let c=open(paths)?;c.execute("UPDATE quick_note_captures SET status='dismissed' WHERE id=?1 AND status<>'running'",[text(input,"id")])?;Ok(json!({"ok":true}))},

@@ -68,10 +68,16 @@
       <span :title="`记录于 ${formatDateTime(note.createdAt)}`">{{
         note.occurredOn || formatDateTime(note.createdAt).slice(0, 10)
       }}</span
-      ><span v-if="nextReminder" class="note-card-reminder"
-        ><Bell :size="12" />{{
-          formatDateTime(nextReminder).slice(5, 16)
-        }}</span
+      ><button
+        v-if="note.lifecycle === 'active'"
+        class="note-card-reminder"
+        type="button"
+        :aria-label="nextReminder ? '管理提醒' : '添加提醒'"
+        @click="$emit('reminder', note)"
+      >
+        <Bell :size="12" />{{
+          nextReminder ? formatDateTime(nextReminder).slice(5, 16) : "添加提醒"
+        }}</button
       ><button
         class="note-card-icon"
         type="button"
@@ -95,7 +101,7 @@ const props = defineProps({
   nextReminder: { type: Number, default: null },
   selected: Boolean
 })
-defineEmits(["open", "select", "pin", "task"])
+defineEmits(["open", "select", "pin", "task", "reminder"])
 // 卡片只渲染公开记录，操作交给工作区统一保存和处理版本冲突。
 const typeName = computed(
   () => noteTypes.find((type) => type.id === props.note.type)?.label || "便签"
@@ -263,7 +269,13 @@ const categoryName = computed(
       align-items: center;
       gap: 4px;
       margin-left: auto;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      font: inherit;
       color: var(--color-primary);
+      white-space: nowrap;
+      cursor: pointer;
     }
     .note-card-icon {
       margin-left: auto;

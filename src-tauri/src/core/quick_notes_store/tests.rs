@@ -4,6 +4,49 @@ impl Fixture {fn new()->Self{let root=std::env::temp_dir().join(format!("quick-n
 impl Drop for Fixture {fn drop(&mut self){assert_eq!(self.root.parent(),Some(std::env::temp_dir().as_path()));std::fs::remove_dir_all(&self.root).ok();}}
 
 #[test]
+fn date_fields_require_real_canonical_dates_and_report_the_invalid_field() {
+    let f=Fixture::new();
+    for field in ["occurredOn","dueDate"] {
+        for date in [json!("今天"),json!("2026/11/18"),json!("2026-1-2"),json!("2026-02-29"),json!("2026-11-18T15:00:00+08:00"),json!("null"),json!(20261118)] {
+            let mut input=json!({"content":"日期校验","tasks":[{"title":"处理事项"}]});
+            if field=="occurredOn"{input[field]=date;}else{input["tasks"][0][field]=date;}
+            let error=save(&f.paths,&input,"user").unwrap_err().to_string();
+            assert!(error.contains(field),"{error}");
+            assert!(list(&f.paths,&json!({})).unwrap()["notes"].as_array().unwrap().is_empty());
+        }
+    }
+    for date in [Value::Null,json!(""),json!("2026-11-18"),json!("2028-02-29")] {
+        assert!(save(&f.paths,&json!({"content":"有效日期","occurredOn":date,"tasks":[{"title":"处理事项","dueDate":date}]}),"user").is_ok());
+    }
+}
+
+#[test]
+fn ai_folders_reuse_aliases_create_atomically_and_preserve_manual_classification() {
+    let f=Fixture::new();
+    let group=organize(&f.paths,&json!({"kind":"group","name":"AI Manager","aliases":["桌宠"]})).unwrap();
+    let capture=capture(&f.paths,&json!({"requestId":"folders","text":"整理桌宠发布"}),&json!({})).unwrap();
+    let result=complete_capture(&f.paths,text(&capture,"id"),&json!({"notes":[
+        {"content":"第一项","newGroup":{"name":"桌宠"},"newCategory":{"name":"客户交付","aliases":["交付"]}},
+        {"content":"第二项","newGroup":{"name":"AI Manager"},"newCategory":{"name":"交付"}}
+    ]})).unwrap();
+    let notes=result["notes"].as_array().unwrap();
+    assert_eq!(notes[0]["groupId"],group["id"]);
+    assert_eq!(notes[0]["categoryId"],notes[1]["categoryId"]);
+    let folders=dispatch(&f.paths,"folders",&json!({"kind":"category"})).unwrap();
+    assert_eq!(folders["folders"].as_array().unwrap().iter().filter(|f|f["name"]=="客户交付").count(),1);
+    assert!(folders["folders"].as_array().unwrap().iter().all(|f|f["kind"]=="category"));
+    let cancelled=super::capture(&f.paths,&json!({"requestId":"rollback-folder","text":"无效结果"}),&json!({})).unwrap();
+    assert!(complete_capture(&f.paths,text(&cancelled,"id"),&json!({"content":"","newGroup":{"name":"不应保存"}})).is_err());
+    assert!(!dispatch(&f.paths,"folders",&json!({})).unwrap()["folders"].as_array().unwrap().iter().any(|f|f["name"]=="不应保存"));
+    let original=&notes[0];
+    let classify=super::capture(&f.paths,&json!({"requestId":"keep-folder","text":"人工已确认","noteId":original["id"]}),&json!({})).unwrap();
+    let updated=complete_capture(&f.paths,text(&classify,"id"),&json!({"baseRevision":original["revision"],"newGroup":{"name":"不覆盖人工"},"newCategory":{"name":"不覆盖人工"}})).unwrap();
+    assert_eq!(updated["groupId"],original["groupId"]);
+    assert_eq!(updated["categoryId"],original["categoryId"]);
+    assert!(!dispatch(&f.paths,"folders",&json!({})).unwrap()["folders"].as_array().unwrap().iter().any(|f|f["name"]=="不覆盖人工"));
+}
+
+#[test]
 fn notes_preserve_creation_history_tasks_and_conflicts() {
     let f=Fixture::new();
     let first=save(&f.paths,&json!({"content":"修复登录问题","type":"worklog","tasks":[{"title":"回归测试"}]}),"user").unwrap();
@@ -27,6 +70,29 @@ fn reminders_are_persistent_idempotent_and_stop_on_completion() {
     assert_eq!(due_events(&f.paths,at+80_000).unwrap().len(),1);
     dispatch(&f.paths,"task-update",&json!({"id":note["id"],"revision":note["revision"],"taskId":"t","status":"completed"})).unwrap();
     assert!(due_events(&f.paths,at+90_000).unwrap().is_empty());
+    assert_eq!(detail(&f.paths,text(&note,"id")).unwrap()["reminders"][0]["enabled"],0);
+}
+
+#[test]
+fn enabled_reminders_must_be_strictly_future_for_creation_changes_and_offsets() {
+    let f=Fixture::new();
+    for at in [now()-60_000,now()] {
+        let error=save(&f.paths,&json!({"content":"无效提醒","reminders":[{"nextFireAt":at,"schedule":{"at":at,"repeat":"once"}}]}),"user").unwrap_err().to_string();
+        assert!(error.contains("必须晚于当前时间"));
+        assert!(list(&f.paths,&json!({})).unwrap()["notes"].as_array().unwrap().is_empty());
+    }
+    let at=now()+3_600_000;
+    let note=save(&f.paths,&json!({"content":"未来提醒","tasks":[{"id":"task","title":"交付","dueAt":now()+60_000}],"reminders":[{"nextFireAt":at,"schedule":{"at":at,"repeat":"once"}}]}),"user").unwrap();
+    let plan=detail(&f.paths,text(&note,"id")).unwrap()["reminders"][0].clone();
+    // 即使保留原规则，仅改触发点为当前时间，也必须拒绝并回滚修订。
+    let mut changed=note.clone();let mut past=plan.clone();past["nextFireAt"]=json!(now());changed["reminders"]=json!([past]);
+    assert!(save(&f.paths,&changed,"user").unwrap_err().to_string().contains("必须晚于当前时间"));
+    let unchanged=detail(&f.paths,text(&note,"id")).unwrap();
+    assert_eq!(unchanged["revision"],note["revision"]);assert_eq!(unchanged["reminders"][0]["nextFireAt"],at);
+    let mut offset=note.clone();offset["reminders"]=json!([{"taskId":"task","nextFireAt":at,"schedule":{"at":at,"repeat":"once","offsetMinutes":5}}]);
+    assert!(save(&f.paths,&offset,"user").unwrap_err().to_string().contains("必须晚于当前时间"));
+    past["enabled"]=json!(false);changed["reminders"]=json!([past]);
+    save(&f.paths,&changed,"user").unwrap();
     assert_eq!(detail(&f.paths,text(&note,"id")).unwrap()["reminders"][0]["enabled"],0);
 }
 

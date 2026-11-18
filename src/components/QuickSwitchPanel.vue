@@ -231,10 +231,28 @@
             type="button"
             aria-label="停止回复"
             title="停止回复"
-            :disabled="!desktopRunId || assistantState.status === 'cancelling'"
+            :disabled="!desktopRunId || desktopTask.status === 'cancelling'"
             @click="stopDesktopChat"
           >
             <Square :size="11" />
+          </button>
+          <button
+            v-if="
+              !desktopBusy &&
+              desktopTask.operation === 'quick-note' &&
+              desktopTask.noteId
+            "
+            class="quick-switch-speech-button quick-switch-speech-link"
+            type="button"
+            @click="
+              quickNotesApi
+                .invoke('open', { id: desktopTask.noteId })
+                .catch((error) =>
+                  createMessage.error(error.message || String(error))
+                )
+            "
+          >
+            查看便签
           </button>
           <button
             class="quick-switch-speech-button"
@@ -263,6 +281,7 @@ import {
 } from "vue"
 import { Square, X } from "lucide-vue-next"
 import { appApi, assistantApi, lanShareApi, usageApi } from "@/api"
+import { quickNotesApi } from "@/api/modules/quick-notes"
 import AiIcon from "@/components/AiIcon.vue"
 import DesktopPet from "@/components/DesktopPet.vue"
 import MarkdownContent from "@/components/MarkdownContent.vue"
@@ -288,7 +307,15 @@ const usageError = ref("")
 const lanShareUnreadCount = ref(0)
 let unsubscribeLanShare = null
 const assistantState = ref({})
+const noteState = ref({})
+const desktopTask = computed(() =>
+  noteState.value.runId === desktopRunId.value
+    ? noteState.value
+    : assistantState.value
+)
 let unsubscribeAssistant
+let unsubscribeNotes
+let noteStateVersion = 0
 const assistantEnabled = computed(
   () => props.state.appSettings?.agents?.assistant?.enabled !== false
 )
@@ -299,7 +326,7 @@ const desktopChatError = ref("")
 const chatWaiting = ref(false)
 let desktopReplyTimer = null
 let assistantStateVersion = 0
-let desktopLastRunId = ""
+const desktopSeenRuns = new Set()
 let desktopReplyPaused = false
 let desktopTimerVersion = 0
 const desktopBusy = computed(() => chatWaiting.value)
@@ -311,7 +338,7 @@ const desktopThoughtLabel = computed(
     ({
       working: "正在处理",
       cancelling: "正在停止"
-    })[assistantState.value.status] || "思考中"
+    })[desktopTask.value.status] || "思考中"
 )
 const desktopChatVisible = computed(() =>
   Boolean(
@@ -438,7 +465,7 @@ function closeDesktopChat() {
 
 function applyDesktopTask(snapshot) {
   desktopRunId.value = snapshot.runId
-  desktopLastRunId = snapshot.runId
+  desktopSeenRuns.add(snapshot.runId)
   desktopReply.value = snapshot.text || ""
   const waiting = ["thinking", "working", "replying", "cancelling"].includes(
     snapshot.status
@@ -458,11 +485,22 @@ function applyDesktopTask(snapshot) {
 
 function applyAssistantState(snapshot) {
   assistantState.value = snapshot
+  applyDesktopReply(snapshot)
+}
+
+function applyNoteState(snapshot) {
+  if (!snapshot?.runId) return
+  noteState.value = snapshot
+  applyDesktopReply(snapshot)
+}
+
+// 速记与聊天共用桌宠气泡，旧任务的重复快照不抢占当前回复。
+function applyDesktopReply(snapshot) {
   const current = desktopRunId.value && snapshot.runId === desktopRunId.value
   const fresh =
     snapshot.surface === "desktop" &&
     snapshot.replyAtPet &&
-    snapshot.runId !== desktopLastRunId &&
+    !desktopSeenRuns.has(snapshot.runId) &&
     windowVisible.value &&
     (["thinking", "working", "replying", "cancelling"].includes(
       snapshot.status
@@ -485,7 +523,11 @@ function applyAssistantState(snapshot) {
 async function stopDesktopChat() {
   if (!desktopRunId.value) return
   try {
-    await assistantApi.cancel(desktopRunId.value)
+    if (desktopTask.value.operation === "quick-note")
+      await quickNotesApi.invoke("capture-cancel", {
+        requestId: desktopTask.value.requestId
+      })
+    else await assistantApi.cancel(desktopRunId.value)
   } catch (error) {
     desktopChatError.value = error.message || String(error)
   }
@@ -590,13 +632,19 @@ const centerPosition = ref({ x: 64, y: 64 })
 // 偷看素材已包含墙壁遮挡，贴边只切换动作，不再把桌宠移出窗口。
 const petAction = computed(() => {
   if (!desktopPet.value) return ""
+  const activeState = [
+    "thinking",
+    "working",
+    "replying",
+    "cancelling"
+  ].includes(noteState.value.status)
+    ? noteState.value
+    : assistantState.value
   const action = drag.active
     ? "walk"
-    : assistantState.value.petAction ||
-      (["thinking", "replying"].includes(assistantState.value.status)
-        ? "think"
-        : "") ||
-      (assistantState.value.status === "working" ? "work_laptop" : "") ||
+    : activeState.petAction ||
+      (["thinking", "replying"].includes(activeState.status) ? "think" : "") ||
+      (activeState.status === "working" ? "work_laptop" : "") ||
       (hovered.value
         ? "salute"
         : screenEdge.value === "left" || screenEdge.value === "right"
@@ -984,10 +1032,16 @@ watch([assistantEnabled, desktopPet], () => {
 watch(windowVisible, async (visible) => {
   if (!visible) return
   const version = assistantStateVersion
+  const noteVersion = noteStateVersion
   try {
-    const snapshot = await assistantApi.getState()
+    const [snapshot, notes] = await Promise.all([
+      assistantApi.getState(),
+      quickNotesApi.invoke("assistant-state")
+    ])
     if (!disposed && version === assistantStateVersion && windowVisible.value)
       applyAssistantState(snapshot)
+    if (!disposed && noteVersion === noteStateVersion && windowVisible.value)
+      applyNoteState(notes)
   } catch {
     // 预热中的窗口等待后续助手事件，不阻塞桌宠。
   }
@@ -1084,10 +1138,28 @@ onBeforeUnmount(() => {
   unsubscribeVisibility?.()
   unsubscribeLanShare?.()
   unsubscribeAssistant?.()
+  unsubscribeNotes?.()
   stopDrag()
 })
 
 onMounted(async () => {
+  try {
+    const version = noteStateVersion
+    const unsubscribe = await quickNotesApi.onAssistant((snapshot) => {
+      if (disposed) return
+      noteStateVersion += 1
+      applyNoteState(snapshot)
+    })
+    if (disposed) {
+      unsubscribe()
+      return
+    }
+    unsubscribeNotes = unsubscribe
+    const snapshot = await quickNotesApi.invoke("assistant-state")
+    if (!disposed && version === noteStateVersion) applyNoteState(snapshot)
+  } catch {
+    // 速记尚未运行时保持原有聊天和桌宠功能。
+  }
   // 悬浮窗单独加载设备快传状态，主窗口隐藏时也能及时更新气泡。
   unsubscribeLanShare = lanShareApi.onStateChanged(applyLanShareState)
   lanShareApi
@@ -1261,6 +1333,17 @@ onMounted(async () => {
           &:disabled {
             opacity: 0.45;
             cursor: default;
+          }
+
+          &.quick-switch-speech-link {
+            flex: none;
+            width: auto;
+            padding: 0 9px;
+            border-radius: 11px;
+            white-space: nowrap;
+            font: inherit;
+            font-size: 11px;
+            line-height: 1;
           }
         }
       }
