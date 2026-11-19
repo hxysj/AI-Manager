@@ -120,6 +120,11 @@
               <p v-if="preview.newGroup?.name" class="smart-proposal">
                 将新建项目分组：{{ preview.newGroup.name }}
               </p>
+              <WorkTrackingFields
+                v-if="preview.type === 'worklog' && !preserveWorkTracking"
+                v-model="preview.workTracking"
+                :disabled="saving"
+              />
               <div class="smart-tasks">
                 <div class="smart-section-head">
                   <span
@@ -269,11 +274,17 @@ import {
 } from "lucide-vue-next"
 import BaseModal from "@/components/BaseModal.vue"
 import AssistantModelSelect from "@/features/assistant/components/AssistantModelSelect.vue"
+import WorkTrackingFields from "./WorkTrackingFields.vue"
 import { quickNotesApi } from "@/api/modules/quick-notes"
-import { localInput, reminderAt } from "@/features/quick-notes/constant"
+import {
+  localInput,
+  reminderAt,
+  workProgressError
+} from "@/features/quick-notes/constant"
 const props = defineProps({
   open: Boolean,
   applyOnly: Boolean,
+  preserveWorkTracking: Boolean,
   initialText: { type: String, default: "" },
   folders: { type: Array, default: () => [] },
   providers: { type: Array, default: () => [] },
@@ -403,6 +414,10 @@ async function confirm(original = false) {
           }
         })
       }
+  if (!props.preserveWorkTracking) {
+    error.value = workProgressError(note.workTracking)
+    if (error.value) return
+  }
   if (note.reminders.some((plan) => !(plan.nextFireAt > Date.now()))) {
     error.value = "提醒时间必须晚于当前时间，请重新选择"
     return

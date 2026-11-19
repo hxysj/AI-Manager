@@ -8,6 +8,17 @@ pub fn now() -> i64 { Utc::now().timestamp_millis() }
 pub fn text<'a>(value: &'a Value, key: &str) -> &'a str { value[key].as_str().unwrap_or("") }
 fn id() -> String { uuid::Uuid::new_v4().to_string() }
 
+fn work_status_label(status: &str) -> Option<&'static str> {
+    match status {
+        "planned" => Some("计划中"),
+        "in_progress" => Some("进行中"),
+        "blocked" => Some("已阻塞"),
+        "paused" => Some("已暂停"),
+        "completed" => Some("已完成"),
+        _ => None,
+    }
+}
+
 pub fn open(paths: &AppPaths) -> Result<Connection, ManagerError> {
     let mut c = database::open(paths)?;
     if !c.query_row("SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE name='quick_notes')", [], |r|r.get::<_,bool>(0))? {
@@ -58,14 +69,16 @@ pub fn list(paths: &AppPaths, filters: &Value) -> Result<Value,ManagerError> {
     let offset = filters["offset"].as_i64().unwrap_or(0).max(0);
     let rows = query(&c,"SELECT payload_json AS payloadJson FROM quick_notes WHERE lifecycle=?1
         AND (?2='' OR group_id=?2) AND (?3='' OR category_id=?3) AND (?4='' OR note_type=?4)
-        AND (?5='%%' OR payload_json LIKE ?5 ESCAPE '\\' OR EXISTS(SELECT 1 FROM quick_note_captures cap WHERE cap.note_id=quick_notes.id AND cap.source_text LIKE ?5 ESCAPE '\\')) ORDER BY pinned DESC,updated_at DESC,id LIMIT ?6 OFFSET ?7",
-        &[&lifecycle,&text(filters,"groupId"),&text(filters,"categoryId"),&text(filters,"type"),&search,&limit,&offset])?;
+        AND (?5='%%' OR payload_json LIKE ?5 ESCAPE '\\' OR EXISTS(SELECT 1 FROM quick_note_captures cap WHERE cap.note_id=quick_notes.id AND cap.source_text LIKE ?5 ESCAPE '\\'))
+        AND (?6='' OR (note_type='worklog' AND COALESCE(json_extract(payload_json,'$.workTracking.status'),'untracked')=?6))
+        ORDER BY pinned DESC,updated_at DESC,id LIMIT ?7 OFFSET ?8",
+        &[&lifecycle,&text(filters,"groupId"),&text(filters,"categoryId"),&text(filters,"type"),&search,&text(filters,"workStatus"),&limit,&offset])?;
     let notes = rows.into_iter().map(|r|r["payload"].clone()).collect::<Vec<_>>();
     let folders = query(&c,"SELECT id,kind,name,aliases_json AS aliasesJson,sort_order AS sortOrder,archived FROM quick_note_folders ORDER BY sort_order,name",&[])?;
     let plans = query(&c,"SELECT id,note_id AS noteId,task_id AS taskId,next_fire_at AS nextFireAt,enabled,schedule_json AS scheduleJson,revision FROM quick_note_reminders ORDER BY next_fire_at",&[])?;
     let events = query(&c,"SELECT e.id,e.note_id AS noteId,e.reminder_id AS reminderId,e.scheduled_at AS scheduledAt,e.status,e.error,e.read_at AS readAt,n.title,n.lifecycle
         FROM quick_note_reminder_events e JOIN quick_notes n ON n.id=e.note_id WHERE n.lifecycle<>'trash' ORDER BY scheduled_at DESC LIMIT 200",&[])?;
-    let captures = query(&c,"SELECT id,note_id AS noteId,source_text AS sourceText,captured_at AS capturedAt,status,error FROM quick_note_captures WHERE status<>'completed' ORDER BY captured_at DESC LIMIT 50",&[])?;
+    let captures = query(&c,"SELECT id,note_id AS noteId,source_json AS sourceJson,source_text AS sourceText,captured_at AS capturedAt,status,error FROM quick_note_captures WHERE status<>'completed' ORDER BY captured_at DESC LIMIT 50",&[])?;
     Ok(json!({"notes":notes,"folders":folders,"reminders":plans,"events":events,"captures":captures,"calendarRules":crate::core::quick_notes_calendar_store::list_in(&c)?,"hasMore":notes.len()==limit as usize,"offset":offset,"limit":limit}))
 }
 
@@ -83,6 +96,17 @@ pub fn save_in(c: &Connection, input: &Value, actor: &str) -> Result<Value,Manag
     let previous = c.query_row("SELECT payload_json FROM quick_notes WHERE id=?1",[&key],|r|r.get::<_,String>(0)).optional()?
         .map(|s|serde_json::from_str::<Value>(&s)).transpose()?;
     if previous.as_ref().is_some_and(|p|p["revision"]!=input["revision"]) { return Err(fail("便签已在其他窗口更新，请重新打开后再保存")); }
+    let append_reminder = input.get("appendReminder").filter(|_| actor == "user");
+    if append_reminder.is_some() {
+        if previous.as_ref().is_none_or(|note| note["lifecycle"] != "active") {
+            return Err(fail("只能为有效的便签添加提醒"));
+        }
+        if !input.as_object().unwrap().keys().all(|key| {
+            matches!(key.as_str(), "id" | "revision" | "appendReminder")
+        }) {
+            return Err(fail("快速添加提醒需要单独保存"));
+        }
+    }
     let mut note = previous.clone().unwrap_or(json!({"id":key,"type":"note","title":"","content":"","groupId":"inbox","categoryId":"uncategorized","tags":[],"tasks":[],"worklog":{},"color":"sand","pinned":false,"lifecycle":"active","occurredOn":null,"createdAt":now(),"revision":0}));
     if previous.is_none() && actor=="ai" {if let Some(at)=input["capturedAt"].as_i64(){note["createdAt"]=json!(at);}}
     for field in ["type","title","content","groupId","categoryId","tags","tasks","worklog","color","pinned","lifecycle","occurredOn","pendingTime"] {
@@ -102,6 +126,38 @@ pub fn save_in(c: &Connection, input: &Value, actor: &str) -> Result<Value,Manag
     note["title"]=json!(if text(&note,"title").trim().is_empty() {content.lines().next().unwrap_or("便签").chars().take(60).collect::<String>()} else {text(&note,"title").trim().chars().take(160).collect()});
     if !note["tags"].as_array().is_some_and(|a|a.len()<=30 && a.iter().all(|t|t.as_str().is_some_and(|s|s.chars().count()<=40))) {return Err(fail("标签最多 30 项，每项最多 40 字"));}
     if !note["worklog"].is_object(){return Err(fail("工作留痕格式无效"));}
+    // AI 只可给新记录提供初始状态，已有记录的更新说明只写入当次修订。
+    let progress_note = if actor == "user" && note["type"] == "worklog" {
+        text(input, "progressNote").trim()
+    } else {
+        ""
+    };
+    let mut tracking_changed = false;
+    if note["type"] == "worklog" && (actor == "user" || previous.is_none()) {
+        if progress_note.chars().count() > 500 {
+            return Err(fail("进度说明最多 500 字"));
+        }
+        let tracking = &input["workTracking"];
+        if !tracking.is_null() {
+            let status = text(tracking, "status");
+            if work_status_label(status).is_none() {
+                return Err(fail("工作状态无效"));
+            }
+            let progress = tracking["progress"].as_u64();
+            if !tracking["progress"].is_null() && !progress.is_some_and(|value| value <= 100) {
+                return Err(fail("工作进度必须留空或填写 0 至 100 的整数"));
+            }
+            if (progress == Some(100)) != (status == "completed") {
+                return Err(fail("已完成对应 100%，其他状态的进度应低于 100% 或留空"));
+            }
+            let tracking = json!({"status":status,"progress":progress});
+            tracking_changed = note["workTracking"] != tracking;
+            note["workTracking"] = tracking;
+        }
+        if !progress_note.is_empty() && note["workTracking"].is_null() {
+            return Err(fail("请先选择工作状态"));
+        }
+    }
     let tasks=note["tasks"].as_array_mut().ok_or_else(||fail("待办必须是数组"))?;
     if tasks.len()>100 {return Err(fail("单条便签最多 100 项待办"));}
     let mut task_ids=std::collections::HashSet::new();
@@ -123,7 +179,36 @@ pub fn save_in(c: &Connection, input: &Value, actor: &str) -> Result<Value,Manag
         VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11) ON CONFLICT(id) DO UPDATE SET title=excluded.title,note_type=excluded.note_type,
         group_id=excluded.group_id,category_id=excluded.category_id,lifecycle=excluded.lifecycle,pinned=excluded.pinned,updated_at=excluded.updated_at,revision=excluded.revision,payload_json=excluded.payload_json",
         params![key,text(&note,"title"),text(&note,"type"),text(&note,"groupId"),text(&note,"categoryId"),text(&note,"lifecycle"),note["pinned"].as_bool().unwrap_or(false),note["createdAt"].as_i64(),note["updatedAt"].as_i64(),note["revision"].as_i64(),note.to_string()])?;
-    c.execute("INSERT INTO quick_note_revisions(id,note_id,operation,actor,created_at,before_json,after_json) VALUES(?1,?2,?3,?4,?5,?6,?7)",params![id(),key,if previous.is_some(){"update"}else{"create"},actor,now(),previous.unwrap_or(Value::Null).to_string(),note.to_string()])?;
+    let operation = if previous.is_none() {
+        "create"
+    } else if tracking_changed || !progress_note.is_empty() {
+        "progress"
+    } else {
+        "update"
+    };
+    let mut revision_after = note.clone();
+    if !progress_note.is_empty() {
+        revision_after["progressNote"] = json!(progress_note);
+    }
+    c.execute("INSERT INTO quick_note_revisions(id,note_id,operation,actor,created_at,before_json,after_json) VALUES(?1,?2,?3,?4,?5,?6,?7)",
+        params![id(),key,operation,actor,note["updatedAt"].as_i64(),previous.unwrap_or(Value::Null).to_string(),revision_after.to_string()])?;
+    // 卡片请求只追加一条提醒，已有计划和通知记录保持原样。
+    if let Some(reminder) = append_reminder {
+        let at = reminder["at"].as_i64().ok_or_else(|| fail("请选择具体提醒时间"))?;
+        save_reminder(c, &note, &json!({
+            "nextFireAt": at,
+            "schedule": {"at": at, "repeat": "once", "sound": true, "timeZone": reminder["timeZone"]}
+        }))?;
+        return Ok(note);
+    }
+    // 单独记录进度时，保留已有提醒和提醒事件。
+    if operation == "progress" && input.as_object().is_some_and(|fields| {
+        fields.keys().all(|key| {
+            matches!(key.as_str(), "id" | "revision" | "workTracking" | "progressNote")
+        })
+    }) {
+        return Ok(note);
+    }
     if let Some(plans)=input["reminders"].as_array() {
         let keep=plans.iter().filter_map(|p|p["id"].as_str()).collect::<std::collections::HashSet<_>>();
         for old in reminders(c,&key)? {if !keep.contains(text(&old,"id")){
@@ -441,6 +526,15 @@ pub fn dispatch(paths: &AppPaths,action: &str,input: &Value) -> Result<Value,Man
             let mut markdown=String::new();
             for note in items {
                 markdown.push_str(&format!("# {}\n\n事项日期：{}\n记录时间：{}\n\n{}\n\n",text(&note,"title"),text(&note,"occurredOn"),Utc.timestamp_millis_opt(note["createdAt"].as_i64().unwrap_or(0)).single().map(|d|d.with_timezone(&Local).to_rfc3339()).unwrap_or_default(),text(&note,"content")));
+                if note["type"] == "worklog" {
+                    let tracking = &note["workTracking"];
+                    if let Some(label) = work_status_label(text(tracking, "status")) {
+                        markdown.push_str(&format!("工作状态：{label}\n\n"));
+                        if let Some(progress) = tracking["progress"].as_u64() {
+                            markdown.push_str(&format!("完成进度：{progress}%\n\n"));
+                        }
+                    }
+                }
                 for task in note["tasks"].as_array().into_iter().flatten(){markdown.push_str(&format!("- [{}] {}\n",if task["status"]=="completed"{"x"}else{" "},text(task,"title")));}
                 for (field,label) in [("process","处理过程"),("result","实际结果"),("blockers","问题与阻塞"),("next","下一步计划")]{if !text(&note["worklog"],field).is_empty(){markdown.push_str(&format!("\n{label}：{}\n",text(&note["worklog"],field)));}}
                 let _=&c;

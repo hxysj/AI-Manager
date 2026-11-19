@@ -77,8 +77,11 @@
       />
       <template v-else>
         <header v-if="view !== 'calendar'" class="notes-header">
-          <div>
+          <div class="notes-heading">
             <h2 class="notes-title">{{ heading }}</h2>
+            <span v-if="view !== 'reminders'" class="notes-caption">
+              {{ filtered.length }} 条记录
+            </span>
           </div>
           <div class="notes-header-actions">
             <button
@@ -178,71 +181,142 @@
             v-if="view !== 'calendar' && filtersVisible"
             class="notes-filters"
           >
-            <label class="notes-search"
-              ><Search :size="15" /><input
-                v-model="search"
-                ref="searchInput"
-                placeholder="搜索内容、标签、工作记录"
-                @input="scheduleLoad" /></label
-            ><select
-              v-model="categoryId"
-              class="notes-select"
-              aria-label="分类筛选"
-              @change="load"
+            <div class="notes-toolbar">
+              <label class="notes-search">
+                <Search :size="16" />
+                <input
+                  ref="searchInput"
+                  v-model="search"
+                  aria-label="搜索便签"
+                  placeholder="搜索便签"
+                  @input="scheduleLoad"
+                />
+              </label>
+              <div class="notes-toolbar-actions">
+                <button
+                  class="notes-button notes-filter-button"
+                  :class="{
+                    'notes-filter-active': filterPanelOpen || activeFilterCount
+                  }"
+                  type="button"
+                  :aria-expanded="filterPanelOpen"
+                  aria-controls="notes-filter-panel"
+                  @click="filterPanelOpen = !filterPanelOpen"
+                >
+                  <ListFilter :size="15" />筛选
+                  <span v-if="activeFilterCount" class="notes-filter-count">
+                    {{ activeFilterCount }}
+                  </span>
+                </button>
+                <div class="notes-view-options">
+                  <select
+                    v-model="groupBy"
+                    class="notes-select"
+                    aria-label="分组显示"
+                  >
+                    <option value="none">不分组</option>
+                    <option value="groupId">按项目分组</option>
+                    <option value="categoryId">按分类</option>
+                    <option value="date">按日期</option>
+                    <option value="status">按任务状态</option>
+                  </select>
+                  <select
+                    v-model="display"
+                    class="notes-select"
+                    aria-label="显示方式"
+                  >
+                    <option value="cards">便签卡片</option>
+                    <option value="list">紧凑列表</option>
+                    <option value="timeline">工作时间线</option>
+                  </select>
+                </div>
+                <button
+                  class="notes-icon"
+                  type="button"
+                  title="刷新便签"
+                  aria-label="刷新便签"
+                  @click="load"
+                >
+                  <RefreshCw :size="15" />
+                </button>
+              </div>
+            </div>
+            <div
+              v-show="filterPanelOpen"
+              id="notes-filter-panel"
+              class="notes-filter-panel"
             >
-              <option value="">所有分类</option>
-              <option
-                v-for="folder in categories"
-                :key="folder.id"
-                :value="folder.id"
+              <label class="notes-filter-field">
+                分类
+                <select
+                  v-model="categoryId"
+                  class="notes-select"
+                  aria-label="分类筛选"
+                  @change="load"
+                >
+                  <option value="">所有分类</option>
+                  <option
+                    v-for="folder in categories"
+                    :key="folder.id"
+                    :value="folder.id"
+                  >
+                    {{ folder.name }}
+                  </option>
+                </select>
+              </label>
+              <label class="notes-filter-field">
+                记录类型
+                <select
+                  v-model="typeFilter"
+                  class="notes-select"
+                  aria-label="记录类型"
+                >
+                  <option value="">全部类型</option>
+                  <option
+                    v-for="type in noteTypes"
+                    :key="type.id"
+                    :value="type.id"
+                  >
+                    {{ type.label }}
+                  </option>
+                </select>
+              </label>
+              <label v-if="view === 'worklog'" class="notes-filter-field">
+                工作状态
+                <select
+                  v-model="workStatus"
+                  class="notes-select"
+                  aria-label="工作状态筛选"
+                  @change="changeWorkStatus"
+                >
+                  <option value="">所有工作状态</option>
+                  <option
+                    v-for="state in workStates"
+                    :key="state.id"
+                    :value="state.id"
+                  >
+                    {{ state.label }}
+                  </option>
+                  <option value="untracked">未跟踪</option>
+                </select>
+              </label>
+              <div class="notes-filter-field">
+                <span>事项日期</span>
+                <div class="notes-filter-range">
+                  <input v-model="fromDate" type="date" aria-label="起始日期" />
+                  <span>至</span>
+                  <input v-model="toDate" type="date" aria-label="结束日期" />
+                </div>
+              </div>
+              <button
+                v-if="activeFilterCount"
+                class="notes-text"
+                type="button"
+                @click="resetFilters"
               >
-                {{ folder.name }}
-              </option></select
-            ><select
-              v-if="view !== 'calendar'"
-              v-model="groupBy"
-              class="notes-select"
-              aria-label="分组显示"
-            >
-              <option value="none">不分组</option>
-              <option value="groupId">按项目分组</option>
-              <option value="categoryId">按分类</option>
-              <option value="date">按日期</option>
-              <option value="status">按任务状态</option></select
-            ><select
-              v-if="view !== 'calendar'"
-              v-model="display"
-              class="notes-select"
-              aria-label="显示方式"
-            >
-              <option value="cards">便签卡片</option>
-              <option value="list">紧凑列表</option>
-              <option value="timeline">工作时间线</option></select
-            ><button
-              class="notes-icon"
-              type="button"
-              title="刷新便签"
-              @click="load"
-            >
-              <RefreshCw :size="15" />
-            </button>
-          </div>
-          <div
-            v-if="view !== 'calendar' && filtersVisible"
-            class="notes-filter-dates"
-          >
-            <label>从 <input v-model="fromDate" type="date" /></label
-            ><label>至 <input v-model="toDate" type="date" /></label
-            ><select
-              v-model="typeFilter"
-              class="notes-select"
-              aria-label="记录类型"
-            >
-              <option value="">全部类型</option>
-              <option v-for="type in noteTypes" :key="type.id" :value="type.id">
-                {{ type.label }}
-              </option></select
-            ><span class="notes-caption">{{ filtered.length }} 条记录</span>
+                清除筛选
+              </button>
+            </div>
           </div>
           <div v-if="selected.size" class="notes-bulk">
             <span>已选 {{ selected.size }} 条</span
@@ -273,7 +347,15 @@
               @click="exportNotes('json')"
             >
               JSON</button
-            ><button class="notes-text" type="button" @click="summary">
+            ><button
+              class="notes-text"
+              type="button"
+              :disabled="
+                !!startingSummary ||
+                [...selected].some((id) => summariesByNote.has(id))
+              "
+              @click="summary()"
+            >
               生成工作小结</button
             ><button class="notes-text" type="button" @click="classifySelected">
               AI 补分类</button
@@ -305,10 +387,7 @@
               取消选择
             </button>
           </div>
-          <section
-            v-if="visibleCaptures.length && view === 'all' && !groupId"
-            class="notes-pending"
-          >
+          <section v-if="visibleCaptures.length" class="notes-pending">
             <div class="notes-section-title">
               <Sparkles :size="14" />待整理 · 原文已保留
             </div>
@@ -318,10 +397,16 @@
               class="notes-pending-item"
             >
               <div>
-                <span>{{ capture.sourceText.slice(0, 70) }}</span
+                <span>{{
+                  capture.source?.type === "summary"
+                    ? `工作小结 · ${capture.source.noteIds.length} 条便签`
+                    : capture.sourceText.slice(0, 70)
+                }}</span
                 ><span class="notes-caption">{{
                   capture.status === "running"
-                    ? "AI 正在整理…"
+                    ? capture.source?.type === "summary"
+                      ? "正在生成工作小结…"
+                      : "AI 正在整理…"
                     : capture.status === "preview"
                       ? "AI 已整理，待确认保存"
                       : capture.error
@@ -342,6 +427,7 @@
                 >
                   重试</button
                 ><button
+                  v-if="capture.source?.type !== 'summary'"
                   class="notes-text"
                   type="button"
                   @click="recover(capture)"
@@ -392,8 +478,10 @@
                     :folders="state.folders"
                     :next-reminder="nextReminder(note.id)"
                     :selected="selected.has(note.id)"
+                    :summary-capture="summariesByNote.get(note.id)"
+                    @cancel-summary="cancelCapture"
                     @open="edit"
-                    @reminder="edit($event, true)"
+                    @reminder="openReminder"
                     @select="toggleSelect"
                     @pin="pin"
                     @task="toggleTask"
@@ -402,7 +490,9 @@
               </section>
               <div v-if="!filtered.length && !loading" class="notes-empty">
                 <NotebookPen :size="34" /><span>{{
-                  search ? "没有找到匹配的记录" : "从一条便签开始"
+                  search || activeFilterCount
+                    ? "没有找到匹配的记录"
+                    : "从一条便签开始"
                 }}</span
                 ><span class="notes-caption"
                   >记住要做的事，也留下已经完成的事。</span
@@ -447,6 +537,51 @@
       @close="editing = null"
       @saved="saved"
     />
+    <BaseModal
+      v-if="reminderDraft"
+      class="notes-quick-reminder"
+      title="添加提醒"
+      :description="reminderDraft.title"
+      role="dialog"
+      aria-modal="true"
+      aria-label="添加提醒"
+      @close="closeReminder"
+      @keydown.esc.stop="closeReminder"
+    >
+      <form class="notes-quick-reminder-form" @submit.prevent="saveReminder">
+        <label class="notes-reminder-time">
+          提醒时间
+          <input
+            ref="reminderTimeInput"
+            v-model="reminderDraft.localAt"
+            type="datetime-local"
+            step="1"
+            required
+            :disabled="reminderSaving"
+          />
+        </label>
+        <p v-if="reminderError" class="notes-reminder-error" role="alert">
+          {{ reminderError }}
+        </p>
+        <div class="notes-quick-reminder-actions">
+          <button
+            class="notes-button"
+            type="button"
+            :disabled="reminderSaving"
+            @click="closeReminder"
+          >
+            取消
+          </button>
+          <button
+            class="notes-button notes-primary"
+            type="submit"
+            :disabled="reminderSaving"
+          >
+            {{ reminderSaving ? "保存中…" : "保存提醒" }}
+          </button>
+        </div>
+      </form>
+    </BaseModal>
     <BaseModal
       v-if="organizer"
       title="分类与项目分组"
@@ -594,7 +729,7 @@ import QuickNoteCard from "./components/QuickNoteCard.vue"
 import QuickNoteEditor from "./components/QuickNoteEditor.vue"
 import QuickNoteCalendar from "./components/QuickNoteCalendar.vue"
 import { quickNotesApi } from "@/api/modules/quick-notes"
-import { noteTypes } from "./constant"
+import { localInput, noteTypes, workStates } from "./constant"
 import { formatDateTime } from "@/utils/formatters"
 const props = defineProps({
   providers: { type: Array, default: () => [] },
@@ -611,6 +746,7 @@ const state = ref({
 const view = ref("calendar")
 const groupId = ref("")
 const categoryId = ref("")
+const workStatus = ref("")
 const groupBy = ref(localStorage.getItem("quick-notes:group-by") || "none")
 const display = ref(localStorage.getItem("quick-notes:display") || "cards")
 const typeFilter = ref("")
@@ -619,13 +755,20 @@ const toDate = ref("")
 const search = ref("")
 const searchInput = ref(null)
 const filtersVisible = ref(true)
+const filterPanelOpen = ref(false)
 const smartCaptureOpen = ref(false)
 const selected = ref(new Set())
+const startingSummary = ref(null)
 const loading = ref(false)
 const error = ref("")
 const folderError = ref("")
 const editing = ref(null)
 const noteEditor = ref(null)
+const reminderDraft = ref(null)
+const reminderTimeInput = ref(null)
+const reminderSaving = ref(false)
+const reminderError = ref("")
+let reminderTrigger
 const organizer = ref(false)
 const purgeConfirm = ref(false)
 const folderDraft = ref({
@@ -673,6 +816,16 @@ const categories = computed(() =>
     (folder) => folder.kind === "category" && !folder.archived
   )
 )
+// 日期范围计作一项，工作状态只在工作留痕视图生效。
+const activeFilterCount = computed(
+  () =>
+    [
+      categoryId.value,
+      typeFilter.value,
+      fromDate.value || toDate.value,
+      view.value === "worklog" && workStatus.value
+    ].filter(Boolean).length
+)
 const heading = computed(
   () =>
     state.value.folders.find((folder) => folder.id === groupId.value)?.name ||
@@ -683,11 +836,6 @@ const unread = computed(
     state.value.events.filter(
       (event) => !event.readAt && ["sent", "failed"].includes(event.status)
     ).length
-)
-const visibleCaptures = computed(() =>
-  state.value.captures.filter(
-    (capture) => !["dismissed"].includes(capture.status)
-  )
 )
 const filtered = computed(() =>
   state.value.notes.filter((note) => {
@@ -727,6 +875,38 @@ const filtered = computed(() =>
     return true
   })
 )
+// 使用任务记录中的来源便签 ID 关联卡片，切换视图或重新打开仍能找到正在生成的任务。
+const summariesByNote = computed(() => {
+  const summaries = new Map()
+  if (startingSummary.value) {
+    for (const id of startingSummary.value.source.noteIds) {
+      summaries.set(id, startingSummary.value)
+    }
+  }
+  for (const capture of state.value.captures) {
+    if (capture.status !== "running" || capture.source?.type !== "summary")
+      continue
+    for (const id of capture.source.noteIds) {
+      summaries.set(id, capture)
+    }
+  }
+  return summaries
+})
+const visibleCaptures = computed(() => {
+  if (view.value === "calendar") return []
+  const inAll = view.value === "all" && !groupId.value
+  const visibleIds = new Set(filtered.value.map((note) => note.id))
+  return state.value.captures.filter((capture) => {
+    if (capture.status === "dismissed") return false
+    if (capture.source?.type !== "summary") return inAll
+    const hasVisibleSource = capture.source.noteIds.some((id) =>
+      visibleIds.has(id)
+    )
+    return capture.status === "running"
+      ? inAll && !hasVisibleSource
+      : inAll || hasVisibleSource
+  })
+})
 const sections = computed(() => {
   const grouping = display.value === "timeline" ? "date" : groupBy.value
   const buckets = new Map()
@@ -771,20 +951,38 @@ let unsubscribeOpen
 let searchTimer
 let recoverCapture = null
 // 模块事件只读取便签数据；序号保护筛选切换和多窗口更新不会被旧请求覆盖。
-async function load(more = false) {
+async function load(more = false, keepLoaded = false) {
   const current = ++sequence
   loading.value = true
   try {
-    const result = await quickNotesApi.invoke("list", {
+    const loadedCount = keepLoaded ? state.value.notes.length : 0
+    const filters = {
       lifecycle: ["trash", "archived"].includes(view.value)
         ? view.value
         : "active",
       search: view.value === "calendar" ? "" : search.value,
       groupId: groupId.value,
       categoryId: view.value === "calendar" ? "" : categoryId.value,
+      type: view.value === "worklog" ? "worklog" : "",
+      workStatus: view.value === "worklog" ? workStatus.value : "",
       offset: more === true ? state.value.notes.length : 0,
-      limit: 300
-    })
+      limit: Math.max(300, Math.min(loadedCount, 1000))
+    }
+    let result = await quickNotesApi.invoke("list", filters)
+    // 任务变更时保留已加载的页面，避免来源卡片在生成过程中消失。
+    while (
+      !disposed &&
+      current === sequence &&
+      result.hasMore &&
+      result.notes.length < loadedCount
+    ) {
+      const next = await quickNotesApi.invoke("list", {
+        ...filters,
+        offset: result.notes.length,
+        limit: Math.min(filters.limit, loadedCount - result.notes.length)
+      })
+      result = { ...next, notes: [...result.notes, ...next.notes] }
+    }
     if (!disposed && current === sequence)
       state.value = {
         ...result,
@@ -796,6 +994,19 @@ async function load(more = false) {
   } finally {
     if (current === sequence) loading.value = false
   }
+}
+function changeWorkStatus() {
+  selected.value = new Set()
+  load()
+}
+function resetFilters() {
+  categoryId.value = ""
+  typeFilter.value = ""
+  fromDate.value = ""
+  toDate.value = ""
+  if (view.value === "worklog") workStatus.value = ""
+  selected.value = new Set()
+  load()
 }
 function scheduleLoad() {
   clearTimeout(searchTimer)
@@ -882,6 +1093,57 @@ function nextReminder(id) {
     .map((plan) => plan.nextFireAt)
   return times.length ? Math.min(...times) : null
 }
+// 卡片直接设置一次性提醒，已有提醒仍可进入完整管理。
+async function openReminder(note) {
+  if (nextReminder(note.id)) {
+    await edit(note, true)
+    return
+  }
+  reminderTrigger = document.activeElement
+  reminderError.value = ""
+  reminderDraft.value = {
+    id: note.id,
+    revision: note.revision,
+    title: note.title,
+    localAt: localInput(Date.now() + 600000, true)
+  }
+  await nextTick()
+  reminderTimeInput.value?.focus()
+}
+function closeReminder() {
+  if (reminderSaving.value) return
+  reminderDraft.value = null
+  reminderTrigger?.focus({ preventScroll: true })
+  reminderTrigger = null
+}
+async function saveReminder() {
+  if (reminderSaving.value) return
+  reminderError.value = ""
+  const { id, revision, localAt } = reminderDraft.value
+  const at = new Date(localAt).getTime()
+  if (!(at > Date.now())) {
+    reminderError.value = "提醒时间必须晚于当前时间，请重新选择"
+    return
+  }
+  reminderSaving.value = true
+  try {
+    await quickNotesApi.invoke("save", {
+      id,
+      revision,
+      appendReminder: {
+        at,
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone
+      }
+    })
+  } catch (failure) {
+    reminderError.value = failure.message || String(failure)
+    return
+  } finally {
+    reminderSaving.value = false
+  }
+  closeReminder()
+  await load()
+}
 async function pin(note) {
   try {
     await quickNotesApi.invoke("save", { ...note, pinned: !note.pinned })
@@ -959,17 +1221,27 @@ async function exportNotes(format) {
     error.value = String(failure)
   }
 }
-async function summary() {
+async function summary(ids = [...selected.value]) {
+  if (
+    !ids.length ||
+    startingSummary.value ||
+    ids.some((id) => summariesByNote.value.has(id))
+  )
+    return false
+  // 提交后先点亮来源卡片，等待持久化任务接管显示。
+  startingSummary.value = { source: { noteIds: ids } }
   try {
     await quickNotesApi.invoke("summary", {
-      ids: [...selected.value],
+      ids,
       requestId: crypto.randomUUID()
     })
-    view.value = "all"
-    groupId.value = ""
-    await load()
+    await load(false, true)
+    return true
   } catch (failure) {
     error.value = String(failure)
+    return false
+  } finally {
+    startingSummary.value = null
   }
 }
 // AI 只补默认目录和空标签，已人工整理的字段保持原值。
@@ -986,6 +1258,10 @@ async function classifySelected() {
   }
 }
 async function retry(capture) {
+  if (capture.source?.type === "summary") {
+    if (await summary(capture.source.noteIds)) await dismiss(capture)
+    return
+  }
   try {
     await quickNotesApi.invoke("capture", {
       text: capture.sourceText,
@@ -1008,14 +1284,18 @@ function recover(capture) {
 async function dismiss(capture) {
   try {
     await quickNotesApi.invoke("capture-discard", { id: capture.id })
-    await load()
+    await load(false, capture.source?.type === "summary")
   } catch (failure) {
     error.value = String(failure)
   }
 }
 async function cancelCapture(capture) {
-  await quickNotesApi.invoke("capture-cancel", { requestId: capture.id })
-  await load()
+  try {
+    await quickNotesApi.invoke("capture-cancel", { requestId: capture.id })
+    await load(false, capture.source?.type === "summary")
+  } catch (failure) {
+    error.value = String(failure)
+  }
 }
 async function saveFolder() {
   try {
@@ -1081,7 +1361,7 @@ watch([groupBy, display], () => {
 })
 onMounted(async () => {
   try {
-    const stop = await quickNotesApi.onChanged(load)
+    const stop = await quickNotesApi.onChanged(() => load(false, true))
     if (disposed) return stop()
     unsubscribe = stop
     unsubscribeOpen = await quickNotesApi.onOpen((note) => {
@@ -1113,7 +1393,7 @@ onBeforeUnmount(() => {
 .quick-notes {
   display: flex;
   flex: 1;
-  gap: 16px;
+  gap: 20px;
   min-height: 0;
   height: 100%;
   overflow: hidden;
@@ -1171,6 +1451,46 @@ onBeforeUnmount(() => {
   }
   .notes-danger {
     color: var(--color-danger);
+  }
+  .notes-quick-reminder {
+    :deep(.base-modal__panel) {
+      width: min(390px, calc(100vw - 48px));
+    }
+    :deep(.base-modal__header) {
+      align-items: center;
+      padding-bottom: 18px;
+    }
+    :deep(.base-modal__header p) {
+      overflow-wrap: anywhere;
+    }
+    .notes-quick-reminder-form {
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      .notes-reminder-time {
+        display: flex;
+        flex-direction: column;
+        gap: 7px;
+        color: var(--color-text-muted);
+        :deep(input) {
+          padding: 9px 11px;
+          border: 1px solid var(--color-line);
+          border-radius: 8px;
+          background: var(--color-panel);
+          color: var(--color-text);
+          font: inherit;
+        }
+      }
+      .notes-reminder-error {
+        margin: 0;
+        color: var(--color-danger);
+      }
+      .notes-quick-reminder-actions {
+        display: flex;
+        justify-content: flex-end;
+        gap: 8px;
+      }
+    }
   }
   .notes-purge-modal {
     :deep(.base-modal__panel) {
@@ -1320,10 +1640,19 @@ onBeforeUnmount(() => {
       gap: 15px;
       padding: 0 0 2px;
 
-      .notes-title {
-        margin: 0;
-        font-size: var(--font-size-lg);
-        line-height: 1.2;
+      .notes-heading {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: baseline;
+        gap: 6px 12px;
+        .notes-title {
+          margin: 0;
+          font-size: var(--font-size-lg);
+          line-height: 1.2;
+        }
+        .notes-caption {
+          white-space: nowrap;
+        }
       }
 
       .notes-header-actions {
@@ -1341,50 +1670,137 @@ onBeforeUnmount(() => {
     }
     .notes-filters {
       display: flex;
-      align-items: center;
+      flex-direction: column;
       flex: none;
-      gap: 10px;
-      .notes-search {
+      gap: 9px;
+      .notes-toolbar {
         display: flex;
+        flex-wrap: wrap;
         align-items: center;
-        flex: 1;
-        min-width: 100px;
         gap: 9px;
-        padding: 9px 12px;
-        border: 1px solid var(--color-line);
-        border-radius: 11px;
-        color: var(--color-text-muted);
-        background: var(--color-panel);
-        :deep(input) {
-          flex: 1;
+        .notes-search {
+          display: flex;
+          align-items: center;
+          flex: 1 1 150px;
           min-width: 0;
-          width: 100%;
-          border: 0;
-          outline: 0;
-          font: inherit;
-          font-size: 12px;
-          background: transparent;
-          color: var(--color-text);
+          min-height: 36px;
+          gap: 9px;
+          padding: 0 11px;
+          border: 1px solid var(--color-line);
+          border-radius: 8px;
+          color: var(--color-text-muted);
+          background: var(--color-panel);
+          &:focus-within {
+            border-color: var(--color-primary);
+          }
+          :deep(input) {
+            flex: 1;
+            min-width: 0;
+            padding: 0;
+            border: 0;
+            outline: 0;
+            font: inherit;
+            font-size: 12px;
+            background: transparent;
+            color: var(--color-text);
+          }
+        }
+        .notes-toolbar-actions {
+          display: flex;
+          flex-wrap: wrap;
+          align-items: center;
+          gap: 8px;
+          .notes-filter-button,
+          .notes-icon {
+            height: 36px;
+            border-radius: 8px;
+          }
+          .notes-filter-button {
+            padding-inline: 10px;
+            &.notes-filter-active {
+              border-color: var(--color-line-strong);
+              background: var(--color-primary-soft);
+              color: var(--color-primary);
+            }
+            .notes-filter-count {
+              display: inline-grid;
+              place-items: center;
+              min-width: 16px;
+              height: 16px;
+              padding: 0 4px;
+              border-radius: 8px;
+              background: var(--color-panel);
+              font-size: 10px;
+            }
+          }
+          .notes-icon {
+            width: 36px;
+          }
+          .notes-view-options {
+            display: flex;
+            min-height: 36px;
+            border: 1px solid var(--color-line);
+            border-radius: 8px;
+            background: var(--color-panel);
+            .notes-select {
+              min-width: 0;
+              padding: 0 8px;
+              border: 0;
+              border-radius: 7px;
+              background: transparent;
+              & + .notes-select {
+                border-left: 1px solid var(--color-line);
+                border-top-left-radius: 0;
+                border-bottom-left-radius: 0;
+              }
+            }
+          }
         }
       }
-    }
-    .notes-filter-dates {
-      display: flex;
-      align-items: center;
-      flex: none;
-      gap: 13px;
-      font-size: 12px;
-      color: var(--color-text-muted);
-      :deep(input) {
-        padding: 8px;
+      .notes-filter-panel {
+        display: flex;
+        flex-wrap: wrap;
+        align-items: flex-end;
+        gap: 10px 12px;
+        padding: 11px 12px;
         border: 1px solid var(--color-line);
         border-radius: 9px;
-        font: inherit;
-        color: var(--color-text-muted);
-        background: var(--color-panel);
-      }
-      .notes-caption {
-        margin-left: auto;
+        background: var(--color-panel-soft);
+        .notes-filter-field {
+          display: flex;
+          flex-direction: column;
+          gap: 5px;
+          min-width: 0;
+          color: var(--color-text-muted);
+          font-size: 11px;
+          .notes-select {
+            height: 33px;
+            padding: 0 9px;
+            border-radius: 7px;
+          }
+          .notes-filter-range {
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 7px;
+            :deep(input) {
+              width: 128px;
+              height: 33px;
+              min-width: 0;
+              padding: 0 8px;
+              border: 1px solid var(--color-line);
+              border-radius: 7px;
+              background: var(--color-panel);
+              color: var(--color-text);
+              font: inherit;
+              font-size: 12px;
+            }
+          }
+        }
+        .notes-text {
+          min-height: 33px;
+          margin-left: auto;
+        }
       }
     }
     .notes-bulk {

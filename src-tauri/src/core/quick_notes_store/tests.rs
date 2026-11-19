@@ -60,6 +60,97 @@ fn notes_preserve_creation_history_tasks_and_conflicts() {
 }
 
 #[test]
+fn work_tracking_preserves_history_and_manual_progress() {
+    let fixture = Fixture::new();
+    let capture = capture(
+        &fixture.paths,
+        &json!({"requestId":"progress","text":"需要修复同步问题"}),
+        &json!({}),
+    ).unwrap();
+    let due_at = now() + 3_600_000;
+    let suggestion = json!({
+        "type":"worklog","content":"修复同步问题",
+        "tasks":[{"id":"test","title":"回归测试","dueAt":due_at}],
+        "reminders":[{"taskId":"test","nextFireAt":due_at - 900_000,"schedule":{"repeat":"once","offsetMinutes":15}}],
+        "workTracking":{"status":"planned","progress":null}
+    });
+    preview_capture(&fixture.paths, text(&capture, "id"), &suggestion).unwrap();
+    let original = dispatch(&fixture.paths, "capture-save", &json!({
+        "id":capture["id"],"note":suggestion
+    })).unwrap();
+    assert_eq!(original["workTracking"], suggestion["workTracking"]);
+    let key = text(&original, "id");
+    let reminders_before = detail(&fixture.paths, key).unwrap()["reminders"].clone();
+    let change = json!({
+        "id":key,"revision":original["revision"],
+        "workTracking":{"status":"in_progress","progress":40},
+        "progressNote":"已修复接口，等待联调"
+    });
+    let updated = save(&fixture.paths, &change, "user").unwrap();
+    assert_eq!(updated["content"], original["content"]);
+    assert_eq!(updated["tasks"], original["tasks"]);
+    assert!(updated.get("progressNote").is_none());
+    let updated_detail = detail(&fixture.paths, key).unwrap();
+    assert_eq!(updated_detail["reminders"], reminders_before);
+    let entry = &updated_detail["history"][0];
+    assert_eq!(entry["operation"], "progress");
+    assert_eq!(entry["before"]["workTracking"], original["workTracking"]);
+    assert_eq!(entry["after"]["workTracking"], change["workTracking"]);
+    assert_eq!(entry["after"]["progressNote"], change["progressNote"]);
+
+    let old = save(&fixture.paths, &json!({"content":"旧工作记录","type":"worklog"}), "user").unwrap();
+    save(&fixture.paths, &json!({"content":"普通便签"}), "user").unwrap();
+    for (status, note_id) in [("in_progress", &updated["id"]), ("untracked", &old["id"])] {
+        let filtered = list(&fixture.paths, &json!({"workStatus":status,"limit":1})).unwrap();
+        assert_eq!(&filtered["notes"][0]["id"], note_id);
+    }
+    for (status, progress) in [("in_progress", json!(100)), ("completed", json!(40)), ("in_progress", json!(40.5))] {
+        let invalid = json!({"id":key,"revision":updated["revision"],"workTracking":{"status":status,"progress":progress}});
+        assert!(save(&fixture.paths, &invalid, "user").is_err());
+    }
+    let classify = super::capture(&fixture.paths, &json!({
+        "requestId":"classify-progress","text":"修复同步问题","noteId":key
+    }), &json!({})).unwrap();
+    let classified = complete_capture(&fixture.paths, text(&classify, "id"), &json!({
+        "baseRevision":updated["revision"],"categoryId":"development",
+        "workTracking":{"status":"completed","progress":100}
+    })).unwrap();
+    assert_eq!(classified["workTracking"], updated["workTracking"]);
+    let completed = save(&fixture.paths, &json!({
+        "id":key,"revision":classified["revision"],"workTracking":{"status":"completed","progress":100}
+    }), "user").unwrap();
+    assert_eq!(completed["workTracking"]["progress"], 100);
+}
+
+#[test]
+fn quick_reminder_appends_without_rewriting_existing_plans() {
+    let f = Fixture::new();
+    let due_at = now() + 3_600_000;
+    let note = save(&f.paths, &json!({
+        "content": "卡片提醒",
+        "tasks": [{"id": "task", "title": "复核", "dueAt": due_at}],
+        "reminders": [{
+            "taskId": "task", "nextFireAt": due_at - 600_000,
+            "schedule": {"repeat": "once", "offsetMinutes": 10}
+        }]
+    }), "user").unwrap();
+    let key = text(&note, "id");
+    let existing = detail(&f.paths, key).unwrap()["reminders"][0].clone();
+    let invalid = json!({"id": key, "revision": note["revision"], "appendReminder": {"at": now() - 1000}});
+    assert!(dispatch(&f.paths, "save", &invalid).is_err());
+    let quick_at = now() + 120_000;
+    let append = json!({"id": key, "revision": note["revision"], "appendReminder": {"at": quick_at}});
+    let updated = dispatch(&f.paths, "save", &append).unwrap();
+    assert!(dispatch(&f.paths, "save", &append).is_err());
+    assert_eq!(updated["tasks"], note["tasks"]);
+    let plans = detail(&f.paths, key).unwrap()["reminders"].clone();
+    assert_eq!(plans.as_array().unwrap().len(), 2);
+    assert_eq!(plans[0]["nextFireAt"], quick_at);
+    assert_eq!(plans[0]["schedule"]["repeat"], "once");
+    assert_eq!(plans[1], existing);
+}
+
+#[test]
 fn reminders_are_persistent_idempotent_and_stop_on_completion() {
     let f=Fixture::new();let at=now()+60_000;
     let note=save(&f.paths,&json!({"content":"回归","tasks":[{"id":"t","title":"测试"}],"reminders":[{"taskId":"t","nextFireAt":at,"schedule":{"at":at,"repeat":"once"}}]}),"user").unwrap();
@@ -108,6 +199,30 @@ fn capture_retries_do_not_duplicate_and_cancel_keeps_original() {
     capture_failure(&f.paths,text(&cancelled,"id"),"cancelled","取消").unwrap();
     assert!(complete_capture(&f.paths,text(&cancelled,"id"),&json!({"content":"不应保存"})).is_err());
     assert_eq!(capture_state(&f.paths,"cancel").unwrap()["sourceText"],"保留我");
+}
+
+#[test]
+fn summary_capture_listing_keeps_source_note_ids_until_completion() {
+    let f = Fixture::new();
+    let source = json!({"type": "summary", "noteIds": ["first", "second"]});
+    let job = capture(
+        &f.paths,
+        &json!({"text": "小结输入", "requestId": "summary", "source": source}),
+        &json!({}),
+    )
+    .unwrap();
+
+    let captures = list(&f.paths, &json!({})).unwrap()["captures"].clone();
+    assert_eq!(captures[0]["status"], "running");
+    assert_eq!(captures[0]["source"], source);
+
+    complete_capture(
+        &f.paths,
+        text(&job, "id"),
+        &json!({"content": "工作小结", "type": "worklog"}),
+    )
+    .unwrap();
+    assert_eq!(list(&f.paths, &json!({})).unwrap()["captures"], json!([]));
 }
 
 #[test]

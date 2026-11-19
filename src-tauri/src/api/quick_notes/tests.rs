@@ -156,7 +156,7 @@ fn capture_uses_real_model_proxy_for_chat_responses_and_claude() {
             let future=store::now()+3_600_000;
             let reminder=if preview {json!({"afterSeconds":120,"at":null,"repeat":"once","taskIndex":0})}
                 else {json!({"at":chrono::DateTime::<chrono::Utc>::from_timestamp_millis(future).unwrap().to_rfc3339(),"repeat":"once","taskIndex":0})};
-            let generated=json!({"title":"回归测试","content":"验证速记","type":"worklog","groupId":"unknown","categoryId":"debugging","tags":["回归"],"tasks":[{"title":"验证模型","status":"pending"}],"reminders":[reminder]}).to_string();
+            let generated=json!({"title":"回归测试","content":"验证速记","type":"worklog","groupId":"unknown","categoryId":"debugging","tags":["回归"],"tasks":[{"title":"验证模型","status":"pending"}],"reminders":[reminder],"workTracking":{"status":"planned","progress":null}}).to_string();
             let reply=match api {"chat"=>json!({"choices":[{"message":{"content":generated}}]}),"messages"=>json!({"content":[{"type":"text","text":generated}]}),_=>json!({"output":[{"type":"message","content":[{"type":"output_text","text":generated}]}]})};
             let server=tokio::spawn(async move {
                 let (stream,_)=listener.accept().await.unwrap();
@@ -166,6 +166,13 @@ fn capture_uses_real_model_proxy_for_chat_responses_and_claude() {
                         assert_eq!(request.headers().get(if cli=="claude"{"x-api-key"}else{"authorization"}).unwrap(),if cli=="claude"{"upstream-secret"}else{"Bearer upstream-secret"});
                         let bytes=request.into_body().collect().await.unwrap().to_bytes();let body:Value=serde_json::from_slice(&bytes).unwrap();
                         assert_eq!(body["model"],"notes-model");assert!(body.get("tools").is_none());
+                        let prompt = match api {
+                            "chat" => &body["messages"][0]["content"],
+                            "messages" => &body["system"],
+                            _ => &body["instructions"],
+                        }.as_str().unwrap();
+                        assert!(prompt.contains("实际结果、验证结论及验证范围放在 worklog.result"));
+                        assert!(prompt.contains("禁止按待办数量、工时或语气估算百分比"));
                         Ok::<_,Infallible>(Response::builder().header("content-type","application/json").body(Full::new(Bytes::from(reply.to_string()))).unwrap())
                     }
                 })).await.unwrap();
@@ -180,6 +187,7 @@ fn capture_uses_real_model_proxy_for_chat_responses_and_claude() {
                 store::dispatch(&paths,"capture-save",&json!({"id":capture["id"],"note":generated})).unwrap()
             }else{generated};
             assert_eq!(note["groupId"],"inbox");assert_eq!(note["categoryId"],"debugging");
+            assert_eq!(note["workTracking"], json!({"status":"planned","progress":null}));
             assert_eq!(note["createdAt"],capture["capturedAt"]);
             let expected=if preview{capture["capturedAt"].as_i64().unwrap()+120_000}else{future};
             assert_eq!(store::detail(&paths,store::text(&note,"id")).unwrap()["reminders"][0]["nextFireAt"],expected);

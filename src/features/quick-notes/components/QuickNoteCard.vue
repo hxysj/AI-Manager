@@ -3,7 +3,7 @@
     class="quick-note-card"
     :class="[
       `note-color-${note.color || 'sand'}`,
-      { 'note-selected': selected }
+      { 'note-selected': selected, 'note-summarizing': summaryCapture }
     ]"
   >
     <div class="note-card-head">
@@ -30,10 +30,36 @@
         <Pin :size="13" :fill="note.pinned ? 'currentColor' : 'none'" />
       </button>
     </div>
+    <div v-if="summaryCapture" class="note-card-summary">
+      <span class="note-card-summary-status" role="status">
+        <Sparkles :size="14" aria-hidden="true" />正在生成工作小结…
+      </span>
+      <button
+        v-if="summaryCapture.id"
+        class="note-card-summary-cancel"
+        type="button"
+        @click="$emit('cancel-summary', summaryCapture)"
+      >
+        取消生成
+      </button>
+    </div>
     <button class="note-card-open" type="button" @click="$emit('open', note)">
       <span class="note-card-title">{{ note.title }}</span
       ><span class="note-card-body">{{ note.content }}</span>
     </button>
+    <div v-if="workStatus" class="note-card-tracking">
+      <span class="note-card-status" :data-status="note.workTracking.status">
+        {{ workStatus }}
+      </span>
+      <template v-if="note.workTracking.progress != null">
+        <progress
+          :value="note.workTracking.progress"
+          max="100"
+          aria-label="工作完成进度"
+        />
+        <span>{{ note.workTracking.progress }}%</span>
+      </template>
+    </div>
     <div
       v-if="note.type === 'worklog' && note.worklog?.result"
       class="note-card-result"
@@ -106,20 +132,27 @@ import {
   Pin,
   NotebookPen,
   Folder,
-  CalendarDays
+  CalendarDays,
+  Sparkles
 } from "lucide-vue-next"
-import { noteTypes } from "@/features/quick-notes/constant"
+import { noteTypes, workStateLabel } from "@/features/quick-notes/constant"
 import { formatDateTime } from "@/utils/formatters"
 const props = defineProps({
   note: { type: Object, required: true },
   folders: { type: Array, default: () => [] },
   nextReminder: { type: Number, default: null },
-  selected: Boolean
+  selected: Boolean,
+  summaryCapture: { type: Object, default: null }
 })
-defineEmits(["open", "select", "pin", "task", "reminder"])
+defineEmits(["open", "select", "pin", "task", "reminder", "cancel-summary"])
 // 卡片只渲染公开记录，操作交给工作区统一保存和处理版本冲突。
 const typeName = computed(
   () => noteTypes.find((type) => type.id === props.note.type)?.label || "便签"
+)
+const workStatus = computed(() =>
+  props.note.type === "worklog" && props.note.workTracking
+    ? workStateLabel(props.note.workTracking)
+    : ""
 )
 const groupName = computed(
   () =>
@@ -162,6 +195,38 @@ const categoryName = computed(
   }
   &.note-selected {
     border-color: var(--color-primary);
+  }
+  &.note-summarizing {
+    border-color: var(--color-primary);
+    animation: note-summary-pulse 2s ease-in-out infinite;
+  }
+  .note-card-summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 7px 10px;
+    border-radius: 7px;
+    color: var(--color-primary);
+    background: var(--color-primary-soft);
+    font-size: 12px;
+    .note-card-summary-status {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .note-card-summary-cancel {
+      flex: none;
+      padding: 2px 0 2px 5px;
+      border: 0;
+      color: inherit;
+      background: transparent;
+      font: inherit;
+      cursor: pointer;
+      &:hover {
+        text-decoration: underline;
+      }
+    }
   }
   .note-card-head {
     display: flex;
@@ -241,6 +306,30 @@ const categoryName = computed(
     :deep(span) {
       color: var(--note-accent);
       flex: none;
+    }
+  }
+  .note-card-tracking {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--color-text-muted);
+    font-size: 12px;
+    .note-card-status {
+      padding: 3px 7px;
+      border-radius: 5px;
+      background: var(--color-panel-soft);
+      &[data-status="in_progress"] {
+        color: var(--color-primary);
+      }
+      &[data-status="blocked"] {
+        color: var(--color-warning);
+      }
+    }
+    progress {
+      flex: 1;
+      min-width: 0;
+      height: 6px;
+      accent-color: var(--color-primary);
     }
   }
   .note-card-tasks {
@@ -331,6 +420,21 @@ const categoryName = computed(
         color: var(--color-primary);
       }
     }
+  }
+}
+@keyframes note-summary-pulse {
+  0%,
+  100% {
+    border-color: var(--color-primary);
+    box-shadow: 0 2px 8px #18304703;
+  }
+  50% {
+    border-color: color-mix(
+      in srgb,
+      var(--color-primary) 45%,
+      var(--color-line)
+    );
+    box-shadow: 0 0 0 3px var(--color-primary-soft);
   }
 }
 </style>

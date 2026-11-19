@@ -1178,7 +1178,7 @@ onMounted(() => {
   }
 }
 .tools-view-detail-page.tools-view-notes {
-  gap: 8px;
+  gap: 16px;
   overflow: clip;
   .tools-view-detail-head {
     position: sticky;

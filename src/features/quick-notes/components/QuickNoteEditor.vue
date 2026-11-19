@@ -131,6 +131,38 @@
               </select></label
             >
           </div>
+          <section v-if="form.type === 'worklog'" class="note-section">
+            <div class="note-section-head">
+              <span><ListTodo :size="15" />工作进度</span>
+              <button
+                v-if="note.id && note.type === 'worklog'"
+                class="note-button"
+                type="button"
+                :disabled="saving || !form.workTracking || !trackingDirty"
+                @click="saveTracking"
+              >
+                记录进度
+              </button>
+            </div>
+            <WorkTrackingFields
+              v-model="form.workTracking"
+              :allow-clear="!savedTracking"
+              :disabled="saving"
+            />
+            <label v-if="form.workTracking" class="note-field">
+              本次更新
+              <textarea
+                v-model="form.progressNote"
+                rows="2"
+                maxlength="500"
+                :disabled="saving"
+                placeholder="可补充本次变化、阻塞原因或下一步"
+              ></textarea>
+            </label>
+            <span v-if="trackingFeedback" class="note-caption" role="status">
+              {{ trackingFeedback }}
+            </span>
+          </section>
           <div v-if="form.type === 'worklog'" class="note-worklog">
             <label
               v-for="(label, field) in workFields"
@@ -355,7 +387,8 @@
           </section>
           <section class="note-section">
             <div class="note-section-head">
-              <span>待办事项 · {{ form.tasks.length }}</span
+              <span
+                ><ListTodo :size="15" />待办事项 · {{ form.tasks.length }}</span
               ><button type="button" class="note-text-button" @click="addTask">
                 <Plus :size="14" />添加待办
               </button>
@@ -365,52 +398,81 @@
               :key="task.id"
               class="note-task"
             >
-              <input
-                v-model="task.title"
-                aria-label="待办内容"
-                placeholder="需要完成什么？"
-              />
-              <select v-model="task.status" aria-label="任务状态">
-                <option
-                  v-for="state in taskStates"
-                  :key="state.id"
-                  :value="state.id"
+              <div class="note-task-title">
+                <input
+                  v-model="task.title"
+                  aria-label="待办内容"
+                  placeholder="需要完成什么？"
+                />
+                <button
+                  type="button"
+                  class="note-text-button note-task-remove"
+                  aria-label="移除待办"
+                  title="移除待办"
+                  @click="removeTask(index)"
                 >
-                  {{ state.label }}
-                </option>
-              </select>
-              <select v-model="task.priority" aria-label="优先级">
-                <option value="normal">普通</option>
-                <option value="high">优先</option>
-                <option value="low">较低</option>
-              </select>
-              <input v-model="task.dueDate" type="date" aria-label="截止日期" />
-              <input
-                v-model="task.localDueAt"
-                type="datetime-local"
-                aria-label="精确截止时间（可选）"
-              />
-              <button
-                type="button"
-                class="note-text-button"
-                aria-label="移除待办"
-                @click="removeTask(index)"
-              >
-                <X :size="15" />
-              </button>
+                  <Trash2 :size="14" />
+                </button>
+              </div>
+              <div class="note-task-options">
+                <label class="note-field">
+                  状态
+                  <select v-model="task.status">
+                    <option
+                      v-for="state in taskStates"
+                      :key="state.id"
+                      :value="state.id"
+                    >
+                      {{ state.label }}
+                    </option>
+                  </select>
+                </label>
+                <label class="note-field">
+                  优先级
+                  <select
+                    :value="task.priority || 'normal'"
+                    @change="task.priority = $event.target.value"
+                  >
+                    <option value="normal">普通</option>
+                    <option value="high">优先</option>
+                    <option value="low">较低</option>
+                  </select>
+                </label>
+              </div>
+              <details class="note-task-deadline">
+                <summary class="note-task-deadline-toggle">
+                  <CalendarDays :size="14" />
+                  <span class="note-task-deadline-value">{{
+                    task.localDueAt?.replace("T", " ") ||
+                    task.dueDate ||
+                    "设置截止时间"
+                  }}</span>
+                  <ChevronDown :size="14" class="note-task-deadline-arrow" />
+                </summary>
+                <div class="note-task-deadline-fields">
+                  <label class="note-field">
+                    截止日期
+                    <input v-model="task.dueDate" type="date" />
+                  </label>
+                  <label class="note-field">
+                    精确截止时间（可选）
+                    <input v-model="task.localDueAt" type="datetime-local" />
+                  </label>
+                </div>
+              </details>
             </div>
           </section>
           <section class="editor-history">
             <div class="editor-panel-title">
               <Clock3 :size="17" />操作记录<span class="editor-badge">{{
-                note.history?.length || 0
+                history.length
               }}</span>
             </div>
-            <div v-if="!note.history?.length" class="editor-muted">
+            <div v-if="!history.length" class="editor-muted">
               保存后将在这里记录修改历史。
             </div>
             <article
-              v-for="entry in note.history || []"
+              v-for="entry in history"
               :key="entry.id"
               class="editor-history-item"
             >
@@ -420,12 +482,9 @@
                   >{{ formatDateTime(entry.createdAt) }} ·
                   {{ entry.actor === "ai" ? "AI 整理" : "我" }}</span
                 >
-                <p>
-                  {{
-                    entry.operation === "create"
-                      ? "创建了便签"
-                      : "更新了便签内容"
-                  }}
+                <p>{{ historyLabel(entry) }}</p>
+                <p v-if="entry.after?.progressNote">
+                  {{ entry.after.progressNote }}
                 </p>
               </div>
             </article>
@@ -445,13 +504,9 @@
               <pre>{{ capture.sourceText }}</pre>
             </div>
           </details>
-          <details v-if="note.history?.length" class="note-section">
-            <summary>修改历史 · {{ note.history.length }}</summary>
-            <div
-              v-for="entry in note.history"
-              :key="entry.id"
-              class="note-source"
-            >
+          <details v-if="history.length" class="note-section">
+            <summary>修改历史 · {{ history.length }}</summary>
+            <div v-for="entry in history" :key="entry.id" class="note-source">
               <span
                 >{{ formatDateTime(entry.createdAt) }} ·
                 {{ entry.actor === "ai" ? "AI 整理" : "编辑记录" }}</span
@@ -493,6 +548,7 @@
       :open="smartOpen"
       :initial-text="form.content"
       apply-only
+      :preserve-work-tracking="Boolean(form.workTracking)"
       :folders="folders"
       @close="smartOpen = false"
       @apply="applyAnalysis"
@@ -504,6 +560,8 @@
 import { computed, nextTick, ref, watch } from "vue"
 import {
   Bell,
+  CalendarDays,
+  ChevronDown,
   Plus,
   Trash2,
   X,
@@ -520,6 +578,7 @@ import {
 } from "lucide-vue-next"
 import QuickNoteBodyEditor from "@/features/quick-notes/components/QuickNoteBodyEditor.vue"
 import QuickNoteSmartCapture from "@/features/quick-notes/components/QuickNoteSmartCapture.vue"
+import WorkTrackingFields from "./WorkTrackingFields.vue"
 import BaseModal from "@/components/BaseModal.vue"
 import { quickNotesApi } from "@/api/modules/quick-notes"
 import { formatDateTime } from "@/utils/formatters"
@@ -529,7 +588,9 @@ import {
   reminderAt,
   noteTypes,
   repeatOptions,
-  taskStates
+  taskStates,
+  workProgressError,
+  workStateLabel
 } from "@/features/quick-notes/constant"
 const props = defineProps({
   inline: Boolean,
@@ -539,6 +600,15 @@ const props = defineProps({
 const emit = defineEmits(["close", "saved"])
 // 编辑草稿与详情隔离，取消不会改动卡片，提醒保留原始规则与下一次时间。
 const form = ref(JSON.parse(JSON.stringify({ ...emptyNote(), ...props.note })))
+const history = ref(props.note.history || [])
+const savedTracking = ref(props.note.workTracking || null)
+const trackingFeedback = ref("")
+const trackingDirty = computed(
+  () =>
+    form.value.workTracking?.status !== savedTracking.value?.status ||
+    form.value.workTracking?.progress !== savedTracking.value?.progress ||
+    Boolean(form.value.progressNote.trim())
+)
 // 新建草稿预先固定 ID，保存回包丢失后重试也不会新增重复记录。
 if (!form.value.id) {
   form.value.id = crypto.randomUUID()
@@ -597,8 +667,21 @@ function applyAnalysis(note) {
     "occurredOn",
     "pendingTime"
   ]) {
+    if (
+      field === "type" &&
+      form.value.type === "worklog" &&
+      form.value.workTracking
+    )
+      continue
     if (note[field] !== undefined) form.value[field] = note[field]
   }
+  // 智能整理只补未设置的进度，不覆盖人工选择。
+  if (
+    form.value.type === "worklog" &&
+    !form.value.workTracking &&
+    note.workTracking
+  )
+    form.value.workTracking = note.workTracking
   // 应用建议时保留已有任务与提醒，重名任务复用原 ID。
   const taskIds = new Map()
   for (const task of note.tasks || []) {
@@ -647,7 +730,7 @@ async function archive() {
   try {
     const result = await quickNotesApi.invoke("archive", {
       id: props.note.id,
-      revision: props.note.revision
+      revision: form.value.revision
     })
     emit("saved", result)
   } catch (failure) {
@@ -750,7 +833,11 @@ function beforeDeadline(plan) {
 }
 async function save() {
   if (saving.value) return
-  error.value = ""
+  error.value =
+    form.value.type === "worklog"
+      ? workProgressError(form.value.workTracking)
+      : ""
+  if (error.value) return
   // 提交时重新核对当前时间，避免编辑期间时间已过或提前提醒落在过去。
   if (
     form.value.reminders.some(
@@ -800,6 +887,49 @@ async function save() {
   } finally {
     saving.value = false
   }
+}
+// 仅提交进度，正文、待办和提醒继续留在原编辑草稿中。
+async function saveTracking() {
+  if (saving.value || !trackingDirty.value || !form.value.workTracking) return
+  trackingFeedback.value = ""
+  error.value = workProgressError(form.value.workTracking)
+  if (error.value) return
+  saving.value = true
+  try {
+    const saved = await quickNotesApi.invoke("save", {
+      id: form.value.id,
+      revision: form.value.revision,
+      workTracking: form.value.workTracking,
+      progressNote: form.value.progressNote
+    })
+    form.value.revision = saved.revision
+    savedTracking.value = saved.workTracking
+    form.value.workTracking = saved.workTracking
+    form.value.progressNote = ""
+    trackingFeedback.value = "已记录进度"
+    const detail = await quickNotesApi.invoke("detail", { id: saved.id })
+    history.value = detail.history
+  } catch (failure) {
+    error.value = failure.message || String(failure)
+  } finally {
+    saving.value = false
+  }
+}
+// 操作记录从修订快照中展示状态和完成度的变化。
+function historyLabel(entry) {
+  const before = entry.before?.workTracking
+  const after = entry.after?.workTracking
+  const description = (tracking) =>
+    workStateLabel(tracking) +
+    (tracking?.progress != null ? ` · ${tracking.progress}%` : "")
+  if (entry.operation === "create") {
+    return after ? `创建了便签 · ${description(after)}` : "创建了便签"
+  }
+  if (entry.operation !== "progress") return "更新了便签内容"
+  return before?.status === after?.status &&
+    before?.progress === after?.progress
+    ? `补充进展 · ${description(after)}`
+    : `${description(before)} → ${description(after)}`
 }
 </script>
 
@@ -1088,17 +1218,82 @@ async function save() {
       }
       .note-task {
         display: flex;
-        flex-wrap: wrap;
-        gap: 7px;
-        padding: 9px;
-        border: 1px solid var(--color-line);
-        border-radius: 8px;
-        :deep(input:first-child) {
-          flex-basis: 100%;
+        flex-direction: column;
+        gap: 8px;
+        padding: 10px 11px;
+        border-radius: 9px;
+        background: var(--color-panel-soft);
+        .note-task-title {
+          display: flex;
+          align-items: center;
+          gap: 5px;
+          :deep(input) {
+            flex: 1;
+            font-size: 12px;
+          }
+          .note-task-remove {
+            flex: none;
+            width: 28px;
+            height: 28px;
+            color: var(--color-text-muted);
+            &:hover {
+              color: var(--color-danger);
+              background: var(--color-panel);
+            }
+          }
         }
-        :deep(select),
-        :deep(input[type="date"]) {
-          width: calc(50% - 4px);
+        .note-task-options {
+          display: flex;
+          gap: 8px;
+          .note-field {
+            gap: 4px;
+            :deep(select) {
+              padding-block: 6px;
+            }
+          }
+        }
+        .note-task-deadline {
+          padding-top: 4px;
+          border-top: 1px solid var(--color-line);
+          &[open] {
+            .note-task-deadline-toggle {
+              .note-task-deadline-arrow {
+                transform: rotate(180deg);
+              }
+            }
+          }
+          .note-task-deadline-toggle {
+            display: flex;
+            align-items: center;
+            gap: 7px;
+            min-height: 26px;
+            padding: 0 3px;
+            border-radius: 5px;
+            color: var(--color-primary);
+            font-size: 11px;
+            list-style: none;
+            cursor: pointer;
+            &:hover {
+              background: var(--color-panel);
+            }
+            .note-task-deadline-value {
+              flex: 1;
+              min-width: 0;
+              overflow: hidden;
+              text-overflow: ellipsis;
+              white-space: nowrap;
+            }
+            .note-task-deadline-arrow {
+              flex: none;
+              color: var(--color-text-muted);
+            }
+          }
+          .note-task-deadline-fields {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding-top: 6px;
+          }
         }
       }
       .note-reminder {

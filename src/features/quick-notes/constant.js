@@ -10,6 +10,26 @@ export const taskStates = [
   { id: "completed", label: "已完成" },
   { id: "cancelled", label: "已取消" }
 ]
+// 工作事项的整体状态独立于待办状态和归档状态。
+export const workStates = [
+  { id: "planned", label: "计划中" },
+  { id: "in_progress", label: "进行中" },
+  { id: "blocked", label: "已阻塞" },
+  { id: "paused", label: "已暂停" },
+  { id: "completed", label: "已完成" }
+]
+export function workStateLabel(tracking) {
+  return (
+    workStates.find((state) => state.id === tracking?.status)?.label || "未跟踪"
+  )
+}
+export function workProgressError(tracking) {
+  if (!tracking || tracking.status === "completed") return ""
+  const { progress } = tracking
+  if (progress == null) return ""
+  if (Number.isInteger(progress) && progress >= 0 && progress < 100) return ""
+  return "工作进度必须留空或填写 0 至 99 的整数"
+}
 export const repeatOptions = [
   { id: "once", label: "仅一次" },
   { id: "daily", label: "每天" },
@@ -42,6 +62,8 @@ export function emptyNote() {
     pinned: false,
     tasks: [],
     worklog: {},
+    workTracking: null,
+    progressNote: "",
     occurredOn: "",
     reminders: []
   }

@@ -29,23 +29,70 @@ export const calls=[]
 export const handlers=new Set()
 export const openHandlers=new Set()
 const time=Date.now()
+const historyByNote=new Map()
 export const state={notes:[
  {id:'work',title:'完成速记模块的存储设计',content:'整理了便签、待办和提醒的数据关系，下一步验证重启恢复。',type:'worklog',groupId:'project',categoryId:'development',tags:['AI-Manager','本地存储'],color:'mint',pinned:true,occurredOn:'2026-11-18',createdAt:time,updatedAt:time,revision:1,lifecycle:'active',tasks:[{id:'t',title:'验证重启后的提醒恢复',status:'pending',dueDate:'2026-11-19'}],worklog:{result:'完成存储设计'}},
  {id:'idea',title:'周五的发布检查',content:'检查 Claude 和 Codex 的切换，再整理这周的工作记录。',type:'todo',groupId:'inbox',categoryId:'debugging',tags:['发布'],color:'sand',createdAt:time,updatedAt:time,revision:1,lifecycle:'active',tasks:[{id:'t2',title:'检查发布包',status:'pending'}],worklog:{}}
 ],folders:[{id:'inbox',kind:'group',name:'收件箱',aliases:[]},{id:'project',kind:'group',name:'AI-Manager',aliases:['桌宠']},{id:'uncategorized',kind:'category',name:'未分类',aliases:[]},{id:'development',kind:'category',name:'开发实现',aliases:[]},{id:'debugging',kind:'category',name:'问题排查',aliases:[]}],events:[],reminders:[],captures:[],hasMore:false}
-const changed=()=>{for(const handle of handlers)handle({})}
+export const changed=()=>{for(const handle of handlers)handle({})}
 export const quickNotesApi={onChanged:async fn=>{handlers.add(fn);return()=>handlers.delete(fn)},onOpen:async fn=>{openHandlers.add(fn);return()=>openHandlers.delete(fn)},invoke:async(action,p={})=>{
  p=JSON.parse(JSON.stringify(p))
  calls.push({action,p:JSON.parse(JSON.stringify(p))})
  if(action==='options')return {model:{targetId:'local',model:'qwen3.5-0.8b',protocol:'chat'}}
- if(action==='list')return {...structuredClone(state),notes:structuredClone(state.notes.filter(n=>n.lifecycle===(p.lifecycle||'active')&&(!p.groupId||n.groupId===p.groupId)&&(!p.categoryId||n.categoryId===p.categoryId)&&(!p.search||JSON.stringify(n).includes(p.search))))}
- if(action==='detail')return {...structuredClone(state.notes.find(n=>n.id===p.id)),reminders:structuredClone(state.reminders.filter(r=>r.noteId===p.id)),history:[{id:'rev',operation:'create',actor:'user',createdAt:time,after:{content:'原始内容'}}],captures:[]}
- if(action==='save'){const old=state.notes.find(n=>n.id===p.id);const note={...old,...p,id:old?.id||crypto.randomUUID(),revision:(old?.revision||0)+1,createdAt:old?.createdAt||Date.now(),lifecycle:p.lifecycle||'active'};if(old)Object.assign(old,note);else state.notes.push(note);if(Array.isArray(p.reminders))state.reminders=[...state.reminders.filter(r=>r.noteId!==note.id),...p.reminders.map(r=>({...r,id:r.id||crypto.randomUUID(),noteId:note.id}))];changed();return structuredClone(note)}
+ if(action==='list'){
+  const offset=p.offset||0
+  const limit=Math.min(p.limit||300,globalThis.notesPageSize||1000)
+  const notes=state.notes.filter(n=>
+   n.lifecycle===(p.lifecycle||'active')&&(!p.groupId||n.groupId===p.groupId)&&
+   (!p.categoryId||n.categoryId===p.categoryId)&&(!p.search||JSON.stringify(n).includes(p.search))&&
+   (!p.type||n.type===p.type)&&(!p.workStatus||(n.type==='worklog'&&(n.workTracking?.status||'untracked')===p.workStatus))
+  ).slice(offset,offset+limit)
+  return structuredClone({
+   ...state,notes,hasMore:notes.length===limit,
+   captures:state.captures.filter(c=>c.status!=='completed')
+  })
+ }
+ if(action==='detail')return {...structuredClone(state.notes.find(n=>n.id===p.id)),reminders:structuredClone(state.reminders.filter(r=>r.noteId===p.id)),history:[...(historyByNote.get(p.id)||[]),{id:'rev',operation:'create',actor:'user',createdAt:time,after:{content:'原始内容'}}],captures:[]}
+ if(action==='save'){
+  const old=state.notes.find(n=>n.id===p.id)
+  const {progressNote,appendReminder,...fields}=p
+  const note={...old,...fields,id:old?.id||crypto.randomUUID(),revision:(old?.revision||0)+1,createdAt:old?.createdAt||Date.now(),lifecycle:p.lifecycle||'active'}
+  if(old&&p.revision!==old.revision)throw Error('测试便签修订号不匹配')
+  if(old&&p.workTracking&&(progressNote||JSON.stringify(old.workTracking)!==JSON.stringify(p.workTracking))){
+   const entry={id:crypto.randomUUID(),operation:'progress',actor:'user',createdAt:Date.now(),before:structuredClone(old),after:{...note,progressNote}}
+   historyByNote.set(note.id,[entry,...(historyByNote.get(note.id)||[])])
+  }
+  if(old)Object.assign(old,note);else state.notes.push(note)
+  if(appendReminder)state.reminders.push({id:crypto.randomUUID(),noteId:note.id,enabled:true,nextFireAt:appendReminder.at,schedule:{...appendReminder,repeat:'once'}})
+  if(Array.isArray(p.reminders))state.reminders=[...state.reminders.filter(r=>r.noteId!==note.id),...p.reminders.map(r=>({...r,id:r.id||crypto.randomUUID(),noteId:note.id}))]
+  changed()
+  return structuredClone(note)
+ }
  if(action==='task-update'){const n=state.notes.find(n=>n.id===p.id);n.tasks.find(t=>t.id===p.taskId).status=p.status;n.revision++;changed();return structuredClone(n)}
  if(action==='archive'||action==='trash'||action==='restore'){const n=state.notes.find(n=>n.id===p.id);n.lifecycle=action==='archive'?'archived':action==='trash'?'trash':'active';n.revision++;changed();return structuredClone(n)}
+ // 小结任务先落盘，再通过变更事件通知已打开的便签视图。
+ if(action==='summary'){
+  if(globalThis.deferSummary)await new Promise(resolve=>{globalThis.releaseSummary=resolve})
+  const capture={id:crypto.randomUUID(),status:'running',source:{type:'summary',noteIds:p.ids},sourceText:'内部小结输入'}
+  state.captures.unshift(capture)
+  changed()
+  return structuredClone(capture)
+ }
+ if(action==='capture-cancel'){
+  const capture=state.captures.find(c=>c.id===p.requestId)
+  Object.assign(capture,{status:'cancelled',error:'已取消整理，原文已保留'})
+  changed()
+  return structuredClone(capture)
+ }
+ if(action==='capture-discard'){
+  const capture=state.captures.find(c=>c.id===p.id)
+  if(capture&&capture.status!=='running')capture.status='dismissed'
+  changed()
+  return {ok:true}
+ }
  if(action==='capture'){globalThis.lastCapture=p;return {id:'capture',requestId:p.requestId,status:'running'}}
  if(action==='capture-save'){const n={...p.note,id:crypto.randomUUID(),revision:1,createdAt:Date.now(),updatedAt:Date.now(),groupId:p.note.groupId||'inbox',categoryId:p.note.categoryId||'uncategorized',lifecycle:'active'};state.notes.push(n);state.reminders.push(...(p.note.reminders||[]).map(r=>({...r,id:r.id||crypto.randomUUID(),noteId:n.id})));changed();return structuredClone(n)}
- if(action==='capture-state'){if(globalThis.deferCaptureState)await new Promise(resolve=>{globalThis.releaseCaptureState=resolve});return {id:'capture',requestId:p.requestId,status:'preview',result:{title:'修复分值同步问题',content:'修复登录页与预约页分值不同步的问题，补充回归验证。',type:'todo',groupId:'project',categoryId:'debugging',tags:['分值同步','回归测试'],tasks:[{id:'ai-task',title:'补充回归测试',status:'pending',dueDate:null}],worklog:{},reminders:globalThis.aiReminderAt?[{taskId:'ai-task',enabled:true,nextFireAt:globalThis.aiReminderAt,schedule:{at:globalThis.aiReminderAt,repeat:'once'}}]:[]}}}
+ if(action==='capture-state'){if(globalThis.deferCaptureState)await new Promise(resolve=>{globalThis.releaseCaptureState=resolve});return {id:'capture',requestId:p.requestId,status:'preview',result:{title:'修复分值同步问题',content:'修复登录页与预约页分值不同步的问题，补充回归验证。',type:'worklog',groupId:'project',categoryId:'debugging',tags:['分值同步','回归测试'],tasks:[{id:'ai-task',title:'补充回归测试',status:'pending',dueDate:null}],worklog:{},workTracking:{status:'planned',progress:null},reminders:globalThis.aiReminderAt?[{taskId:'ai-task',enabled:true,nextFireAt:globalThis.aiReminderAt,schedule:{at:globalThis.aiReminderAt,repeat:'once'}}]:[]}}}
  if(action==='organize'){state.folders.push({...p,id:crypto.randomUUID()});changed();return {id:'folder'}}
  return {ok:true}
 }}
@@ -56,7 +103,7 @@ export const subscribeReady=async()=>()=>{}
 const fixture = `
 import {createApp,nextTick} from 'vue'
 import Notes from './src/features/quick-notes/index.vue'
-import {calls,state,openHandlers} from 'notes-mock'
+import {calls,state,openHandlers,changed} from 'notes-mock'
 const assert=(value,message)=>{if(!value)throw Error(message)}
 const pause=()=>new Promise(resolve=>setTimeout(resolve,40))
 const settle=async()=>{await nextTick();await pause();await nextTick()}
@@ -109,6 +156,18 @@ async function test(){
  assert(document.querySelector('.editor-title-field input').value==='周五的发布检查','外部打开事件没有定位到指定便签')
  for(const open of openHandlers)open({id:openedId})
  await settle()
+ const tracking=document.querySelector('.work-tracking-fields')
+ assert(tracking.querySelector('select').value==='','旧工作记录应保持未跟踪')
+ set(document.querySelector('.body-input'),'尚未保存的正文')
+ set(tracking.querySelector('select'),'in_progress')
+ await nextTick()
+ set(tracking.querySelector('input'),'40')
+ set(document.querySelector('textarea[maxlength="500"]'),'已修复接口，等待联调')
+ button('记录进度').click();await settle()
+ const progressSave=calls.findLast(c=>c.action==='save').p
+ assert(progressSave.workTracking.progress===40&&!('content' in progressSave)&&!('tasks' in progressSave),'记录进度提交了其他草稿字段')
+ assert(document.querySelector('.body-input').value==='尚未保存的正文','记录进度丢失了正文草稿')
+ assert(document.querySelector('.editor-history').textContent.includes('进行中 · 40%')&&document.querySelector('.editor-history').textContent.includes('等待联调'),'进度记录未显示在操作记录')
  // AI 建议应用到编辑草稿，保留已有任务与目录，不提前保存。
  const detailTasks=document.querySelectorAll('.note-editor-inline .note-task').length
  const detailSaveCount=calls.filter(c=>c.action==='save').length
@@ -119,7 +178,97 @@ async function test(){
  assert(document.querySelectorAll('.note-editor-inline .note-task').length===detailTasks+1,'应用 AI 建议覆盖了已有待办')
  assert(calls.filter(c=>c.action==='save').length===detailSaveCount,'应用草稿时提前保存了修改')
  set(document.querySelector('.editor-title-field input'),'更新后的标题');button('保存修改').click();await settle()
- assert(calls.some(c=>c.action==='save'&&c.p.title==='更新后的标题'),'详情编辑没有保存')
+ assert(calls.some(c=>c.action==='save'&&c.p.title==='更新后的标题'&&c.p.workTracking.progress===40&&c.p.revision===progressSave.revision+1),'详情编辑没有保留人工进度和新修订号')
+ button('工作留痕').click();await settle()
+ set(document.querySelector('[aria-label=工作状态筛选]'),'planned');await settle()
+ assert(calls.findLast(c=>c.action==='list').p.workStatus==='planned'&&!document.querySelector('.quick-note-card'),'切换状态没有筛选工作留痕')
+ set(document.querySelector('[aria-label=工作状态筛选]'),'in_progress');await settle()
+ assert(document.querySelector('.note-card-tracking progress')?.value===40,'卡片未显示已记录的进度')
+ button('全部记录').click();await settle()
+ assert(!calls.findLast(c=>c.action==='list').p.workStatus,'全部记录仍携带工作状态筛选')
+ // 验证提交中的临时状态与后台任务接管，其他便签不应被点亮。
+ const cardByTitle=title=>[...document.querySelectorAll('.quick-note-card')].find(card=>card.querySelector('.note-card-title').textContent===title)
+ globalThis.notesPageSize=2
+ await workspace.refresh();await settle()
+ assert(!cardByTitle('界面回归记录'),'分页用例缺少下一页便签')
+ button('加载更多').click();await settle()
+ const workCard=cardByTitle('更新后的标题')
+ const loadedCard=cardByTitle('界面回归记录')
+ workCard.querySelector('[aria-label=选择便签]').click()
+ loadedCard.querySelector('[aria-label=选择便签]').click()
+ await nextTick()
+ globalThis.deferSummary=true
+ const summaryButton=button('生成工作小结')
+ summaryButton.click();await settle()
+ const pulsing=[...document.querySelectorAll('.note-summarizing')]
+ assert(
+  pulsing.length===2&&pulsing.includes(workCard)&&pulsing.includes(loadedCard),
+  '只有参与小结的卡片应立即显示生成状态'
+ )
+ assert(
+  getComputedStyle(workCard).animationName.includes('note-summary-pulse')&&summaryButton.disabled,
+  '生成期间缺少边框动效或可重复提交'
+ )
+ assert(!button('取消生成',workCard)&&!document.querySelector('.notes-pending'),'提交期间应只在卡片显示生成状态')
+ globalThis.deferSummary=false
+ globalThis.releaseSummary();await settle()
+ const firstSummary=state.captures[0]
+ assert(loadedCard.isConnected&&button('取消生成',loadedCard),'启动后台任务后没有保留下一页来源卡片及取消入口')
+ assert(!document.querySelector('.notes-pending'),'后台小结重复显示在顶部')
+ button('取消生成',loadedCard).click();await settle()
+ assert(calls.findLast(c=>c.action==='capture-cancel').p.requestId===firstSummary.id,'卡片取消了其他小结任务')
+ assert(!document.querySelector('.note-summarizing'),'取消后卡片仍显示生成状态')
+ const pending=document.querySelector('.notes-pending')
+ assert(
+  pending.textContent.includes('工作小结 · 2 条便签')&&
+  !pending.textContent.includes('内部小结输入')&&!button('保存原文',pending),
+  '取消后把内部小结输入当成了便签原文'
+ )
+ button('重试',pending).click();await settle()
+ assert(
+  state.captures[0].id!==firstSummary.id&&
+  JSON.stringify(state.captures[0].source.noteIds)===JSON.stringify(firstSummary.source.noteIds),
+  '重试没有按原来的便签生成小结'
+ )
+ Object.assign(state.captures[0],{status:'failed',error:'模型不可用'})
+ changed();await settle()
+ const failedSummary=document.querySelector('.notes-pending')
+ assert(!document.querySelector('.note-summarizing')&&failedSummary?.textContent.includes('模型不可用'),'失败后应停止动效并显示原因')
+ button('忽略',failedSummary).click();await settle()
+ globalThis.notesPageSize=undefined
+ button('AI-Manager').click();await settle()
+ cardByTitle('更新后的标题').querySelector('[aria-label=选择便签]').click();await nextTick()
+ button('生成工作小结').click();await settle()
+ assert(document.querySelector('.notes-title').textContent==='AI-Manager'&&document.querySelector('.note-summarizing'),'从项目中生成小结离开了当前项目或丢失了生成状态')
+ button('全部记录').click();await settle()
+ assert(document.querySelector('.note-summarizing')===cardByTitle('更新后的标题'),'切换视图后没有按来源便签恢复生成状态')
+ state.captures[0].status='completed';changed();await settle()
+ assert(!document.querySelector('.note-summarizing')&&!document.querySelector('.notes-pending'),'后台小结完成后仍显示生成状态')
+ // 卡片弹窗在列表中完成新增，取消和无效时间都不提交。
+ const ideaCard=[...document.querySelectorAll('.quick-note-card')].find(card=>card.textContent.includes('周五的发布检查'))
+ const addReminder=ideaCard.querySelector('[aria-label=添加提醒]')
+ const detailRequests=calls.filter(c=>c.action==='detail').length
+ const reminderSaves=calls.filter(c=>c.action==='save').length
+ addReminder.focus();addReminder.click();await settle()
+ let quickReminder=document.querySelector('.notes-quick-reminder')
+ const quickTime=quickReminder.querySelector('input')
+ assert(document.activeElement===quickTime&&new Date(quickTime.value).getTime()>Date.now(),'弹窗没有聚焦并预填提醒时间')
+ assert(ideaCard.getClientRects().length&&!document.querySelector('.note-editor-inline'),'添加提醒离开了便签列表')
+ set(quickTime,local(Date.now()-60000))
+ button('保存提醒',quickReminder).click();await settle()
+ assert(quickReminder.querySelector('[role=alert]').textContent.includes('必须晚于当前时间'),'卡片提醒没有拒绝已过去的时间')
+ button('取消',quickReminder).click();await settle()
+ assert(!document.querySelector('.notes-quick-reminder')&&document.activeElement===addReminder,'取消提醒未回到卡片按钮')
+ assert(calls.filter(c=>c.action==='save').length===reminderSaves,'取消或校验失败时写入了提醒')
+ addReminder.click();await settle()
+ quickReminder=document.querySelector('.notes-quick-reminder')
+ const quickAt=local(Date.now()+120000)
+ set(quickReminder.querySelector('input'),quickAt)
+ button('保存提醒',quickReminder).click();await settle()
+ const appended=calls.findLast(c=>c.action==='save').p
+ assert(appended.id==='idea'&&appended.appendReminder.at===new Date(quickAt).getTime(),'卡片提醒未保存所选日期时间')
+ assert(!document.querySelector('.notes-quick-reminder')&&ideaCard.querySelector('[aria-label=管理提醒]'),'保存后没有刷新卡片时间')
+ assert(calls.filter(c=>c.action==='detail').length===detailRequests,'卡片新增提醒调用了详情入口')
  document.querySelector('.quick-note-card [aria-label=管理提醒]')?.click();await settle()
  if(document.querySelector('.note-form')){button('返回列表').click();await settle()}
  // 分析先生成可编辑预览，确认前不能写入正式便签。
@@ -133,6 +282,14 @@ async function test(){
  assert(globalThis.lastCapture.preview===true,'智能记录没有请求预览')
  assert(state.notes.length===count&&!calls.some(c=>c.action==='capture-save'),'预览前提前保存了便签')
  assert(modal.querySelector('.smart-preview-title').textContent==='修复分值同步问题','没有渲染模型实际返回结果')
+ const previewTracking=modal.querySelector('.work-tracking-fields')
+ assert(previewTracking.querySelector('select').value==='planned'&&previewTracking.querySelector('input').value==='','AI 预览没有保留未知进度')
+ set(previewTracking.querySelector('select'),'in_progress')
+ await nextTick()
+ set(previewTracking.querySelector('input'),'100')
+ button('确认并保存',modal).click();await settle()
+ assert(state.notes.length===count,'非完成状态接受了 100%')
+ set(previewTracking.querySelector('input'),'40')
  const previewTime=modal.querySelector('.smart-field input[type=datetime-local]')
  assert(previewTime?.value.length===19&&previewTime.step==='1','AI 提醒预览没有保留秒数')
  const suggestions=modal.querySelectorAll('.smart-task').length
@@ -143,6 +300,7 @@ async function test(){
  assert(calls.some(c=>c.action==='capture-save'&&c.p.note.title==='确认后的 AI 标题'),'预览修改没有提交')
  assert(state.notes.length===count+1,'确认后没有生成便签')
  const confirmed=calls.findLast(c=>c.action==='capture-save').p.note
+ assert(confirmed.workTracking.status==='in_progress'&&confirmed.workTracking.progress===40,'AI 预览修改的工作进度没有保存')
  assert(confirmed.reminders[0].nextFireAt===globalThis.aiReminderAt&&confirmed.reminders[0].schedule.at===globalThis.aiReminderAt,'确认保存改变了 AI 提醒的触发点')
  const reminderCard=[...document.querySelectorAll('.quick-note-card')].find(n=>n.textContent.includes('确认后的 AI 标题'))
  assert(reminderCard.querySelector('[aria-label=管理提醒]'),'AI 保存的卡片没有启用提醒')
