@@ -46,7 +46,20 @@ pub async fn dispatch(
                 value["revision"].as_i64().unwrap_or(0),
             )?;
         }
-        "detail" => return store::config(&database::open(paths)?, store::text(&value, "id")),
+        "detail" => {
+            let c = database::open(paths)?;
+            let provider = store::text(&value, "id");
+            let mut detail = store::config(&c, provider)?;
+            if value["agentType"] == "codex" {
+                if let Some(target) = targets.as_array().into_iter().flatten()
+                    .find(|item| item["id"] == "codex" && item["installed"] == true)
+                {
+                    let path = normalized(Path::new(store::text(target, "configPath")))?;
+                    detail["codexReasoning"] = json!(codex_reasoning_profile(&c, provider, &path)?);
+                }
+            }
+            return Ok(detail);
+        }
         "file-backup" => {
             let c = database::open(paths)?;
             let file=store::query(&c,"SELECT file_path,before_exists,before_ciphertext,after_ciphertext FROM service_managed_files WHERE id=?1",
@@ -225,12 +238,22 @@ pub(crate) fn configure_agent(
     }
     store::validate_agent_options(&c, provider, agent, true, &value["options"])?;
     store::validate_credential(&c, provider)?;
-    if let Some(target) = target.filter(|_| agent != "claude-desktop") {
-        normalized(Path::new(store::text(target, "configPath")))?;
+    let directory = target.filter(|_| agent != "claude-desktop")
+        .map(|target| normalized(Path::new(store::text(target, "configPath"))))
+        .transpose()?;
+    let mut options = value["options"].clone();
+    let mut profile = json!({});
+    if agent == "codex" {
+        for field in ["reasoningOverrides", "defaultSubagentModel", "defaultSubagentReasoningEffort"] {
+            if let Some(setting) = options.as_object_mut().unwrap().remove(field) {
+                profile[field] = setting;
+            }
+        }
     }
     // Agent 规则独立更新，不能走服务商整体保存，否则其他 Agent 也会失去同步状态。
     let mut c = database::open(paths)?;
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    store::validate_agent_options(&tx, provider, agent, true, &value["options"])?;
     if tx.execute("UPDATE service_provider_configs SET revision=revision+1,updated_at=?3
         WHERE id=?1 AND revision=?2 AND enabled=1 AND deleted_at IS NULL",
         params![provider, value["revision"].as_i64(), store::now()])? != 1 {
@@ -240,12 +263,27 @@ pub(crate) fn configure_agent(
         VALUES(?1,?2,1,(SELECT id FROM service_provider_models WHERE provider_id=?1 AND upstream_model_id=?3 AND enabled=1),?4,?5)
         ON CONFLICT(provider_id,agent_type) DO UPDATE SET enabled=1,default_model_id=excluded.default_model_id,
         options_json=excluded.options_json,revision=revision+1,updated_at=excluded.updated_at",
-        params![provider, agent, model, value["options"].to_string(), store::now()])?;
+        params![provider, agent, model, options.to_string(), store::now()])?;
+    if let Some(directory) = directory.filter(|_| agent == "codex") {
+        tx.execute("INSERT INTO service_codex_reasoning_profiles(provider_id,config_path,options_json)
+            VALUES(?1,?2,?3) ON CONFLICT(provider_id,config_path) DO UPDATE SET options_json=excluded.options_json",
+            params![provider, directory, profile.to_string()])?;
+    }
     tx.commit()?;
     if agent == "gateway" {
         return store::state(paths);
     }
     quick_switch(paths, targets, &json!({"agentType":agent,"providerId":provider}))
+}
+
+pub(crate) fn codex_reasoning_profile(
+    c: &rusqlite::Connection,
+    provider: &str,
+    directory: &str,
+) -> Result<Option<Value>, ManagerError> {
+    Ok(store::query(c, "SELECT options_json AS optionsJson FROM service_codex_reasoning_profiles
+        WHERE provider_id=?1 AND config_path=?2", &[&provider, &directory])?
+        .pop().map(|row| row["options"].clone()))
 }
 
 pub(crate) fn issue_token(paths: &AppPaths, value: &Value) -> Result<Value, ManagerError> {
@@ -258,6 +296,7 @@ pub(crate) fn issue_token(paths: &AppPaths, value: &Value) -> Result<Value, Mana
     }
     let provider = store::text(value, "providerId");
     let model = store::text(value, "modelId");
+    let limit = multi_protocol_gateway::token_reasoning_limit(&value["reasoningEffortLimit"])?;
     let allowed:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM service_provider_configs p
         JOIN service_provider_agent_bindings b ON b.provider_id=p.id AND b.agent_type='gateway' AND b.enabled=1
         JOIN service_provider_models m ON m.provider_id=p.id AND m.id=?2 AND m.enabled=1
@@ -270,8 +309,9 @@ pub(crate) fn issue_token(paths: &AppPaths, value: &Value) -> Result<Value, Mana
     tx.execute("INSERT INTO service_agent_instances(id,agent_type,name,config_path,client_protocol,provider_id,model_id,status,sync_status,created_at,updated_at)
         VALUES(?1,'gateway',?2,?3,'all',?4,?5,'active','synced',?6,?6)",params![instance,
             value["name"].as_str().filter(|v|!v.trim().is_empty()).unwrap_or("多协议工具"),format!("external:{instance}"),provider,model,store::now()])?;
-    tx.execute("INSERT INTO service_gateway_tokens(id,token_hash,token_prefix,instance_id,created_at) VALUES(?1,?2,?3,?4,?5)",
-        params![store::id(),store::hash(&token),&token[..14],instance,store::now()])?;
+    tx.execute("INSERT INTO service_gateway_tokens(id,token_hash,token_prefix,instance_id,created_at,reasoning_effort_limit)
+        VALUES(?1,?2,?3,?4,?5,?6)",
+        params![store::id(),store::hash(&token),&token[..14],instance,store::now(),limit])?;
     tx.commit()?;
     Ok(
         json!({"instanceId":instance,"token":token,"baseUrl":format!("http://127.0.0.1:{}",store::PORT)}),
@@ -404,7 +444,7 @@ fn apply(
     if config["enabled"] != 1 || !config["deletedAt"].is_null() {
         return Err(store::fail("服务商已禁用或删除"));
     }
-    let binding = store::query(
+    let mut binding = store::query(
         &c,
         "SELECT default_model_id AS defaultModelId,options_json AS optionsJson
         FROM service_provider_agent_bindings WHERE provider_id=?1 AND agent_type=?2 AND enabled=1",
@@ -412,18 +452,8 @@ fn apply(
     )?
     .pop()
     .ok_or_else(|| store::fail("该服务商尚未授权此 Agent"))?;
-    let model_id = value["modelId"]
-        .as_str()
-        .filter(|s| !s.is_empty())
-        .or(binding["defaultModelId"].as_str())
-        .unwrap_or("");
     let models=store::query(&c,"SELECT id,upstream_model_id AS upstreamModelId,catalog_json AS catalogJson,context_window AS contextWindow
         FROM service_provider_models WHERE provider_id=?1 AND enabled=1",&[&provider])?;
-    store::validate_agent_options(&c, provider, agent, true, &binding["options"])?;
-    let model = models
-        .iter()
-        .find(|m| store::text(m, "id") == model_id)
-        .ok_or_else(|| store::fail("请选择已启用的模型"))?;
     store::validate_credential(&c, provider)?;
     let default_path = targets
         .as_array()
@@ -438,6 +468,23 @@ fn apply(
             .filter(|v| !v.is_empty())
             .unwrap_or(default_path),
     );
+    if agent == "codex" {
+        if let Some(profile) = codex_reasoning_profile(&c, provider, &normalized(&directory)?)? {
+            let options = binding["options"].as_object_mut().unwrap();
+            for field in ["reasoningOverrides", "defaultSubagentModel", "defaultSubagentReasoningEffort"] {
+                options.remove(field);
+            }
+            options.extend(profile.as_object().unwrap().clone());
+        }
+    }
+    store::validate_agent_options(&c, provider, agent, true, &binding["options"])?;
+    let model_id = value["modelId"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .or(binding["defaultModelId"].as_str())
+        .unwrap_or("");
+    let model = models.iter().find(|model| store::text(model, "id") == model_id)
+        .ok_or_else(|| store::fail("请选择已启用的模型"))?;
     let mut managed = if let Some(instance) = refresh {
         store::query(&c, "SELECT * FROM service_managed_files WHERE instance_id=?1 AND restore_status<>'restored'", &[&store::text(instance,"id")])?
     } else { Vec::new() };
@@ -477,8 +524,13 @@ fn apply(
         let sync = binding["options"]["syncModelList"].as_bool()
             .or_else(|| binding["options"]["syncModelList"].as_i64().map(|n| n == 1))
             .unwrap_or(true);
-        // API 按开关引用服务商目录；Google 自动使用官方返回的目录，GPT 沿用客户端目录。
-        let catalog = if (sync && config["kind"] == "api") || config["kind"] == "google_account" {
+        let has_overrides = binding["options"]["reasoningOverrides"]
+            .as_object().is_some_and(|overrides| !overrides.is_empty());
+        // 官方 Codex 优先沿用客户端目录，只有此实例配置了档位覆盖才投影快照。
+        let catalog = if (sync && (config["kind"] == "api"
+            || (config["kind"] == "codex_account" && has_overrides)))
+            || config["kind"] == "google_account"
+        {
             let entries = models.iter().map(|item| {
                 let mut entry = item["catalog"].clone();
                 entry["slug"] = item["upstreamModelId"].clone();
@@ -487,7 +539,18 @@ fn apply(
                 }
                 entry
             }).collect::<Vec<_>>();
-            Some(codex_models::normalize_catalog(&json!({"models":entries}))?)
+            let mut catalog = codex_models::normalize_catalog(&json!({"models":entries}))?;
+            if let Some(entries) = catalog["models"].as_array_mut() {
+                for entry in entries {
+                    let slug = store::text(entry, "slug");
+                    let overrides = &binding["options"]["reasoningOverrides"][slug];
+                    if !overrides.is_null() {
+                        let effective = codex_models::effective_reasoning(slug, entry, overrides)?;
+                        codex_models::project_reasoning(entry, &effective);
+                    }
+                }
+            }
+            Some(catalog)
         } else {
             None
         };
@@ -511,19 +574,23 @@ fn apply(
             content = runtime_provider::remove_toml_root_line(&content, "model_catalog_json");
         }
         for (key, option) in [("model_reasoning_effort", "modelReasoningEffort")] {
-            if let Some(val) = binding["options"].get(option).filter(|v| !v.is_null()) {
-                // 应用时可能另选模型，遵循原 Provider 对 ultra 的模型限制。
-                let val = if val == "ultra"
-                    && !["gpt-5.6-sol", "gpt-5.6-terra"].contains(&name.to_ascii_lowercase().as_str())
-                {
-                    json!("low")
-                } else {
-                    val.clone()
-                };
-                content =
-                    runtime_provider::set_toml_root_line(&content, key, &format!("{key} = {val}"));
+            if let Some(effort) = codex_models::effort(&binding["options"][option]) {
+                let capability = codex_models::effective_reasoning(
+                    name, &model["catalog"], &binding["options"]["reasoningOverrides"][name],
+                )?;
+                if let Some(levels) = capability["levels"].as_array() {
+                    if !levels.contains(&json!(&effort)) {
+                        return Err(store::fail(format!("模型 {name} 不支持 {effort} 档位")));
+                    }
+                }
+                // 沿用旧配置中未知模型的 ultra 兼容回退。
+                let effort = if effort == "ultra" && capability["state"] == "unknown" { "low" } else { &effort };
+                content = runtime_provider::set_toml_root_line(
+                    &content, key, &format!("{key} = {}", json!(effort)),
+                );
             }
         }
+        content = codex_models::project_subagent_defaults(&content, &binding["options"])?;
         if binding["options"]["serviceTierFast"] == true
             || binding["options"]["serviceTierFast"] == 1
         {
@@ -1125,16 +1192,21 @@ pub(crate) fn recover(paths: &AppPaths) -> Result<(), ManagerError> {
         "UPDATE app_metadata SET value='1' WHERE key='service_provider:accepting'",
         [],
     )?;
-    for instance in store::query(&c,"SELECT DISTINCT i.id FROM service_agent_instances i JOIN service_managed_files f ON f.instance_id=i.id
+    let service_active = store::active(paths)?;
+    for instance in store::query(&c,"SELECT DISTINCT i.id,i.status FROM service_agent_instances i JOIN service_managed_files f ON f.instance_id=i.id
         WHERE (i.status='error' OR f.write_status='prepared') AND f.restore_status<>'restored'",&[])?{
-        // 中断的接管按快照撤回自身改动，保留客户端后续修改。
-        let _=detach(paths,store::text(&instance,"id"));
+        // 首次接管的选择已提交，恢复文件后可重新生成整个投影。
+        let retry = service_active && instance["status"] == "error";
+        let _ = detach_instance(paths, store::text(&instance,"id"), retry);
     }
-    // 升级时自动补同步旧版本保存服务商后遗留的 pending 实例，不更换现有令牌。
-    for provider in store::query(&c,"SELECT DISTINCT provider_id FROM service_agent_instances WHERE status='active' AND sync_status='pending'",&[])? {
+    // 启动后重试已保存但未成功写入的客户端投影，不更换现有令牌。
+    for provider in store::query(&c,"SELECT DISTINCT i.provider_id FROM service_agent_instances i
+        JOIN service_provider_configs p ON p.id=i.provider_id
+        WHERE i.status='active' AND (i.sync_status='pending' OR i.applied_revision<>p.revision)
+        AND i.config_path NOT LIKE 'external:%' AND i.config_path NOT LIKE 'internal:%' AND i.config_path NOT LIKE 'test:%'",&[])? {
         let _ = sync_provider(paths,store::text(&provider,"provider_id"));
     }
-    if store::active(paths)? {
+    if service_active {
         resume_paused_agents(paths)?;
     }
     Ok(())

@@ -297,6 +297,7 @@ pub async fn create_token(
     let _guard = registry.store_lock.lock().await;
     let mut config = read_config(paths)?;
     let mut tokens = config["tokens"].as_array().cloned().unwrap_or_default();
+    let limit = token_reasoning_limit(&payload["reasoningEffortLimit"])?;
     let raw = format!("{}{}", TOKEN_PREFIX, uuid::Uuid::new_v4().simple());
     let id = uuid::Uuid::new_v4().to_string();
     let now = now_millis();
@@ -307,6 +308,7 @@ pub async fn create_token(
         "tokenHint": token_hint(&raw),
         "tokenHash": hash_token(&raw),
         "tokenEncrypted": runtime_provider::encrypt_provider_key(&raw)?,
+        "reasoningEffortLimit": limit,
         "enabled": payload.get("enabled").and_then(Value::as_bool).unwrap_or(true),
         "createdAt": now,
         "expiresAt": number_value(payload.get("expiresAt"), 0),
@@ -448,22 +450,33 @@ pub fn read_log_detail(paths: &AppPaths, payload: &Value) -> Result<Value, Manag
 
 fn spawn_listener(listener: TcpListener, context: GatewayContext) -> tokio::task::JoinHandle<()> {
     tokio::spawn(async move {
-        let mut connections = tokio::task::JoinSet::new();
-        loop {
-            let Ok((stream, peer)) = listener.accept().await else {
-                break;
-            };
-            while connections.try_join_next().is_some() {}
-            let context = context.clone();
-            connections.spawn(async move {
-                let service = service_fn(move |request| {
-                    let context = context.clone();
-                    async move { Ok::<_, Infallible>(handle_request(request, context, peer).await) }
+        let paths = context.paths.clone();
+        let service_mode = context.service_mode;
+        let listener_task = async move {
+            let mut connections = tokio::task::JoinSet::new();
+            loop {
+                let Ok((stream, peer)) = listener.accept().await else {
+                    break;
+                };
+                while connections.try_join_next().is_some() {}
+                let context = context.clone();
+                connections.spawn(async move {
+                    let service = service_fn(move |request| {
+                        let context = context.clone();
+                        async move { Ok::<_, Infallible>(handle_request(request, context, peer).await) }
+                    });
+                    let _ = http1::Builder::new()
+                        .serve_connection(TokioIo::new(stream), service)
+                        .await;
                 });
-                let _ = http1::Builder::new()
-                    .serve_connection(TokioIo::new(stream), service)
-                    .await;
-            });
+            }
+        };
+        if service_mode {
+            let refresh_task = service::refresh_active_catalogs(&paths);
+            futures_util::pin_mut!(listener_task, refresh_task);
+            let _ = futures_util::future::select(listener_task, refresh_task).await;
+        } else {
+            listener_task.await;
         }
     })
 }
@@ -519,6 +532,7 @@ async fn handle_request(
         "requestSource": "multi-protocol-gateway", "protocol": protocol_name(route.protocol),
         "clientIp": peer.ip().to_string(), "requestPath": path, "requestMethod": "POST",
         "tokenId": token["id"], "tokenName": token["name"],
+        "reasoningEffortLimit": token["reasoningEffortLimit"],
         "requestedModel": route.requested_model, "physicalModel": "", "upstreamModel": "",
         "inputTokens": 0, "outputTokens": 0, "cacheReadTokens": 0,
         "cacheInputTokens": 0, "usageKnown": false
@@ -955,6 +969,13 @@ async fn send_to_target(
     record: &mut Value,
     started: Instant,
 ) -> Result<Response<GatewayBody>, GatewayFailure> {
+    let requested_effort = requested_reasoning(request.protocol, &request.original);
+    if record["requestedReasoningEffort"].is_null() {
+        record["requestedReasoningEffort"] = json!(requested_effort);
+    }
+    if let Some(limit) = record["reasoningEffortLimit"].as_str() {
+        check_reasoning_limit(limit, record["requestedReasoningEffort"].as_str())?;
+    }
     let auth = target_auth(context, target).await?;
     let client = target_client(target)?;
     let (mut url, mut body, headers, format, mut tracking) =
@@ -969,6 +990,22 @@ async fn send_to_target(
         body=request.original.clone();
         body["model"]=json!(physical_model);
         body.as_object_mut().unwrap().remove("stream");
+    }
+    apply_reasoning(
+        &mut body, request.protocol, format, target, physical_model,
+        &record["modelReasoning"], requested_effort.as_deref(),
+    ).map_err(|error| GatewayFailure {status:StatusCode::BAD_REQUEST,message:error.to_string()})?;
+    record["sentReasoningEffort"] = json!(match format {
+        UpstreamFormat::OpenAiResponses => requested_reasoning(Protocol::Responses, &body),
+        UpstreamFormat::OpenAiChat => requested_reasoning(Protocol::Chat, &body),
+        UpstreamFormat::Anthropic => requested_reasoning(Protocol::Claude, &body),
+        UpstreamFormat::Gemini => requested_reasoning(Protocol::Gemini, &body),
+    });
+    record["sentReasoningBudget"] = body.pointer("/thinking/budget_tokens")
+        .or_else(|| body.pointer("/generationConfig/thinkingConfig/thinkingBudget"))
+        .cloned().unwrap_or(Value::Null);
+    if let Some(limit) = record["reasoningEffortLimit"].as_str() {
+        check_reasoning_limit(limit, record["sentReasoningEffort"].as_str())?;
     }
     record["upstreamProtocol"] = json!(match format {
         UpstreamFormat::OpenAiChat => "chat",
@@ -1285,8 +1322,6 @@ fn upstream_body(
             ));
         }
         for key in [
-            "thinking",
-            "reasoning",
             "response_format",
             "text",
             "audio",
@@ -1315,7 +1350,7 @@ fn upstream_body(
             .is_some_and(|config| {
                 config
                     .keys()
-                    .any(|key| !matches!(key.as_str(), "temperature" | "topP" | "maxOutputTokens"))
+                    .any(|key| !matches!(key.as_str(), "temperature" | "topP" | "maxOutputTokens" | "thinkingConfig"))
             })
         {
             return Err(ManagerError::System(
@@ -1383,6 +1418,227 @@ fn upstream_body(
         object.remove("stream");
     }
     Ok(body)
+}
+
+fn budget_effort(budget: i64) -> Option<&'static str> {
+    Some(match budget {
+        -1 => "auto",
+        0 => "none",
+        1..=512 => "minimal",
+        513..=1024 => "low",
+        1025..=8192 => "medium",
+        8193..=24576 => "high",
+        24577.. => "xhigh",
+        _ => return None,
+    })
+}
+
+fn check_reasoning_limit(limit: &str, actual: Option<&str>) -> Result<(), GatewayFailure> {
+    let status = StatusCode::FORBIDDEN;
+    match (reasoning_rank(limit), actual.and_then(reasoning_rank)) {
+        (Some(limit), Some(actual)) if actual <= limit => Ok(()),
+        (Some(_), Some(_)) => Err(GatewayFailure {
+            status, message: "reasoning_effort_exceeds_key_limit：请求的思考强度超出此 Token 上限".into(),
+        }),
+        _ => Err(GatewayFailure {
+            status, message: "reasoning_effort_unverifiable：此 Token 要求请求携带可验证的思考强度".into(),
+        }),
+    }
+}
+
+fn reasoning_rank(effort: &str) -> Option<usize> {
+    ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+        .iter().position(|level| *level == effort)
+}
+
+pub(super) fn token_reasoning_limit(value: &Value) -> Result<Option<String>, ManagerError> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    codex_models::effort(value)
+        .filter(|effort| reasoning_rank(effort).is_some())
+        .map(Some)
+        .ok_or_else(|| ManagerError::System("Token 的思考强度上限无效".into()))
+}
+
+fn split_reasoning_suffix(model: &str) -> Option<(&str, String, bool)> {
+    let (model, suffix) = model.strip_suffix(')')?.rsplit_once('(')?;
+    if model.trim().is_empty() { return None; }
+    if let Ok(budget) = suffix.trim().parse::<i64>() {
+        return Some((model, budget_effort(budget)?.to_owned(), true));
+    }
+    Some((model, codex_models::effort(&json!(suffix))?, false))
+}
+
+fn closest_reasoning_effort<'a>(capability: &'a Value, effort: &str) -> Option<&'a str> {
+    let levels = capability["levels"].as_array()?;
+    if levels.iter().any(|level| level == effort) { return Some(levels.iter().find(|level| *level == effort)?.as_str()?); }
+    if effort == "none" { return levels.first()?.as_str(); }
+    let desired = reasoning_rank(if effort == "auto" { "medium" } else { effort })?;
+    levels.iter().filter_map(Value::as_str)
+        .filter_map(|level| reasoning_rank(level).map(|rank| (level, rank)))
+        .min_by_key(|(_, rank)| (rank.abs_diff(desired), *rank))
+        .map(|(level, _)| level)
+}
+
+fn requested_reasoning(protocol: Protocol, body: &Value) -> Option<String> {
+    let effort = match protocol {
+        Protocol::Responses => &body["reasoning"]["effort"],
+        Protocol::Chat => &body["reasoning_effort"],
+        Protocol::Claude => &body["output_config"]["effort"],
+        Protocol::Gemini => &body["generationConfig"]["thinkingConfig"]["thinkingLevel"],
+    };
+    if let Some(effort) = effort.as_str() {
+        return Some(effort.trim().to_ascii_lowercase());
+    }
+    if matches!(protocol, Protocol::Chat | Protocol::Claude) && body["thinking"]["type"] == "disabled" {
+        return Some("none".into());
+    }
+    let budget = match protocol {
+        Protocol::Claude => body["thinking"]["budget_tokens"].as_i64(),
+        Protocol::Gemini => body["generationConfig"]["thinkingConfig"]["thinkingBudget"].as_i64(),
+        _ => None,
+    };
+    budget.and_then(budget_effort).map(str::to_owned)
+}
+
+fn apply_reasoning(
+    body: &mut Value,
+    source: Protocol,
+    format: UpstreamFormat,
+    target: &GatewayTarget,
+    model: &str,
+    capability: &Value,
+    requested: Option<&str>,
+) -> Result<(), ManagerError> {
+    let Some(requested) = requested else { return Ok(()) };
+    let unsupported = || ManagerError::System(format!("模型 {model} 不支持 {requested} 思考档位"));
+    if codex_models::effort(&json!(requested)).is_none() {
+        return Err(unsupported());
+    }
+    let host = url::Url::parse(&target.base_url).ok();
+    let host = host.as_ref().and_then(url::Url::host_str);
+    let deepseek = host == Some("api.deepseek.com")
+        && matches!(format, UpstreamFormat::OpenAiChat | UpstreamFormat::Anthropic);
+    let xai = host == Some("api.x.ai")
+        && matches!(format, UpstreamFormat::OpenAiChat | UpstreamFormat::OpenAiResponses);
+    let adaptive = format == UpstreamFormat::Anthropic && !deepseek
+        && (capability["thinking"]["levels"].is_array()
+            || matches!(model, "claude-sonnet-4-6" | "claude-opus-4-6" | "claude-opus-4-7" | "claude-opus-4-8"));
+    let native = native_protocol(source, format);
+    let xai_levels: &[&str] = if xai {
+        match model {
+            "grok-4.3" | "grok-build-0.1" => &["none", "low", "medium", "high"],
+            "grok-4.6" | "grok-4.7" | "grok-4.7-latest" | "grok-4.7-build-fast" =>
+                &["low", "medium", "high", "xhigh"],
+            "grok-3-mini" | "grok-3-mini-fast" | "grok-4.5" | "grok-4.20-multi-agent-0309" =>
+                &["low", "medium", "high"],
+            _ => &[],
+        }
+    } else {
+        &[]
+    };
+    let xai_capability = json!({"levels":xai_levels});
+    let levels = capability["levels"].as_array();
+    let effective = if deepseek {
+        match requested {
+            "minimal" | "low" => "low",
+            "medium" | "high" | "xhigh" => "high",
+            "max" | "ultra" => "max",
+            value => value,
+        }
+    } else if !xai_levels.is_empty() {
+        closest_reasoning_effort(&xai_capability, requested).ok_or_else(unsupported)?
+    } else if adaptive && !native {
+        match requested {
+            "minimal" => "low",
+            "xhigh" | "max" if levels.is_some_and(|levels| !levels.contains(&json!(requested))) => {
+                if levels.is_some_and(|levels| levels.contains(&json!("max"))) { "max" } else { "high" }
+            }
+            "ultra" => return Err(unsupported()),
+            value => value,
+        }
+    } else {
+        requested
+    };
+    if capability["state"] == "unsupported" {
+        if requested != "none" { return Err(unsupported()); }
+        if !native { return Ok(()); }
+    }
+    if levels.is_some_and(|levels| !levels.is_empty()
+        && !levels.iter().any(|level| level == effective))
+        && !(deepseek && effective == "none")
+        && !(adaptive && matches!(effective, "none" | "auto"))
+    {
+        return Err(unsupported());
+    }
+    if native && !deepseek && effective == requested {
+        return Ok(());
+    }
+    match format {
+        UpstreamFormat::OpenAiResponses => {
+            if body["reasoning"].is_null() {
+                body["reasoning"] = json!({});
+            }
+            body["reasoning"].as_object_mut().ok_or_else(unsupported)?
+                .insert("effort".into(), json!(effective));
+        }
+        UpstreamFormat::OpenAiChat => {
+            if deepseek && effective == "none" {
+                body["thinking"] = json!({"type":"disabled"});
+                body.as_object_mut().unwrap().remove("reasoning_effort");
+            } else {
+                body["reasoning_effort"] = json!(effective);
+            }
+        }
+        UpstreamFormat::Anthropic => {
+            if effective == "none" {
+                body["thinking"] = json!({"type":"disabled"});
+                body.as_object_mut().unwrap().remove("output_config");
+            } else if deepseek {
+                body["thinking"] = json!({"type":"enabled"});
+                body["output_config"]["effort"] = json!(effective);
+            } else if adaptive {
+                body["thinking"] = json!({"type":"adaptive"});
+                if effective != "auto" {
+                    body["output_config"]["effort"] = json!(effective);
+                }
+            } else if matches!(body["tool_choice"]["type"].as_str(), Some("any" | "tool")) {
+                return Ok(());
+            } else {
+                let min = capability["thinking"]["min_budget_tokens"].as_u64().unwrap_or(1024);
+                let max_budget = capability["thinking"]["max_budget_tokens"].as_u64().unwrap_or(128000);
+                let budget: u64 = match effective {
+                    "minimal" => 512,
+                    "low" => 1024,
+                    "medium" => 8192,
+                    "high" => 24576,
+                    "xhigh" => 32768,
+                    "max" => 128000,
+                    "auto" => max_budget,
+                    _ => return Err(unsupported()),
+                };
+                let max = body["max_tokens"].as_u64().unwrap_or(4096);
+                if max <= min || max_budget < min {
+                    return Err(ManagerError::System(format!("Claude 的最大输出 token 数必须大于最小思考预算 {min}")));
+                }
+                body["thinking"] = json!({"type":"enabled","budget_tokens":budget.max(min).min(max_budget).min(max-1)});
+            }
+        }
+        UpstreamFormat::Gemini => {
+            let value = match effective {
+                "none" => json!({"thinkingBudget":0}),
+                "auto" => json!({"thinkingBudget":-1}),
+                "minimal" | "low" | "medium" | "high" if model.starts_with("gemini-3") =>
+                    json!({"thinkingLevel":effective.to_ascii_uppercase()}),
+                "minimal" | "low" => json!({"thinkingBudget":1024}),
+                "medium" => json!({"thinkingBudget":8192}),
+                _ => json!({"thinkingBudget":24576}),
+            };
+            body["generationConfig"]["thinkingConfig"] = value;
+        }
+    }
+    Ok(())
 }
 
 fn build_upstream_request(

@@ -75,7 +75,8 @@ pub(crate) fn authorize(c: &Connection, secret: &str) -> Result<Value, ManagerEr
         return Err(store::fail("缺少共享网关 Token"));
     }
     store::query(c, "SELECT t.id AS tokenId,i.id AS instanceId,i.agent_type AS agentType,i.provider_id AS providerId,
-        i.model_id AS modelId,i.client_protocol AS clientProtocol,i.agent_version AS agentVersion,p.revision AS providerRevision
+        i.model_id AS modelId,i.client_protocol AS clientProtocol,i.agent_version AS agentVersion,i.config_path AS configPath,p.revision AS providerRevision,
+        t.reasoning_effort_limit AS reasoningEffortLimit
         FROM service_gateway_tokens t JOIN service_agent_instances i ON i.id=t.instance_id
         JOIN service_provider_configs p ON p.id=i.provider_id
         JOIN service_provider_agent_bindings b ON b.provider_id=p.id AND b.agent_type=i.agent_type
@@ -142,7 +143,7 @@ pub(super) fn resolve(
     };
     // 客户端显式选择的模型按原请求解析；实例模型只用于未指定模型的请求。
     // Desktop 档位和多协议工具仍保留用户主动配置的别名映射。
-    let models = store::query(&c, "SELECT id,upstream_model_id AS upstreamModelId FROM service_provider_models
+    let models = store::query(&c, "SELECT id,upstream_model_id AS upstreamModelId,catalog_json AS catalogJson FROM service_provider_models
         WHERE provider_id=?1 AND enabled=1 AND id=coalesce(
         (SELECT model_id FROM service_agent_model_routes WHERE provider_id=?1 AND agent_type=?3 AND client_model_name=?2 AND enabled=1),
         CASE WHEN ?5 IS NOT NULL THEN
@@ -173,6 +174,24 @@ pub(super) fn resolve(
         },
         model,
     ))
+}
+
+fn codex_tool_models(c: &rusqlite::Connection, provider: &str, overrides: &Value) -> Result<Vec<Value>, ManagerError> {
+    let entries = store::query(c, "
+        SELECT m.upstream_model_id AS name,m.upstream_model_id AS upstreamModelId,m.catalog_json AS catalogJson
+        FROM service_provider_models m WHERE m.provider_id=?1 AND m.enabled=1
+        AND NOT EXISTS(SELECT 1 FROM service_agent_model_routes r WHERE r.provider_id=?1
+            AND r.agent_type='codex' AND r.enabled=1 AND r.client_model_name=m.upstream_model_id)
+        UNION ALL
+        SELECT r.client_model_name,m.upstream_model_id,m.catalog_json
+        FROM service_agent_model_routes r JOIN service_provider_models m ON m.id=r.model_id AND m.provider_id=r.provider_id
+        WHERE r.provider_id=?1 AND r.agent_type='codex' AND r.enabled=1 AND m.enabled=1
+        ORDER BY name", &[&provider])?;
+    entries.into_iter().filter(|entry| entry["catalog"]["visibility"] != "hide").map(|mut entry| {
+        let name = store::text(&entry,"upstreamModelId");
+        entry["reasoning"] = codex_models::effective_reasoning(name, &entry["catalog"], &overrides[name])?;
+        Ok(entry)
+    }).collect()
 }
 
 pub(super) async fn handle_request(
@@ -251,6 +270,8 @@ pub(super) async fn handle_request(
         .iter().find_map(|name| request.headers().get(*name)
             .and_then(|value| value.to_str().ok()).filter(|value| !value.is_empty()))
         .unwrap_or("").to_string();
+    let user_agent = request.headers().get("user-agent")
+        .and_then(|value| value.to_str().ok()).unwrap_or("").to_owned();
     let (identity, mut record) = match receive(&context.paths, &secret, &path, protocol, &client_id)
     {
         Ok(v) => v,
@@ -276,17 +297,68 @@ pub(super) async fn handle_request(
             return Err(GatewayFailure{status:StatusCode::BAD_REQUEST,message:"Responses 压缩接口不支持流式请求".into()});
         }
         let requested=if route.protocol==Protocol::Gemini{route.requested_model.clone()}else{store::text(&payload,"model").to_string()};
-        let (target,model)=resolve(&context.paths,&identity,&requested).map_err(|e|GatewayFailure{status:StatusCode::BAD_REQUEST,message:e.to_string()})?;
+        let suffix = matches!(route.protocol, Protocol::Responses | Protocol::Chat)
+            .then(|| split_reasoning_suffix(&requested)).flatten();
+        let (target, model, suffix_effort) = match resolve(&context.paths, &identity, &requested) {
+            Ok((target, model)) => (target, model, None),
+            Err(original) => {
+                let Some((name, effort, numeric)) = suffix else {
+                    return Err(GatewayFailure{status:StatusCode::BAD_REQUEST,message:original.to_string()});
+                };
+                let (target, model) = resolve(&context.paths, &identity, name)
+                    .map_err(|e|GatewayFailure{status:StatusCode::BAD_REQUEST,message:e.to_string()})?;
+                (target, model, Some((effort, numeric)))
+            }
+        };
         if compact && upstream_format(&target)!=UpstreamFormat::OpenAiResponses {
             return Err(GatewayFailure{status:StatusCode::UNPROCESSABLE_ENTITY,message:"当前 Chat 上游不支持 Responses 原生压缩，请在客户端使用本地压缩或改用 Responses 服务商".into()});
         }
         let physical=store::text(&model,"upstreamModelId");
         if requested.is_empty(){payload["model"]=json!(physical);}
+        let model_reasoning = {
+            let c = database::open(&context.paths)?;
+            let options = store::query(&c, "SELECT options_json AS optionsJson FROM service_provider_agent_bindings
+                WHERE provider_id=?1 AND agent_type=?2 AND enabled=1", &[&target.id,&target.cli])?
+                .pop().unwrap_or(Value::Null);
+            let profile = if target.cli == "codex" {
+                crate::api::service_provider::codex_reasoning_profile(
+                    &c, &target.id, store::text(&identity, "configPath"),
+                )?
+            } else {
+                None
+            };
+            let overrides = &profile.as_ref().unwrap_or(&options["options"])["reasoningOverrides"];
+            if !compact && target.cli=="codex" && route.protocol==Protocol::Responses {
+                let candidates = codex_tool_models(&c, &target.id, overrides)?;
+                codex_models::project_spawn_tools(&mut payload, &user_agent, &candidates);
+            }
+            codex_models::effective_reasoning(physical,&model["catalog"],&overrides[physical])?
+        };
+        if let Some((requested_effort, numeric)) = suffix_effort {
+            record["requestedReasoningEffort"] = json!(requested_effort);
+            let wire_intent = if numeric {
+                closest_reasoning_effort(&model_reasoning, &requested_effort).unwrap_or(&requested_effort)
+            } else {
+                &requested_effort
+            };
+            if route.protocol == Protocol::Responses {
+                if payload["reasoning"].is_null() {
+                    payload["reasoning"] = json!({});
+                }
+                let reasoning = payload["reasoning"].as_object_mut()
+                    .ok_or_else(|| GatewayFailure{status:StatusCode::BAD_REQUEST,message:"reasoning 必须为对象".into()})?;
+                reasoning.insert("effort".into(), json!(wire_intent));
+            } else {
+                payload["reasoning_effort"] = json!(wire_intent);
+            }
+        }
         record["requestedModel"]=json!(if requested.is_empty(){physical}else{&requested});
         record["modelId"]=model["id"].clone();
         record["providerId"]=json!(target.id);
         record["providerName"]=json!(target.name);
         record["physicalModel"]=json!(physical);
+        record["modelReasoning"] = model_reasoning;
+        record["reasoningEffortLimit"] = identity["reasoningEffortLimit"].clone();
         // 相同 Responses 协议保留原生字段；跨协议仍执行语义校验。
         let canonical=if route.protocol==Protocol::Responses && upstream_format(&target)==UpstreamFormat::OpenAiResponses {
             let mut canonical=canonical_responses(&payload)?;
@@ -413,11 +485,13 @@ pub(super) fn start_attempt(
     };
     let attempt = store::id();
     tx.execute("INSERT INTO service_gateway_attempts(id,request_id,attempt_no,provider_id,provider_name,credential_id,
-        credential_name,credential_fingerprint,model_id,upstream_model,protocol_out,state,price_snapshot_json,currency,started_at)
-        VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,?9,?10,'started',?11,?12,?13)",
+        credential_name,credential_fingerprint,model_id,upstream_model,protocol_out,state,price_snapshot_json,currency,started_at,
+        sent_reasoning_effort,sent_reasoning_budget)
+        VALUES(?1,?2,1,?3,?4,?5,?6,?7,?8,?9,?10,'started',?11,?12,?13,?14,?15)",
         params![attempt,store::text(record,"serviceRequestId"),target.id,target.name,credential,name,fingerprint,
             store::text(record,"modelId"),store::text(record,"physicalModel"),store::text(record,"upstreamProtocol"),
-            model.to_string(),store::text(&model,"currency"),store::now()])?;
+            model.to_string(),store::text(&model,"currency"),store::now(),
+            record["sentReasoningEffort"].as_str(),record["sentReasoningBudget"].as_i64()])?;
     tx.execute("UPDATE service_gateway_requests SET state='routed',requested_model=?2 WHERE id=?1 AND finished_at IS NULL",
         params![store::text(record,"serviceRequestId"),store::text(record,"requestedModel")])?;
     tx.execute(
@@ -475,10 +549,12 @@ pub(crate) fn settle(paths: &AppPaths, record: &Value) -> Result<(), ManagerErro
                 if known{"upstream"}else{"unknown"},input,output,cached,cost,store::text(record,"errorMessage"),store::now(),
                 record["measuredReasoning"].as_i64(),store::text(record,"serviceTier")])?;
     }
-    tx.execute("UPDATE service_gateway_requests SET state=?2,status_code=?3,error_message=?4,requested_model=?5,finished_at=?6
+    tx.execute("UPDATE service_gateway_requests SET state=?2,status_code=?3,error_message=?4,requested_model=?5,finished_at=?6,
+        requested_reasoning_effort=?7
         WHERE id=?1 AND finished_at IS NULL",params![store::text(record,"serviceRequestId"),
         if success{"completed"}else if cancelled{"cancelled"}else if attempt.is_empty(){"rejected"}else{"failed"},record["statusCode"].as_i64(),
-        store::text(record,"errorMessage"),store::text(record,"requestedModel"),store::now()])?;
+        store::text(record,"errorMessage"),store::text(record,"requestedModel"),store::now(),
+        record["requestedReasoningEffort"].as_str()])?;
     tx.commit()?;
     Ok(())
 }
@@ -526,6 +602,85 @@ pub(super) fn target_models(paths: &AppPaths, target: &GatewayTarget) -> Result<
 }
 
 pub async fn fetch_models(paths: &AppPaths, value: &Value) -> Result<Value, ManagerError> {
+    refresh_catalog(paths, value, true).await
+}
+
+pub(super) async fn refresh_active_catalogs(paths: &AppPaths) {
+    use std::time::Duration;
+    let interval = Duration::from_secs(3600);
+    let mut ticker = tokio::time::interval_at(tokio::time::Instant::now() + interval, interval);
+    ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        ticker.tick().await;
+        let active = (|| {
+            let c = database::open(paths)?;
+            if !accepting(&c)? {
+                return Ok(Vec::new());
+            }
+            store::query(&c, "SELECT p.id AS providerId,max(i.agent_version) AS agentVersion
+                FROM service_provider_configs p JOIN service_agent_instances i ON i.provider_id=p.id
+                JOIN service_provider_agent_bindings b ON b.provider_id=p.id AND b.agent_type='codex'
+                WHERE p.kind IN ('api','codex_account') AND p.enabled=1 AND p.deleted_at IS NULL
+                AND i.agent_type='codex' AND i.status='active' AND i.sync_status='synced' AND b.enabled=1
+                AND coalesce(json_extract(b.options_json,'$.syncModelList'),1)<>0
+                AND NOT EXISTS(SELECT 1 FROM service_gateway_requests r
+                    WHERE r.instance_id=i.id AND r.finished_at IS NULL)
+                GROUP BY p.id ORDER BY p.id", &[])
+        })();
+        match active {
+            Ok(providers) => {
+                for provider in providers {
+                    if let Err(error) = refresh_catalog(paths, &provider, false).await {
+                        eprintln!("后台模型目录刷新失败：{error}");
+                    }
+                }
+            }
+            Err(error) => eprintln!("无法读取需刷新的模型目录：{error}"),
+        }
+    }
+}
+
+async fn refresh_catalog(paths: &AppPaths, value: &Value, discover_models: bool) -> Result<Value, ManagerError> {
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex as SyncMutex};
+    use tokio::sync::watch;
+
+    type RefreshKey = (String, String, bool);
+    type RefreshResult = Result<Value, String>;
+    static PENDING: LazyLock<SyncMutex<HashMap<RefreshKey, watch::Receiver<Option<RefreshResult>>>>> =
+        LazyLock::new(|| SyncMutex::new(HashMap::new()));
+    let key = (
+        paths.storage_files.database.clone(),
+        store::text(value, "providerId").to_owned(),
+        discover_models,
+    );
+    let mut receiver = {
+        let mut pending = PENDING.lock().unwrap();
+        if let Some(receiver) = pending.get(&key) {
+            receiver.clone()
+        } else {
+            let (sender, receiver) = watch::channel(None);
+            pending.insert(key.clone(), receiver.clone());
+            let paths = paths.clone();
+            let value = value.clone();
+            tokio::spawn(async move {
+                let result = download_and_apply_catalog(&paths, &value, discover_models).await
+                    .map_err(|error| error.to_string());
+                let mut pending = PENDING.lock().unwrap();
+                sender.send_replace(Some(result));
+                pending.remove(&key);
+            });
+            receiver
+        }
+    };
+    let result = receiver.wait_for(Option::is_some).await
+        .map_err(|_| store::fail("模型目录刷新已中断"))?
+        .clone()
+        .unwrap();
+    result.map_err(store::fail)
+}
+
+async fn download_and_apply_catalog(paths: &AppPaths, value: &Value, discover_models: bool) -> Result<Value, ManagerError> {
     let (target, revision) = configured_target(paths, store::text(value, "providerId"))?;
     if target.kind == TargetKind::GoogleAccount {
         crate::api::google_account::refresh(paths, &target.id).await?;
@@ -557,7 +712,7 @@ pub async fn fetch_models(paths: &AppPaths, value: &Value) -> Result<Value, Mana
     } else {
         codex_models::models_url(&target.base_url)?.to_string()
     };
-    let response = client
+    let mut response = client
         .get(url)
         .headers(headers)
         .bearer_auth(auth.token)
@@ -570,36 +725,84 @@ pub async fn fetch_models(paths: &AppPaths, value: &Value) -> Result<Value, Mana
             response.status().as_u16()
         )));
     }
-    let catalog = codex_models::normalize_catalog(
-        &response
-            .json::<Value>()
-            .await
-            .map_err(|_| store::fail("模型响应格式无效"))?,
-    )?;
+    const MAX_CATALOG_SIZE: usize = 8 * 1024 * 1024;
+    if response.content_length().is_some_and(|length| length > MAX_CATALOG_SIZE as u64) {
+        return Err(store::fail("模型目录超过 8 MiB，已保留原目录"));
+    }
+    let mut raw = Vec::new();
+    while let Some(chunk) = response.chunk().await.map_err(|_| store::fail("模型目录下载中断"))? {
+        if raw.len() + chunk.len() > MAX_CATALOG_SIZE {
+            return Err(store::fail("模型目录超过 8 MiB，已保留原目录"));
+        }
+        raw.extend_from_slice(&chunk);
+    }
+    let raw: Value = serde_json::from_slice(&raw)?;
+    codex_models::validate_remote_reasoning(&raw)?;
+    let mut catalog = codex_models::normalize_catalog(&raw)?;
+    catalog["previousRevision"] = json!(revision);
     // 先完整校验，再一次性写入；已有模型的价格和启用状态保持不变。
     let mut c = database::open(paths)?;
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    if store::config(&tx, &target.id)?["revision"].as_i64() != Some(revision) {
+    if store::config(&tx, &target.id)?["revision"].as_i64() != Some(revision)
+        || (!discover_models && !accepting(&tx)?)
+    {
         return Err(store::fail("获取模型期间服务商已发生变化，请重新获取"));
     }
+    let mut changed = false;
     for item in catalog["models"].as_array().into_iter().flatten() {
         let existing = store::query(
             &tx,
-            "SELECT id FROM service_provider_models WHERE provider_id=?1 AND upstream_model_id=?2",
+            "SELECT id,context_window AS contextWindow,catalog_json AS catalogJson FROM service_provider_models
+             WHERE provider_id=?1 AND upstream_model_id=?2",
             &[&target.id, &store::text(item, "slug")],
         )?
         .pop();
         if let Some(existing) = existing {
+            if existing["catalog"] == *item && existing["contextWindow"] == item["context_window"] {
+                continue;
+            }
+            // 只返回模型 ID 的发现接口不应覆盖上次确认的能力。
+            if item["reasoning_source"] == "template"
+                && codex_models::reasoning(store::text(item, "slug"), &existing["catalog"])["state"] != "unknown"
+            {
+                continue;
+            }
             tx.execute("UPDATE service_provider_models SET catalog_json=?2,context_window=?3,updated_at=?4 WHERE id=?1",
                 params![store::text(&existing,"id"),item.to_string(),item["context_window"].as_i64(),store::now()])?;
-        } else {
+            changed = true;
+        } else if discover_models {
             store::save_model(
                 &tx,
                 &target.id,
                 &json!({"upstreamModelId":item["slug"],"displayName":item["display_name"],
                 "contextWindow":item["context_window"],"catalog":item}),
             )?;
+            changed = true;
         }
+    }
+    if !changed {
+        let projection_pending = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM service_agent_instances WHERE provider_id=?1 AND status='active'
+             AND config_path NOT LIKE 'external:%' AND config_path NOT LIKE 'internal:%' AND config_path NOT LIKE 'test:%'
+             AND last_error<>'' AND applied_revision<>?2)",
+            params![target.id, revision],
+            |row| row.get::<_, bool>(0),
+        )?;
+        tx.commit()?;
+        if projection_pending {
+            crate::api::service_provider::sync_provider(paths, &target.id)?;
+        }
+        catalog["catalogRevision"] = json!(revision);
+        return Ok(catalog);
+    }
+    if let Some(binding) = store::query(&tx, "SELECT enabled,options_json AS optionsJson FROM service_provider_agent_bindings
+        WHERE provider_id=?1 AND agent_type='codex'", &[&target.id])?.pop()
+    {
+        store::validate_agent_options(&tx, &target.id, "codex", binding["enabled"] == 1, &binding["options"])?;
+    }
+    for profile in store::query(&tx, "SELECT options_json AS optionsJson FROM service_codex_reasoning_profiles
+        WHERE provider_id=?1", &[&target.id])? {
+        store::validate_agent_options(&tx, &target.id, "codex", false, &profile["options"])?;
     }
     tx.execute(
         "UPDATE service_provider_configs SET revision=revision+1,updated_at=?2 WHERE id=?1",
@@ -607,6 +810,7 @@ pub async fn fetch_models(paths: &AppPaths, value: &Value) -> Result<Value, Mana
     )?;
     tx.commit()?;
     crate::api::service_provider::sync_provider(paths, &target.id)?;
+    catalog["catalogRevision"] = json!(revision + 1);
     Ok(catalog)
 }
 

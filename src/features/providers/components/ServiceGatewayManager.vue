@@ -352,6 +352,29 @@
                   </td>
                   <td class="table-cell">
                     {{ log.upstreamModel || log.requestedModel || "—" }}
+                    <span
+                      v-if="
+                        log.requestedReasoningEffort ||
+                        log.sentReasoningEffort ||
+                        log.sentReasoningBudget != null
+                      "
+                      class="cell-secondary"
+                    >
+                      思考
+                      {{
+                        reasoningEffortLabels[log.requestedReasoningEffort] ||
+                        log.requestedReasoningEffort ||
+                        "未指定"
+                      }}
+                      →
+                      {{
+                        log.sentReasoningBudget != null
+                          ? `${log.sentReasoningBudget} tokens`
+                          : reasoningEffortLabels[log.sentReasoningEffort] ||
+                            log.sentReasoningEffort ||
+                            "未发送"
+                      }}
+                    </span>
                   </td>
                   <td class="table-cell" :title="log.errorMessage">
                     <span
@@ -548,6 +571,7 @@ import {
 } from "lucide-vue-next"
 import AiIcon from "@/components/AiIcon.vue"
 import BaseModal from "@/components/BaseModal.vue"
+import { reasoningEffortLabels } from "@/constants/reasoning-efforts"
 import { formatDateTime, formatServiceProviderName } from "@/utils/formatters"
 
 const props = defineProps({

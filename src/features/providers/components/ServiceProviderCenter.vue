@@ -1825,7 +1825,10 @@ async function editProvider(provider = {}, section = "provider") {
   busy.value = true
   try {
     const detail = provider.id
-      ? await serviceProviderApi.invoke("detail", { id: provider.id })
+      ? await serviceProviderApi.invoke("detail", {
+          id: provider.id,
+          agentType: section === "agent" ? agentConfig.value?.id : undefined
+        })
       : {}
     const activeKey = data.value.keys.find(
       (item) =>
@@ -1872,6 +1875,13 @@ async function editProvider(provider = {}, section = "provider") {
         const options = JSON.parse(JSON.stringify(binding?.options || {}))
         // 保留各 Agent 独立参数，已有新模式配置沿用此前默认同步目录的行为。
         if (agent.id === "codex") {
+          // 当前目录的子 Agent 设置和模型档位独立于其他 Codex 目录。
+          if (detail.codexReasoning) {
+            delete options.reasoningOverrides
+            delete options.defaultSubagentModel
+            delete options.defaultSubagentReasoningEffort
+            Object.assign(options, detail.codexReasoning)
+          }
           options.syncModelList = Boolean(
             options.syncModelList ?? Boolean(provider.id)
           )
@@ -2060,21 +2070,40 @@ async function fetchEditorModels() {
         JSON.stringify(detail.headers || {})
     )
       throw new Error("连接信息尚未保存，请先保存配置再获取模型")
-    await serviceProviderApi.invoke("fetch-models", {
+    const result = await serviceProviderApi.invoke("fetch-models", {
       providerId: editor.id,
       agentVersion: agentVersion("codex")
     })
     data.value = await serviceProviderApi.invoke("state")
     const updated = data.value.providers.find((item) => item.id === editor.id)
-    if (updated?.revision !== editor.revision + 1)
+    if (
+      result.catalogRevision != null
+        ? result.previousRevision !== editor.revision ||
+          updated?.revision !== result.catalogRevision
+        : updated?.revision !== editor.revision + 1
+    )
       throw new Error(
         "获取模型期间配置已变化，请重新打开编辑，避免覆盖其他修改"
       )
-    // 获取目录只追加新模型，保留用户尚未保存的模型、价格、默认模型与授权。
-    const added = providerModels(editor.id).filter(
+    // 更新未自行改动的目录字段，保留草稿中的模型和价格设置。
+    const refreshed = providerModels(editor.id)
+    const discovered = new Set(result.models?.map((item) => item.slug) || [])
+    const added = refreshed.filter(
       (item) =>
+        (!result.models || discovered.has(item.upstreamModelId)) &&
         !models.some((model) => model.upstreamModelId === item.upstreamModelId)
     )
+    for (const model of models) {
+      const snapshot = refreshed.find(
+        (item) => item.upstreamModelId === model.upstreamModelId
+      )
+      if (snapshot && discovered.has(model.upstreamModelId)) {
+        model.catalog = snapshot.catalog
+        model.reasoning = snapshot.reasoning
+        model.contextWindow ??= snapshot.contextWindow
+        model.id ??= snapshot.id
+      }
+    }
     editor.modelsJson = JSON.stringify([...models, ...added], null, 2)
     editor.revision = updated.revision
     createMessage.success("已获取模型，保存后应用当前编辑")

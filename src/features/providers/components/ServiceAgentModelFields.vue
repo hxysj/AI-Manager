@@ -72,6 +72,196 @@
           <Layers3 :size="18" />
         </template>
       </ProviderModelListEditor>
+      <section class="agent-config-section" aria-label="模型思考档位">
+        <header class="agent-section-heading">
+          <SlidersHorizontal :size="18" />
+          <h3 class="agent-section-title">模型思考档位</h3>
+        </header>
+        <div class="agent-basic-grid">
+          <label class="model-field">
+            配置模型
+            <span class="agent-select">
+              <select v-model="reasoningModelName" class="input">
+                <option value="">当前默认模型</option>
+                <option
+                  v-for="model in models"
+                  :key="model.upstreamModelId"
+                  :value="model.upstreamModelId"
+                >
+                  {{ model.displayName || model.upstreamModelId }}
+                </option>
+              </select>
+              <ChevronDown
+                class="agent-select-arrow"
+                :size="16"
+                aria-hidden="true"
+              />
+            </span>
+          </label>
+          <label
+            v-if="reasoningModel?.reasoning?.state === 'known'"
+            class="model-field"
+          >
+            目录默认档位
+            <span class="agent-select">
+              <select
+                class="input"
+                :value="reasoningOverride.defaultEffort || ''"
+                @change="
+                  updateReasoningOverride({
+                    ...reasoningOverride,
+                    defaultEffort: $event.target.value || null
+                  })
+                "
+              >
+                <option value="">
+                  跟随目录（{{
+                    reasoningEffortLabels[effectiveCatalogDefault] ||
+                    effectiveCatalogDefault
+                  }}）
+                </option>
+                <option
+                  v-for="level in effectiveLevels"
+                  :key="level"
+                  :value="level"
+                >
+                  {{ reasoningEffortLabels[level] || level }}
+                </option>
+              </select>
+              <ChevronDown
+                class="agent-select-arrow"
+                :size="16"
+                aria-hidden="true"
+              />
+            </span>
+          </label>
+        </div>
+        <template v-if="reasoningModel?.reasoning?.state === 'known'">
+          <div class="agent-effort-settings">
+            <div class="agent-effort-heading">
+              <span>可选档位</span>
+              <button
+                v-if="hasReasoningOverride"
+                class="agent-effort-reset"
+                type="button"
+                @click="updateReasoningOverride(null)"
+              >
+                <RotateCcw :size="13" aria-hidden="true" />
+                <span>恢复跟随</span>
+              </button>
+            </div>
+            <div
+              class="agent-effort-options"
+              role="group"
+              aria-label="可选档位"
+            >
+              <button
+                v-for="level in reasoningModel.reasoning.levels"
+                :key="level"
+                class="agent-effort-toggle"
+                type="button"
+                :aria-pressed="effectiveLevels.includes(level)"
+                :disabled="
+                  effectiveLevels.length === 1 && effectiveLevels[0] === level
+                "
+                @click="
+                  toggleReasoningLevel(level, !effectiveLevels.includes(level))
+                "
+              >
+                <Check
+                  class="agent-effort-check"
+                  :size="13"
+                  aria-hidden="true"
+                />
+                <span>{{ reasoningEffortLabels[level] || level }}</span>
+              </button>
+            </div>
+            <p class="model-hint">
+              {{
+                reasoningModel.reasoning.source === "embedded"
+                  ? "来源：内置能力目录"
+                  : "来源：服务商模型目录"
+              }}
+              <template
+                v-if="
+                  providerKind === 'api' &&
+                  modelValue.options.syncModelList === false
+                "
+              >
+                · 开启同步模型列表后，Codex 才会读取这些选项。
+              </template>
+            </p>
+          </div>
+        </template>
+        <p v-else class="model-hint">
+          {{
+            reasoningModel?.reasoning?.state === "unsupported"
+              ? "该模型声明不支持选择思考档位。"
+              : "暂无该模型的档位资料，可通过服务商模型目录更新。"
+          }}
+        </p>
+      </section>
+      <section class="agent-config-section" aria-label="子 Agent 默认值">
+        <header class="agent-section-heading">
+          <Workflow :size="18" />
+          <h3 class="agent-section-title">子 Agent 默认值</h3>
+        </header>
+        <div class="agent-basic-grid">
+          <label class="model-field">
+            默认模型
+            <span class="agent-select">
+              <select
+                class="input"
+                :value="modelValue.options.defaultSubagentModel || ''"
+                @change="updateSubagentModel($event.target.value)"
+              >
+                <option value="">由 Codex 决定</option>
+                <option
+                  v-for="model in models"
+                  :key="model.upstreamModelId"
+                  :value="model.upstreamModelId"
+                >
+                  {{ model.displayName || model.upstreamModelId }}
+                </option>
+              </select>
+              <ChevronDown
+                class="agent-select-arrow"
+                :size="16"
+                aria-hidden="true"
+              />
+            </span>
+          </label>
+          <label class="model-field">
+            默认思考强度
+            <span class="agent-select">
+              <select
+                class="input"
+                :value="modelValue.options.defaultSubagentReasoningEffort || ''"
+                @change="
+                  updateOption(
+                    'defaultSubagentReasoningEffort',
+                    $event.target.value || null
+                  )
+                "
+              >
+                <option value="">由 Codex 决定</option>
+                <option
+                  v-for="level in subagentLevels"
+                  :key="level"
+                  :value="level"
+                >
+                  {{ reasoningEffortLabels[level] || level }}
+                </option>
+              </select>
+              <ChevronDown
+                class="agent-select-arrow"
+                :size="16"
+                aria-hidden="true"
+              />
+            </span>
+          </label>
+        </div>
+      </section>
       <section
         v-if="providerKind === 'api' || schema.optionFields?.length"
         class="agent-config-section"
@@ -139,7 +329,11 @@
                       :key="option"
                       :value="option"
                     >
-                      {{ option }}
+                      {{
+                        field.key === "modelReasoningEffort"
+                          ? reasoningEffortLabels[option] || option
+                          : option
+                      }}
                     </option>
                   </select>
                   <ChevronDown
@@ -320,18 +514,21 @@
 </template>
 
 <script setup>
-import { computed, watch } from "vue"
+import { computed, ref, watch } from "vue"
 import { ElSwitch } from "element-plus"
 import "element-plus/es/components/switch/style/css"
 import {
+  Check,
   ChevronDown,
   Info,
   Layers3,
+  RotateCcw,
   Settings2,
   ShieldCheck,
   SlidersHorizontal,
   Workflow
 } from "lucide-vue-next"
+import { reasoningEffortLabels } from "@/constants/reasoning-efforts"
 import ProviderModelListEditor from "./ProviderModelListEditor.vue"
 
 const props = defineProps({
@@ -367,52 +564,150 @@ const claudeFields = computed(() => [
   { key: "subagentModel", label: "子 Agent 模型" }
 ])
 
-// 公共目录变化也可能改变默认模型，继续遵循原有 ultra 限制。
+// 档位编辑与主模型选择独立，避免编辑目录时切换正在配置的主模型。
+const reasoningModelName = ref("")
+// 服务商目录刷新后，已删除的模型退回当前默认项。
 watch(
-  () => props.modelValue?.defaultModelName || props.models[0]?.upstreamModelId,
-  (model) => {
+  () => props.models,
+  (models) => {
     if (
-      props.modelValue?.agentType === "codex" &&
-      props.modelValue.options.modelReasoningEffort === "ultra" &&
-      !codexAllowsUltra(model)
+      !models.some(
+        (model) => model.upstreamModelId === reasoningModelName.value
+      )
     )
-      updateOption("modelReasoningEffort", "low")
+      reasoningModelName.value = ""
   }
 )
+const defaultModel = computed(
+  () =>
+    props.models.find(
+      (model) => model.upstreamModelId === props.modelValue?.defaultModelName
+    ) || props.models[0]
+)
+const reasoningModel = computed(
+  () =>
+    props.models.find(
+      (model) => model.upstreamModelId === reasoningModelName.value
+    ) || defaultModel.value
+)
+const reasoningOverride = computed(
+  () =>
+    props.modelValue?.options.reasoningOverrides?.[
+      reasoningModel.value?.upstreamModelId
+    ] || {}
+)
+const hasReasoningOverride = computed(
+  () => Object.keys(reasoningOverride.value).length > 0
+)
+const effectiveLevels = computed(() => modelLevels(reasoningModel.value) || [])
+const effectiveCatalogDefault = computed(() =>
+  effectiveLevels.value.includes(reasoningModel.value?.reasoning?.defaultEffort)
+    ? reasoningModel.value.reasoning.defaultEffort
+    : effectiveLevels.value[0]
+)
+const subagentLevels = computed(
+  () =>
+    modelLevels(
+      props.models.find(
+        (model) =>
+          model.upstreamModelId ===
+          props.modelValue?.options.defaultSubagentModel
+      )
+    ) || ["none", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]
+)
+
+// 能力未知时保留客户端原生选择，明确不支持时展示空列表。
+function modelLevels(model) {
+  const levels = model?.reasoning?.levels
+  const allowed =
+    props.modelValue?.options.reasoningOverrides?.[model?.upstreamModelId]
+      ?.allowedEfforts
+  return allowed?.length
+    ? levels?.filter((level) => allowed.includes(level))
+    : levels
+}
+
+function updateReasoningOverride(value) {
+  const model = reasoningModel.value
+  if (!model || !props.modelValue || props.disabled) return
+  const overrides = { ...props.modelValue.options.reasoningOverrides }
+  if (value?.allowedEfforts?.length || value?.defaultEffort)
+    overrides[model.upstreamModelId] = value
+  else delete overrides[model.upstreamModelId]
+  const options = { ...props.modelValue.options, reasoningOverrides: overrides }
+  const levels = value?.allowedEfforts?.length
+    ? value.allowedEfforts
+    : model.reasoning.levels
+  if (
+    model === defaultModel.value &&
+    options.modelReasoningEffort &&
+    !levels.includes(options.modelReasoningEffort)
+  )
+    options.modelReasoningEffort = null
+  if (
+    model.upstreamModelId === options.defaultSubagentModel &&
+    options.defaultSubagentReasoningEffort &&
+    !levels.includes(options.defaultSubagentReasoningEffort)
+  )
+    options.defaultSubagentReasoningEffort = null
+  emit("update:modelValue", { ...props.modelValue, options })
+}
+
+function toggleReasoningLevel(level, checked) {
+  const levels = reasoningModel.value.reasoning.levels.filter((item) =>
+    item === level ? checked : effectiveLevels.value.includes(item)
+  )
+  const current = reasoningOverride.value.defaultEffort
+  updateReasoningOverride({
+    allowedEfforts:
+      levels.length === reasoningModel.value.reasoning.levels.length
+        ? []
+        : levels,
+    defaultEffort: levels.includes(current) ? current : null
+  })
+}
+
+function updateSubagentModel(value) {
+  const options = {
+    ...props.modelValue.options,
+    defaultSubagentModel: value || null
+  }
+  const levels = modelLevels(
+    props.models.find((model) => model.upstreamModelId === value)
+  )
+  if (
+    levels &&
+    options.defaultSubagentReasoningEffort &&
+    !levels.includes(options.defaultSubagentReasoningEffort)
+  )
+    options.defaultSubagentReasoningEffort = null
+  emit("update:modelValue", { ...props.modelValue, options })
+}
 
 function updateDefault(value) {
   if (!props.modelValue || props.disabled) return
   const next = { ...props.modelValue, defaultModelName: value }
+  const levels = modelLevels(
+    props.models.find((model) => model.upstreamModelId === value)
+  )
   if (
     next.agentType === "codex" &&
-    next.options.modelReasoningEffort === "ultra" &&
-    !codexAllowsUltra(value || props.models[0]?.upstreamModelId)
+    next.options.modelReasoningEffort &&
+    levels &&
+    !levels.includes(next.options.modelReasoningEffort)
   )
-    next.options = { ...next.options, modelReasoningEffort: "low" }
+    next.options = { ...next.options, modelReasoningEffort: null }
   emit("update:modelValue", next)
-}
-
-function codexAllowsUltra(model) {
-  // 沿用原 Provider 的规则，仅这两个模型提供 ultra 选项。
-  return ["gpt-5.6-sol", "gpt-5.6-terra"].includes(
-    String(model || "")
-      .trim()
-      .toLowerCase()
-  )
 }
 
 function optionValues(field) {
   const values = [...(field.options || [])]
   if (field.key !== "modelReasoningEffort") return values
-  if (
-    codexAllowsUltra(
-      props.modelValue.defaultModelName || props.models[0]?.upstreamModelId
-    )
-  )
-    values.push("ultra")
+  const levels = modelLevels(defaultModel.value)
+  if (levels) return levels
   const current = props.modelValue.options[field.key]
-  if (current && current !== "ultra" && !values.includes(current))
-    values.push(current)
+  // 资料缺失时允许保留现有值，界面仍显示能力未知。
+  if (current && !values.includes(current)) values.push(current)
   return values
 }
 
@@ -479,6 +774,98 @@ function updateDesktop(id, key, value) {
       margin: 0;
       color: var(--color-text);
       font-size: var(--font-size-base);
+    }
+  }
+
+  .agent-config-section {
+    .agent-effort-settings {
+      display: flex;
+      flex-direction: column;
+      gap: 9px;
+      margin-top: 16px;
+      padding-top: 12px;
+      border-top: 1px solid var(--color-line);
+
+      .agent-effort-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        min-height: 24px;
+        font-size: var(--font-size-sm);
+
+        .agent-effort-reset {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          padding: 3px 6px;
+          border: 0;
+          border-radius: 5px;
+          background: transparent;
+          color: var(--color-primary);
+          font: inherit;
+          cursor: pointer;
+
+          &:hover {
+            background: var(--color-primary-soft);
+          }
+
+          &:disabled {
+            cursor: default;
+          }
+        }
+      }
+
+      .agent-effort-options {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+
+        .agent-effort-toggle {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          gap: 5px;
+          min-width: 63px;
+          min-height: 32px;
+          padding: 4px 9px;
+          border: 1px solid var(--color-line);
+          border-radius: 7px;
+          background: var(--color-panel);
+          color: var(--color-text-muted);
+          font: inherit;
+          font-size: var(--font-size-sm);
+          line-height: 1.2;
+          cursor: pointer;
+
+          .agent-effort-check {
+            flex: none;
+            visibility: hidden;
+          }
+
+          &[aria-pressed="true"] {
+            border-color: var(--color-primary);
+            background: var(--color-primary-soft);
+            color: var(--color-primary);
+
+            .agent-effort-check {
+              visibility: visible;
+            }
+          }
+
+          &:hover:not(:disabled) {
+            border-color: var(--color-primary);
+          }
+
+          &:focus-visible {
+            outline: 2px solid var(--color-primary);
+            outline-offset: 2px;
+          }
+
+          &:disabled {
+            cursor: default;
+          }
+        }
+      }
     }
   }
 

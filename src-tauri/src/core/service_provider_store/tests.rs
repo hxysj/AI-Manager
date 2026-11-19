@@ -94,7 +94,7 @@ fn service_schema_four_merges_official_accounts_without_changing_legacy_or_usage
     initialize(&f.paths).unwrap();
     assert!(!table_exists(&c, "service_provider_accounts").unwrap());
     assert!(!table_exists(&c, "service_google_accounts").unwrap());
-    assert_eq!(query(&c,"SELECT value FROM app_metadata WHERE key='service_provider:schema_version'",&[]).unwrap()[0]["value"],"5");
+    assert_eq!(query(&c,"SELECT value FROM app_metadata WHERE key='service_provider:schema_version'",&[]).unwrap()[0]["value"],"6");
     let account = account(&c, text(&codex,"id")).unwrap();
     assert_eq!(account["accessToken"], "old-access");
     assert_eq!(account["refreshToken"], "old-refresh");
@@ -219,7 +219,7 @@ fn service_schema_five_merges_operation_history_and_preserves_typed_recovery() {
     assert_eq!(query(&c,"SELECT * FROM service_provider_configs",&[]).unwrap(),configs);
     assert_eq!(query(&c,"SELECT * FROM service_gateway_requests",&[]).unwrap(),requests);
     assert!(query(&c,"PRAGMA foreign_key_check",&[]).unwrap().is_empty());
-    assert_eq!(query(&c,"SELECT value FROM app_metadata WHERE key='service_provider:schema_version'",&[]).unwrap()[0]["value"],"5");
+    assert_eq!(query(&c,"SELECT value FROM app_metadata WHERE key='service_provider:schema_version'",&[]).unwrap()[0]["value"],"6");
     let operations = query(&c,"SELECT * FROM service_operations ORDER BY id",&[]).unwrap();
     initialize(&f.paths).unwrap();
     assert_eq!(query(&c,"SELECT * FROM service_operations ORDER BY id",&[]).unwrap(),operations);
@@ -680,6 +680,8 @@ fn service_codex_sync_switch_controls_catalog_and_claude_writes_each_model() {
         (json!({"syncModelList":false,"modelList":["selected"]}), false, "model"),
         (json!({"syncModelList":true,"modelList":[]}), true, "model"),
         (json!({"syncModelList":true,"modelList":["missing"]}), true, "model"),
+        (json!({"syncModelList":true,"reasoningOverrides":{"gpt-5.6-sol":{"allowedEfforts":["low","high"],"defaultEffort":"high"}},
+            "defaultSubagentModel":"gpt-5.6-sol","defaultSubagentReasoningEffort":"high"}), true, "model"),
         (json!({"syncModelList":false,"modelList":["selected"],"modelReasoningEffort":"ultra"}), false, "model"),
         (json!({"syncModelList":false,"modelList":["selected"],"modelReasoningEffort":"ultra"}), false, "gpt-5.6-sol"),
     ] {
@@ -704,6 +706,14 @@ fn service_codex_sync_switch_controls_catalog_and_claude_writes_each_model() {
             assert!(names.contains(&"selected") && names.contains(&"model"));
             assert!(names.contains(&"other") && names.contains(&"gpt-5.6-sol"));
             assert_eq!(names.len(), 4);
+            if options["defaultSubagentModel"].is_string() {
+                let projected = catalog["models"].as_array().unwrap().iter()
+                    .find(|model| model["slug"] == "gpt-5.6-sol").unwrap();
+                assert_eq!(projected["supported_reasoning_levels"].as_array().unwrap().len(), 2);
+                assert_eq!(projected["default_reasoning_level"], "high");
+                assert!(content.contains("default_subagent_model = \"gpt-5.6-sol\""));
+                assert!(content.contains("default_subagent_reasoning_effort = \"high\""));
+            }
             assert!(!names.contains(&"disabled") && !names.contains(&"missing"));
         }
         service_provider::detach(&f.paths, text(&instance, "instanceId")).unwrap();
@@ -1670,6 +1680,28 @@ fn service_takeover_recovery_and_switch_refuse_inflight_requests() {
     .unwrap();
     service_provider::recover(&f.paths).unwrap();
     assert!(!dir.join("config.toml").exists());
+    let result = service_provider::activate(
+        &f.paths,
+        &json!([]),
+        &json!({"providerId":provider,"modelId":model,"agentType":"codex","configPath":dir}),
+    ).unwrap();
+    let catalog = dir.join(".ai_manager_service_models.json");
+    let expected_catalog = std::fs::read(&catalog).unwrap();
+    // 模拟首次接管只发布了配置引用，目录文件仍未写入时进程退出。
+    c.execute("UPDATE service_agent_instances SET status='error',sync_status='pending' WHERE id=?1",
+        [text(&result, "instanceId")]).unwrap();
+    c.execute("UPDATE service_managed_files SET write_status='prepared' WHERE instance_id=?1 AND file_path LIKE '%.json'",
+        [text(&result, "instanceId")]).unwrap();
+    std::fs::remove_file(&catalog).unwrap();
+    service_provider::recover(&f.paths).unwrap();
+    let repaired = std::fs::read_to_string(dir.join("config.toml")).unwrap();
+    let repaired: Value = toml_edit::de::from_str(&repaired).unwrap();
+    assert_eq!(repaired["model"], "model");
+    assert_eq!(
+        std::path::Path::new(repaired["model_catalog_json"].as_str().unwrap()).canonicalize().unwrap(),
+        catalog.canonicalize().unwrap()
+    );
+    assert_eq!(std::fs::read(&catalog).unwrap(), expected_catalog);
     service_provider::switch_backend(&f.paths, "legacy").unwrap();
 }
 
@@ -1802,6 +1834,45 @@ fn service_sync_failure_keeps_client_token_and_previous_file_snapshots() {
     assert_eq!(query(&c,"SELECT * FROM service_managed_files WHERE instance_id=?1",&[&text(&instance,"instanceId")]).unwrap(),ledger);
     std::fs::write(&file,applied).unwrap();
     service_provider::detach(&f.paths,text(&instance,"instanceId")).unwrap();
+}
+
+#[test]
+fn service_codex_reasoning_profiles_keep_their_own_defaults_and_catalog() {
+    let f = Fixture::new();
+    let provider = f.provider();
+    service_provider::switch_backend(&f.paths, "service").unwrap();
+    let c = database::open(&f.paths).unwrap();
+    let mut value = config(&c, &provider).unwrap();
+    let model = "gpt-5.6-sol";
+    value["models"] = json!([model]);
+    value["bindings"] = json!([{"agentType":"codex","enabled":true,"defaultModelName":model}]);
+    save(&f.paths, &value).unwrap();
+    let profile_a = f.root.join("profile-a");
+    let profile_b = f.root.join("profile-b");
+    let check = |path: &std::path::Path, level: &str| {
+        let config = std::fs::read_to_string(path.join("config.toml")).unwrap();
+        assert!(config.contains(&format!("default_subagent_reasoning_effort = \"{level}\"")));
+        let catalog: Value = serde_json::from_slice(
+            &std::fs::read(path.join(".ai_manager_service_models.json")).unwrap()
+        ).unwrap();
+        let entry = catalog["models"].as_array().unwrap().iter()
+            .find(|entry| entry["slug"] == model).unwrap();
+        assert_eq!(entry["default_reasoning_level"], level);
+        assert_eq!(entry["supported_reasoning_levels"].as_array().unwrap().len(), 1);
+    };
+    for (path, level) in [(&profile_a, "low"), (&profile_b, "high")] {
+        let targets = json!([{"id":"codex","installed":true,"configPath":path}]);
+        service_provider::configure_agent(&f.paths, &targets, &json!({
+            "agentType":"codex","providerId":provider,"revision":config(&c,&provider).unwrap()["revision"],
+            "defaultModelName":model,"options":{"syncModelList":true,"defaultSubagentModel":model,
+                "defaultSubagentReasoningEffort":level,"reasoningOverrides":{(model):{"allowedEfforts":[level]}}}
+        })).unwrap();
+        check(path, level);
+    }
+    let targets = json!([{"id":"codex","configPath":profile_a}]);
+    service_provider::quick_switch(&f.paths, &targets, &json!({"agentType":"codex","providerId":provider})).unwrap();
+    check(&profile_a, "low");
+    assert!(!profile_b.join(".ai_manager_service_models.json").exists());
 }
 
 #[test]

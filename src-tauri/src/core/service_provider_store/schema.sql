@@ -65,6 +65,13 @@ CREATE TABLE IF NOT EXISTS service_provider_models (
   UNIQUE(provider_id,upstream_model_id),
   UNIQUE(provider_id,id)
 ) STRICT;
+CREATE TABLE IF NOT EXISTS service_codex_reasoning_profiles (
+    provider_id TEXT NOT NULL REFERENCES service_provider_configs(id) ON DELETE CASCADE,
+    config_path TEXT NOT NULL,
+    options_json TEXT NOT NULL CHECK (json_valid(options_json)),
+    PRIMARY KEY (provider_id, config_path)
+);
+
 CREATE TABLE IF NOT EXISTS service_provider_agent_bindings (
   id TEXT PRIMARY KEY NOT NULL DEFAULT (lower(hex(randomblob(16)))),
   provider_id TEXT NOT NULL REFERENCES service_provider_configs(id) ON DELETE RESTRICT,
@@ -155,6 +162,7 @@ CREATE TABLE IF NOT EXISTS service_gateway_tokens (
   status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','revoked','expired')),
   expires_at INTEGER,
   last_used_at INTEGER,
+  reasoning_effort_limit TEXT,
   created_at INTEGER NOT NULL,
   revoked_at INTEGER
 ) STRICT;
@@ -188,6 +196,7 @@ CREATE TABLE IF NOT EXISTS service_gateway_requests (
   requested_model TEXT NOT NULL DEFAULT '',
   protocol_in TEXT NOT NULL,
   request_path TEXT NOT NULL,
+  requested_reasoning_effort TEXT,
   state TEXT NOT NULL CHECK(state IN ('received','rejected','routed','completed','failed','cancelled','unknown')),
   status_code INTEGER,
   error_message TEXT NOT NULL DEFAULT '',
@@ -233,6 +242,8 @@ CREATE TABLE IF NOT EXISTS service_gateway_attempts (
   upstream_response_id TEXT NOT NULL DEFAULT '',
   actual_model TEXT NOT NULL DEFAULT '',
   service_tier TEXT NOT NULL DEFAULT '',
+  sent_reasoning_effort TEXT,
+  sent_reasoning_budget INTEGER,
   usage_source TEXT NOT NULL DEFAULT 'unknown' CHECK(usage_source IN ('unknown','upstream')),
   input_tokens INTEGER CHECK(input_tokens>=0),
   output_tokens INTEGER CHECK(output_tokens>=0),

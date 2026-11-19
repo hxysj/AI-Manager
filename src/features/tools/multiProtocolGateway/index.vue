@@ -1569,6 +1569,23 @@
               type="datetime-local"
             />
           </label>
+          <label class="form-field">
+            <span class="field-label">思考强度上限</span>
+            <select
+              v-model="tokenDraft.reasoningEffortLimit"
+              class="field-input"
+            >
+              <option value="">不限制</option>
+              <option
+                v-for="effort in tokenEffortLimits"
+                :key="effort"
+                :value="effort"
+              >
+                {{ reasoningEffortLabels[effort] }}
+              </option>
+            </select>
+            <span>设置后，请求必须携带可验证的思考强度。</span>
+          </label>
         </div>
 
         <div class="modal-footer-actions">
@@ -1604,6 +1621,12 @@
         <div class="detail-row">
           <span class="detail-label">Token 名称：</span>
           <span class="detail-value">{{ viewingToken.name }}</span>
+        </div>
+        <div class="detail-row">
+          <span class="detail-label">思考强度上限：</span>
+          <span class="detail-value">{{
+            reasoningEffortLabels[viewingToken.reasoningEffortLimit] || "不限制"
+          }}</span>
         </div>
         <div class="detail-row">
           <span class="detail-label">API Key：</span>
@@ -1837,6 +1860,7 @@ import {
 import BaseModal from "@/components/BaseModal.vue"
 import GatewayConnectionPanel from "@/features/tools/multiProtocolGateway/components/GatewayConnectionPanel.vue"
 import { multiProtocolGatewayApi, usageApi } from "@/api"
+import { reasoningEffortLabels } from "@/constants/reasoning-efforts"
 import { formatDateTime, formatServiceProviderName } from "@/utils/formatters"
 import { createMessage } from "@/utils/message"
 
@@ -1894,7 +1918,14 @@ const draft = reactive({
   modelMappings: {}
 })
 
-const tokenDraft = reactive({ name: "", description: "", expiresAt: "" })
+// 自动档没有可比较的强度，不能用作上限。
+const tokenEffortLimits = Object.keys(reasoningEffortLabels).filter((effort) => effort !== "auto")
+const tokenDraft = reactive({
+  name: "",
+  description: "",
+  expiresAt: "",
+  reasoningEffortLimit: ""
+})
 
 // 弹框控制状态
 const showListenerModal = ref(false)
@@ -2896,8 +2927,7 @@ async function savePoolConfig() {
 }
 
 async function submitCreateToken() {
-  await createToken()
-  showCreateTokenModal.value = false
+  if (await createToken()) showCreateTokenModal.value = false
 }
 
 async function createToken() {
@@ -2906,6 +2936,7 @@ async function createToken() {
       multiProtocolGatewayApi.createToken({
         name: tokenDraft.name,
         description: tokenDraft.description,
+        reasoningEffortLimit: tokenDraft.reasoningEffortLimit || null,
         expiresAt: tokenDraft.expiresAt
           ? new Date(tokenDraft.expiresAt).getTime()
           : 0
@@ -2916,7 +2947,9 @@ async function createToken() {
     tokenDraft.name = ""
     tokenDraft.description = ""
     tokenDraft.expiresAt = ""
+    tokenDraft.reasoningEffortLimit = ""
   }
+  return result
 }
 
 function resetTokenFilter() {

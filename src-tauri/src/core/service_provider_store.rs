@@ -127,18 +127,18 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
             |r| r.get(0),
         )
         .optional()?;
-    if version.as_deref().is_some_and(|v| !matches!(v, "1" | "2" | "3" | "4" | "5")) {
+    if version.as_deref().is_some_and(|v| !matches!(v, "1" | "2" | "3" | "4" | "5" | "6")) {
         return Err(fail("服务商配置数据库版本高于当前程序支持的版本"));
     }
-    if version.as_deref() != Some("5") {
+    if !matches!(version.as_deref(), Some("5" | "6")) {
         connection.pragma_update(None, "foreign_keys", "OFF")?;
     }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    if !matches!(version.as_deref(), Some("4" | "5")) {
+    if !matches!(version.as_deref(), Some("4" | "5" | "6")) {
         migration::add_account_columns(&transaction)?;
     }
     transaction.execute_batch(SCHEMA)?;
-    if !matches!(version.as_deref(), Some("2" | "3" | "4" | "5")) {
+    if !matches!(version.as_deref(), Some("2" | "3" | "4" | "5" | "6")) {
         let columns = query(
             &transaction,
             "SELECT name FROM pragma_table_info('service_provider_configs')",
@@ -171,7 +171,7 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
             )?;
         }
     }
-    if !matches!(version.as_deref(), Some("3" | "4" | "5")) {
+    if !matches!(version.as_deref(), Some("3" | "4" | "5" | "6")) {
         let definition: String = transaction.query_row(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='service_provider_configs'",
             [], |row| row.get(0))?;
@@ -191,15 +191,31 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
             return Err(fail("服务商配置升级发现关联数据不完整，已回滚升级"));
         }
     }
-    if !matches!(version.as_deref(), Some("4" | "5")) {
+    if !matches!(version.as_deref(), Some("4" | "5" | "6")) {
         migration::merge_account_storage(&transaction)?;
     }
-    if version.as_deref() != Some("5") {
+    if !matches!(version.as_deref(), Some("5" | "6")) {
         migration::merge_operation_storage(&transaction)?;
         if !query(&transaction, "SELECT * FROM pragma_foreign_key_check WHERE \"table\" LIKE 'service_%'", &[])?.is_empty() {
             return Err(fail("服务商操作记录升级发现关联数据不完整，已回滚升级"));
         }
-        transaction.execute("INSERT INTO app_metadata(key,value) VALUES('service_provider:schema_version','5')
+    }
+    if version.as_deref() != Some("6") {
+        for (table, column, kind) in [
+            ("service_gateway_tokens", "reasoning_effort_limit", "TEXT"),
+            ("service_gateway_requests", "requested_reasoning_effort", "TEXT"),
+            ("service_gateway_attempts", "sent_reasoning_effort", "TEXT"),
+            ("service_gateway_attempts", "sent_reasoning_budget", "INTEGER"),
+        ] {
+            let exists: bool = transaction.query_row(
+                &format!("SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}') WHERE name=?1)"),
+                [column], |row| row.get(0),
+            )?;
+            if !exists {
+                transaction.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"), [])?;
+            }
+        }
+        transaction.execute("INSERT INTO app_metadata(key,value) VALUES('service_provider:schema_version','6')
             ON CONFLICT(key) DO UPDATE SET value=excluded.value", [])?;
     }
     transaction.commit()?;
@@ -302,6 +318,10 @@ pub fn state(paths: &AppPaths) -> Result<Value, ManagerError> {
     let pricing = crate::core::usage_store::read_pricing_connection(&c)?;
     for model in &mut models {
         model["effectivePricing"] = model_pricing(model, &pricing);
+        model["reasoning"] = crate::api::codex_models::reasoning(
+            text(model, "upstreamModelId"),
+            &model["catalog"],
+        );
     }
     let bindings = query(&c, "SELECT provider_id AS providerId,agent_type AS agentType,enabled,default_model_id AS defaultModelId,options_json AS optionsJson,revision FROM service_provider_agent_bindings", &[])?;
     let keys = query(&c, "SELECT id,provider_id AS providerId,logical_id AS logicalId,name,note,is_current AS isCurrent,is_active AS isActive,status,substr(fingerprint,1,12) AS fingerprint FROM service_provider_keys WHERE is_current=1", &[])?;
@@ -729,8 +749,29 @@ pub(crate) fn validate_agent_options(
     for (key, val) in fields {
         let valid = match (agent, key.as_str()) {
             ("codex", "modelReasoningEffort") => {
-                val.is_null()
-                    || matches!(val.as_str(), Some("minimal" | "low" | "medium" | "high" | "xhigh" | "ultra" | "none"))
+                val.is_null() || crate::api::codex_models::effort(val).is_some()
+            }
+            ("codex", "defaultSubagentModel") => {
+                val.is_null() || val.as_str().is_some_and(|name| {
+                    if !name.is_empty() {
+                        model_names.push(name);
+                    }
+                    name.trim() == name
+                })
+            }
+            ("codex", "defaultSubagentReasoningEffort") => {
+                val.is_null() || crate::api::codex_models::effort(val).is_some()
+            }
+            ("codex", "reasoningOverrides") => {
+                let overrides = val.as_object().ok_or_else(|| fail("模型档位覆盖必须为对象"))?;
+                for (name, entry) in overrides {
+                    let model = query(c, "SELECT catalog_json AS catalogJson FROM service_provider_models
+                        WHERE provider_id=?1 AND upstream_model_id=?2", &[&provider, &name])?
+                        .pop().ok_or_else(|| fail(format!("模型 {name} 不存在于此服务商")))?;
+                    let capability = crate::api::codex_models::reasoning(name, &model["catalog"]);
+                    crate::api::codex_models::reasoning_overrides(&capability, entry)?;
+                }
+                true
             }
             ("codex", "serviceTierFast" | "modelContextWindowEnabled" | "syncModelList") => {
                 val.is_null() || val.is_boolean() || matches!(val.as_i64(), Some(0 | 1))
@@ -790,6 +831,22 @@ pub(crate) fn validate_agent_options(
         )?;
         if !exists {
             return Err(fail(format!("{agent} 模型 {name} 不存在于此服务商或已停用")));
+        }
+    }
+    if agent == "codex" {
+        let name = text(options, "defaultSubagentModel");
+        if let Some(effort) = crate::api::codex_models::effort(&options["defaultSubagentReasoningEffort"])
+            .filter(|_| !name.is_empty())
+        {
+            let model = query(c, "SELECT catalog_json AS catalogJson FROM service_provider_models
+                WHERE provider_id=?1 AND upstream_model_id=?2", &[&provider, &name])?
+                .pop().ok_or_else(|| fail("子 Agent 默认模型不存在"))?;
+            let capability = crate::api::codex_models::effective_reasoning(
+                name, &model["catalog"], &options["reasoningOverrides"][name],
+            )?;
+            if capability["levels"].as_array().is_some_and(|levels| !levels.contains(&json!(&effort))) {
+                return Err(fail(format!("子 Agent 默认模型 {name} 不支持 {effort} 档位")));
+            }
         }
     }
     Ok(())
@@ -1073,6 +1130,8 @@ pub fn usage(c: &Connection) -> Result<Value, ManagerError> {
         FROM service_gateway_attempts",&[])?.pop().unwrap_or(json!({}));
     let logs=query(c,"SELECT r.id,r.created_at AS createdAt,r.agent_type AS agentType,r.instance_id AS instanceId,
         r.requested_model AS requestedModel,r.state,r.status_code AS statusCode,r.error_message AS errorMessage,
+        r.requested_reasoning_effort AS requestedReasoningEffort,a.sent_reasoning_effort AS sentReasoningEffort,
+        a.sent_reasoning_budget AS sentReasoningBudget,
         a.provider_id AS providerId,a.provider_name AS providerName,a.upstream_model AS upstreamModel,a.credential_name AS credentialName,
         a.input_tokens AS inputTokens,a.output_tokens AS outputTokens,a.usage_source AS usageSource,a.estimated_cost_micros AS estimatedCostMicros,a.currency
         FROM service_gateway_requests r LEFT JOIN service_gateway_attempts a ON a.request_id=r.id ORDER BY r.created_at DESC LIMIT 100",&[])?;

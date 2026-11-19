@@ -270,6 +270,62 @@ async fn service_setup(fixture:&Fixture,url:&str,format:UpstreamFormat)->(String
 }
 
 #[test]
+fn service_gateway_transmits_reasoning_and_enforces_limits_before_forwarding() {
+    run(async {
+        use crate::core::{database, service_provider_store as store};
+        let fixture = Fixture::new();
+        let (url, mut captures, upstream) =
+            mock(UpstreamFormat::OpenAiChat, StatusCode::OK, false, false, None).await;
+        let (base, _, provider, server) = service_setup(&fixture, &url, UpstreamFormat::OpenAiChat).await;
+        let c = database::open(&fixture.paths).unwrap();
+        let model: String = c.query_row("SELECT id FROM service_provider_models WHERE provider_id=?1 AND upstream_model_id='real-model'",
+            [&provider], |row| row.get(0)).unwrap();
+        let issued = crate::api::service_provider::issue_token(&fixture.paths,
+            &json!({"providerId":provider,"modelId":model,"reasoningEffortLimit":"medium"})).unwrap();
+        let token = issued["token"].as_str().unwrap();
+        let client = Client::builder().no_proxy().build().unwrap();
+        let endpoint = format!("{base}/v1/responses");
+        let allowed = client.post(&endpoint).bearer_auth(token)
+            .json(&json!({"model":"alias","input":"test","reasoning":{"effort":"medium"}}))
+            .send().await.unwrap();
+        assert_eq!(allowed.status(), StatusCode::OK);
+        allowed.bytes().await.unwrap();
+        let (path, _, sent) = captures.try_recv().unwrap();
+        assert!(path.ends_with("/chat/completions"));
+        assert_eq!(sent["model"], "real-model");
+        assert_eq!(sent["reasoning_effort"], "medium");
+        assert!(sent.get("reasoning").is_none());
+        let suffixed = client.post(&endpoint).bearer_auth(token)
+            .json(&json!({"model":"alias(8192)","input":"test","reasoning":{"effort":"low"}}))
+            .send().await.unwrap();
+        assert_eq!(suffixed.status(), StatusCode::OK);
+        suffixed.bytes().await.unwrap();
+        assert_eq!(captures.try_recv().unwrap().2["reasoning_effort"], "medium");
+        let gemini = client.post(format!("{base}/v1beta/models/alias:generateContent"))
+            .header("x-goog-api-key",token)
+            .json(&json!({"contents":[{"role":"user","parts":[{"text":"test"}]}],
+                "generationConfig":{"thinkingConfig":{"thinkingBudget":8192}}}))
+            .send().await.unwrap();
+        assert_eq!(gemini.status(), StatusCode::OK);
+        gemini.bytes().await.unwrap();
+        assert_eq!(captures.try_recv().unwrap().2["reasoning_effort"], "medium");
+        for (reasoning, code) in [(json!({"effort":"high"}), "reasoning_effort_exceeds_key_limit"),
+            (Value::Null, "reasoning_effort_unverifiable")] {
+            let rejected = client.post(&endpoint).bearer_auth(token)
+                .json(&json!({"model":"alias","input":"test","reasoning":reasoning})).send().await.unwrap();
+            assert_eq!(rejected.status(), StatusCode::FORBIDDEN);
+            assert!(rejected.text().await.unwrap().contains(code));
+        }
+        assert!(captures.try_recv().is_err());
+        let history = store::usage(&c).unwrap();
+        assert!(history["logs"].as_array().unwrap().iter().any(|log| log["requestedReasoningEffort"] == "medium"
+            && log["sentReasoningEffort"] == "medium"));
+        server.abort();
+        upstream.abort();
+    });
+}
+
+#[test]
 fn service_claude_to_openai_preserves_instruction_roles_attachments_and_tools() {
     run(async {
         for format in [UpstreamFormat::OpenAiChat, UpstreamFormat::OpenAiResponses] {
@@ -515,6 +571,7 @@ fn client_keeps_one_token_while_provider_route_key_and_protocol_change() {
 fn service_model_fetch_preserves_local_prices_and_rejects_stale_configuration() {
     run(async {
         use crate::core::{database, service_provider_store as store};
+        use std::sync::atomic::{AtomicUsize, Ordering};
         let fixture=Fixture::new();
         let listener=TcpListener::bind("127.0.0.1:0").await.unwrap();
         let url=format!("http://{}/v1",listener.local_addr().unwrap());
@@ -531,21 +588,30 @@ fn service_model_fetch_preserves_local_prices_and_rejects_stale_configuration() 
         let (sent,mut received)=mpsc::unbounded_channel();
         let gate=Arc::new(tokio::sync::Notify::new());
         let release=gate.clone();
+        let variant = Arc::new(AtomicUsize::new(0));
+        let response_variant = variant.clone();
         let server=tokio::spawn(async move {
             loop {
                 let (socket,_)=listener.accept().await.unwrap();
                 let sent=sent.clone();
                 let gate=gate.clone();
+                let response_variant = response_variant.clone();
                 tokio::spawn(async move {
                     let _=http1::Builder::new().serve_connection(TokioIo::new(socket),service_fn(move |request:Request<Incoming>| {
                         let sent=sent.clone();
                         let gate=gate.clone();
+                        let variant = response_variant.load(Ordering::Relaxed);
                         async move {
                             assert_eq!(request.uri().path(),"/v1/models");
                             assert_eq!(request.headers()["authorization"],"Bearer model-test-key");
                             sent.send(()).unwrap();
                             gate.notified().await;
-                            Ok::<_,Infallible>(json_response(StatusCode::OK,json!({"data":[{"id":"real-model","context_window":32000}]})))
+                            let data = match variant {
+                                1 => json!([{"id":"real-model"},{"id":" REAL-MODEL "}]),
+                                2 => json!([{"id":"real-model","supported_reasoning_levels":["low"],"default_reasoning_level":"high"}]),
+                                _ => json!([{"id":"real-model","context_window":32000}]),
+                            };
+                            Ok::<_,Infallible>(json_response(StatusCode::OK,json!({"data":data})))
                         }
                     })).await;
                 });
@@ -556,6 +622,12 @@ fn service_model_fetch_preserves_local_prices_and_rejects_stale_configuration() 
             let fetch_provider=provider.clone();
             let fetch=tokio::spawn(async move {service::fetch_models(&paths,&json!({"providerId":fetch_provider})).await});
             received.recv().await.unwrap();
+            let paths=fixture.paths.clone();
+            let concurrent_provider=provider.clone();
+            let concurrent = tokio::spawn(async move {
+                service::fetch_models(&paths, &json!({"providerId":concurrent_provider})).await
+            });
+            tokio::task::yield_now().await;
             if stale {
                 let c=database::open(&fixture.paths).unwrap();
                 let mut config=store::config(&c,&provider).unwrap();
@@ -564,6 +636,12 @@ fn service_model_fetch_preserves_local_prices_and_rejects_stale_configuration() 
             }
             release.notify_one();
             let result=fetch.await.unwrap();
+            let shared = concurrent.await.unwrap();
+            assert_eq!(
+                result.as_ref().map_err(ToString::to_string),
+                shared.as_ref().map_err(ToString::to_string),
+            );
+            assert!(received.try_recv().is_err(), "并发目录刷新只发送一次请求");
             let c=database::open(&fixture.paths).unwrap();
             let model=store::query(&c,"SELECT enabled,input_price_micros,context_window FROM service_provider_models WHERE provider_id=?1 AND upstream_model_id='real-model'",&[&provider]).unwrap().remove(0);
             assert_eq!(model["enabled"],0);
@@ -576,6 +654,23 @@ fn service_model_fetch_preserves_local_prices_and_rejects_stale_configuration() 
                 assert_eq!(model["context_window"],32000);
             }
             assert!(service::authorize(&c,&token).is_ok(),"刷新目录不能使客户端 Token 失效");
+        }
+        let catalog = directory.join(".ai_manager_service_models.json");
+        let previous = std::fs::read(&catalog).unwrap();
+        let c = database::open(&fixture.paths).unwrap();
+        let snapshot = store::config(&c, &provider).unwrap();
+        for malformed in [1, 2] {
+            variant.store(malformed, Ordering::Relaxed);
+            let paths = fixture.paths.clone();
+            let provider_id = provider.clone();
+            let fetch = tokio::spawn(async move {
+                service::fetch_models(&paths, &json!({"providerId":provider_id})).await
+            });
+            received.recv().await.unwrap();
+            release.notify_one();
+            assert!(fetch.await.unwrap().is_err());
+            assert_eq!(store::config(&c, &provider).unwrap(), snapshot);
+            assert_eq!(std::fs::read(&catalog).unwrap(), previous);
         }
         server.abort();
     });
