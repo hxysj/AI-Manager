@@ -27,13 +27,14 @@ import {ref} from 'vue'
 export const systemApi={openExternal:async()=>{}}
 export const calls=[]
 export const handlers=new Set()
+export const openHandlers=new Set()
 const time=Date.now()
 export const state={notes:[
  {id:'work',title:'完成速记模块的存储设计',content:'整理了便签、待办和提醒的数据关系，下一步验证重启恢复。',type:'worklog',groupId:'project',categoryId:'development',tags:['AI-Manager','本地存储'],color:'mint',pinned:true,occurredOn:'2026-11-18',createdAt:time,updatedAt:time,revision:1,lifecycle:'active',tasks:[{id:'t',title:'验证重启后的提醒恢复',status:'pending',dueDate:'2026-11-19'}],worklog:{result:'完成存储设计'}},
  {id:'idea',title:'周五的发布检查',content:'检查 Claude 和 Codex 的切换，再整理这周的工作记录。',type:'todo',groupId:'inbox',categoryId:'debugging',tags:['发布'],color:'sand',createdAt:time,updatedAt:time,revision:1,lifecycle:'active',tasks:[{id:'t2',title:'检查发布包',status:'pending'}],worklog:{}}
 ],folders:[{id:'inbox',kind:'group',name:'收件箱',aliases:[]},{id:'project',kind:'group',name:'AI-Manager',aliases:['桌宠']},{id:'uncategorized',kind:'category',name:'未分类',aliases:[]},{id:'development',kind:'category',name:'开发实现',aliases:[]},{id:'debugging',kind:'category',name:'问题排查',aliases:[]}],events:[],reminders:[],captures:[],hasMore:false}
 const changed=()=>{for(const handle of handlers)handle({})}
-export const quickNotesApi={onChanged:async fn=>{handlers.add(fn);return()=>handlers.delete(fn)},onOpen:async()=>()=>{},invoke:async(action,p={})=>{
+export const quickNotesApi={onChanged:async fn=>{handlers.add(fn);return()=>handlers.delete(fn)},onOpen:async fn=>{openHandlers.add(fn);return()=>openHandlers.delete(fn)},invoke:async(action,p={})=>{
  p=JSON.parse(JSON.stringify(p))
  calls.push({action,p:JSON.parse(JSON.stringify(p))})
  if(action==='options')return {model:{targetId:'local',model:'qwen3.5-0.8b',protocol:'chat'}}
@@ -55,7 +56,7 @@ export const subscribeReady=async()=>()=>{}
 const fixture = `
 import {createApp,nextTick} from 'vue'
 import Notes from './src/features/quick-notes/index.vue'
-import {calls,state} from 'notes-mock'
+import {calls,state,openHandlers} from 'notes-mock'
 const assert=(value,message)=>{if(!value)throw Error(message)}
 const pause=()=>new Promise(resolve=>setTimeout(resolve,40))
 const settle=async()=>{await nextTick();await pause();await nextTick()}
@@ -100,6 +101,14 @@ async function test(){
  document.querySelector('.quick-note-card .note-card-open').click();await settle()
  assert(document.querySelector('.note-editor-inline')&&document.querySelector('.note-editor-aside'),'详情未显示双栏页面')
  assert(document.querySelector('.editor-history').textContent.includes('创建了便签'),'详情没有读取操作记录')
+ // 桌宠查看和通知点击通过同一打开事件定位便签，复用工作区时也应切换到指定详情。
+ const openedId=calls.filter(call=>call.action==='detail').at(-1).p.id
+ assert(openHandlers.size===1,'便签工作区没有注册打开事件')
+ for(const open of openHandlers)open({id:'idea'})
+ await settle()
+ assert(document.querySelector('.editor-title-field input').value==='周五的发布检查','外部打开事件没有定位到指定便签')
+ for(const open of openHandlers)open({id:openedId})
+ await settle()
  // AI 建议应用到编辑草稿，保留已有任务与目录，不提前保存。
  const detailTasks=document.querySelectorAll('.note-editor-inline .note-task').length
  const detailSaveCount=calls.filter(c=>c.action==='save').length

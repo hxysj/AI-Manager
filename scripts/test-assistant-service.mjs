@@ -89,7 +89,7 @@ const server = createServer(async (request, response) => {
       })
       chunk({}, "tool_calls")
     } else {
-      chunk({ role: "assistant", content: plan?.text || "Chat 回复" })
+      chunk({ role: "assistant", content: plan?.text ?? "Chat 回复" })
       chunk({}, "stop")
     }
     response.end("data: [DONE]\n\n")
@@ -132,7 +132,7 @@ const server = createServer(async (request, response) => {
       })
       emit("content_block_delta", {
         index: 0,
-        delta: { type: "text_delta", text: plan?.text || "Claude 回复" }
+        delta: { type: "text_delta", text: plan?.text ?? "Claude 回复" }
       })
     }
     emit("content_block_stop", { index: 0 })
@@ -173,7 +173,7 @@ const server = createServer(async (request, response) => {
           content: [
             {
               type: "output_text",
-              text: plan?.text || "模型回复",
+              text: plan?.text ?? "模型回复",
               annotations: []
             }
           ]
@@ -362,10 +362,18 @@ try {
   assert.equal(requests[0].path, "/v1/responses")
   assert.equal(requests[0].token, "Bearer loopback-only")
   assert.equal(requests[0].payload.model, "agent-test")
-  assert.equal(requests[0].payload.max_output_tokens, 8192, "模型请求携带输出预算")
+  assert.equal(
+    requests[0].payload.max_output_tokens,
+    8192,
+    "模型请求携带输出预算"
+  )
   assert.equal(requests[0].payload.tools.length, 14)
-  assert.ok(requests[0].payload.tools.some((tool) => tool.name === "call_app_api"))
-  assert.ok(JSON.stringify(requests[0].payload).includes("执行软件内操作默认静默完成"))
+  assert.ok(
+    requests[0].payload.tools.some((tool) => tool.name === "call_app_api")
+  )
+  assert.ok(
+    JSON.stringify(requests[0].payload).includes("执行软件内操作默认静默完成")
+  )
   assert.ok(
     requests[0].payload.tools.some((tool) => tool.name === "read_app_ui")
   )
@@ -421,12 +429,25 @@ try {
   const apiStart = tools.length
   plans.push(
     { type: "tool", name: "read_app_api", args: { module: "images" } },
-    { type: "tool", name: "call_app_api", args: { channel: "tools:image-history", payload: {} } },
+    {
+      type: "tool",
+      name: "call_app_api",
+      args: { channel: "tools:image-history", payload: {} }
+    },
     { text: "已在后台查询图片任务。" }
   )
-  assert.equal((await rpc("run", turn(apiThread.id, "静默查询图片任务"))).text, "已在后台查询图片任务。")
-  assert.deepEqual(tools.slice(apiStart).map((item) => item.name), ["read_app_api", "call_app_api"])
-  assert.deepEqual(tools.at(-1).args, { channel: "tools:image-history", payload: {} })
+  assert.equal(
+    (await rpc("run", turn(apiThread.id, "静默查询图片任务"))).text,
+    "已在后台查询图片任务。"
+  )
+  assert.deepEqual(
+    tools.slice(apiStart).map((item) => item.name),
+    ["read_app_api", "call_app_api"]
+  )
+  assert.deepEqual(tools.at(-1).args, {
+    channel: "tools:image-history",
+    payload: {}
+  })
   await rpc("delete-thread", { threadId: apiThread.id })
 
   const uiThread = await rpc("create-thread")
@@ -472,6 +493,89 @@ try {
   const earlyCancel = turn(other.id, "启动前取消")
   await rpc("cancel", { runId: earlyCancel.runId })
   assert.equal((await rpc("run", earlyCancel)).cancelled, true)
+
+  // 澄清日期单双号后，原目标和纠正一同进入下一轮，排班通过后台接口执行。
+  const calendarThread = await rpc("create-thread")
+  plans.push({ text: "请确认单双号是周序号还是周六当天日期。" })
+  await rpc(
+    "run",
+    turn(calendarThread.id, "单号周六休息，双号周六上班，周日固定休息")
+  )
+  const calendarStart = tools.length
+  plans.push(
+    { type: "tool", name: "read_app_api", args: { module: "calendar" } },
+    {
+      type: "tool",
+      name: "call_app_api",
+      args: { channel: "quick-notes:calendar-rule-list", payload: {} }
+    },
+    {
+      type: "tool",
+      name: "call_app_api",
+      args: {
+        channel: "quick-notes:calendar-rule-batch",
+        payload: {
+          operations: [
+            {
+              operation: "save",
+              rule: {
+                title: "双号周六上班",
+                kind: "work",
+                repeat: "weekly",
+                weekdays: [5],
+                dateParity: "even",
+                priority: 20
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      type: "tool",
+      name: "call_app_api",
+      args: { channel: "quick-notes:calendar-rule-list", payload: {} }
+    },
+    { text: "已按周六当天日期设置单双号排班，周日休息。" }
+  )
+  const calendarResult = await rpc(
+    "run",
+    turn(calendarThread.id, "周六那天日期的单双数")
+  )
+  assert.match(calendarResult.text, /当天日期/)
+  assert.deepEqual(
+    tools.slice(calendarStart).map((tool) => tool.name),
+    ["read_app_api", "call_app_api", "call_app_api", "call_app_api"]
+  )
+  assert.equal(tools.at(-2).args.payload.operations[0].rule.dateParity, "even")
+  assert.ok(
+    JSON.stringify(requests.at(-1).payload).includes("用户已澄清为日期单双号")
+  )
+  assert.ok(
+    JSON.stringify(requests.at(-1).payload.input).includes("单号周六休息")
+  )
+  assert.ok(
+    JSON.stringify(requests.at(-1).payload.input).includes(
+      "周六那天日期的单双数"
+    )
+  )
+  await rpc("delete-thread", { threadId: calendarThread.id })
+
+  for (const api of ["responses", "chat", "messages"]) {
+    const emptyThread = await rpc("create-thread")
+    const beforeEmpty = requests.length
+    plans.push({ text: "   " })
+    await assert.rejects(
+      rpc("run", { ...turn(emptyThread.id, "周六当天日期单双号"), api }),
+      /模型返回了空回复/
+    )
+    assert.equal(
+      requests.length - beforeEmpty,
+      1,
+      "空回复不自动重复请求或执行操作"
+    )
+    await rpc("delete-thread", { threadId: emptyThread.id })
+  }
 
   failureMode = true
   const beforeRateLimit = requests.length

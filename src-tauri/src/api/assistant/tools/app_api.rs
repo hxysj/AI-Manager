@@ -56,4 +56,20 @@ mod tests {
         }
         assert!(lookup("tools:list-ports", &json!([])).is_err());
     }
+
+    #[test]
+    fn calendar_catalog_exposes_existing_rule_storage_and_date_parity() {
+        let items=catalog();
+        for channel in ["quick-notes:calendar-rule-list","quick-notes:calendar-rule-save","quick-notes:calendar-rule-batch","quick-notes:calendar-rule-delete","quick-notes:calendar-rule-history"] {
+            assert!(items.iter().any(|item|item["module"]=="calendar" && item["channel"]==channel));
+            assert!(lookup(channel,&json!({})).is_ok());
+        }
+        let example=items.iter().find(|item|item["channel"]=="quick-notes:calendar-rule-save").unwrap();
+        let mut c=rusqlite::Connection::open_in_memory().unwrap();
+        crate::core::quick_notes_calendar_store::initialize(&mut c).unwrap();
+        let rule=crate::core::quick_notes_calendar_store::save_in(&c,&example["payload"],"ai").unwrap();
+        assert_eq!(rule["kind"],"work");
+        assert_eq!(rule["weekdays"],json!([5]));
+        assert_eq!(rule["dateParity"],"even");
+    }
 }

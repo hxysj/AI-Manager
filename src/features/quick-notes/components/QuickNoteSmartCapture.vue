@@ -553,6 +553,10 @@ onBeforeUnmount(() => {
       color: white;
       border-color: #3671af;
       padding: 10px 23px;
+      &:hover {
+        color: white;
+        border-color: #3671af;
+      }
     }
     .smart-section-head {
       display: flex;

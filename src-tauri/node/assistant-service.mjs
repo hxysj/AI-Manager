@@ -207,6 +207,7 @@ async function runTurn(params, compress = false) {
         "读取或修改 JSON 编辑器必须使用对应工具，不以聊天代码块代替写入。",
         "执行软件内操作默认静默完成：先通过 read_app_api 查询内部接口，再用 call_app_api 直接调用后台，不打开、切换、置前或聚焦窗口，不通过逐步点击执行。设置和 JSON 编辑器继续使用各自专用工具。没有对应接口时说明尚不支持静默执行，不自动改用界面操作。",
         "图片任务使用内部接口读取账号、模型和历史参数后直接提交，并通过等待或详情接口确认结果；沿用用户已有账号、模式和参数，除非用户要求更改。不要把任务已提交描述为图片已生成。",
+        "休假、排班、节假日和补班调休使用 read_app_api 的 calendar 模块。先读取现有日历规则，再用批量接口保存，最后回读确认，不以聊天说明代替实际设置。dateParity 的 odd/even 表示每月当天日期的单双号；大小周才使用 alternating。用户已澄清为日期单双号时立即沿用该含义，结合前文目标执行，不再次追问同一问题。",
         "仅当用户明确要求打开或展示界面、操作可见控件时使用 open_app_window、read_app_ui、interact_app_ui。界面操作先读取真实控件，页面变化后读取新快照，禁止猜测控件 ID；不要额外调用 focus。",
         "界面操作的 actionDispatched 只表示已派发事件，不等于后台任务完成；必须回读页面中的任务状态和错误后报告结果。没有可用控件的原生系统对话框、画布和其他软件应如实说明能力边界。上游模型请求失败不能解释为界面工具失败。",
         "桌宠动作使用工具；思考和执行中的默认动画由应用管理，不必额外调用工具。",
@@ -297,7 +298,11 @@ async function runTurn(params, compress = false) {
     if (controller.signal.aborted) return { cancelled: true }
     if (streamError || output.error)
       throw new Error(errorDetail(streamError || output.error))
-    return { text: await output.text }
+    const text = await output.text
+    // 空白响应不能报告为成功，避免用户反复补充同一个已明确的要求。
+    if (!text?.trim())
+      throw new Error("模型返回了空回复，请重试或更换模型；已执行的操作可在工具记录中查看。")
+    return { text }
   } catch (error) {
     if (!modelRequested) throw error
     const phase = completedToolCount

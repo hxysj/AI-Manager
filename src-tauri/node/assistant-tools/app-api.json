@@ -1,5 +1,35 @@
 [
   {
+    "module": "calendar",
+    "channel": "quick-notes:calendar-rule-list",
+    "description": "读取实际休假排班、节假日和调休规则，返回 id、revision、启用状态和优先级。修改前先读取，复用已有相关规则，不重复创建。",
+    "payload": {}
+  },
+  {
+    "module": "calendar",
+    "channel": "quick-notes:calendar-rule-save",
+    "description": "新建或修改日历规则；修改必须携带读取到的 id 和 revision。kind 为 work正常上班/rest休息/holiday节假日/workday补班/makeup调休；makeup 需 workStatus=rest或work。repeat 为 once/weekly/alternating/monthly/yearly，calendar 使用 solar。weekdays 为周一0至周日6；dateParity=all/odd/even 按每月当天日期的单双号，不能用来表达周序号。alternating 需 anchorDate 和 cycleWeek=0或1；monthly 需 monthDays；yearly 需 month和day；once 需 startDate，可填 endDate，均为 YYYY-MM-DD。priority 为0至100，数值越大越优先；指定日期优先于周期规则。正常上班不显示标签。",
+    "payload": { "title": "双号周六上班", "kind": "work", "repeat": "weekly", "weekdays": [5], "dateParity": "even", "priority": 20, "enabled": true }
+  },
+  {
+    "module": "calendar",
+    "channel": "quick-notes:calendar-rule-batch",
+    "description": "原子保存一组排班变更。operations 每项 operation 为 save或delete，rule 使用 calendar-rule-save 的字段；编辑或删除保留实际 id/revision，新增不传 id。先读取现有规则，仅调整用户要求的规则，保留无关节假日；利用优先级覆盖默认双休。单号周六休息、双号周六上班、周日休息可在已有周末休息之上添加双号周六 work 规则。保存后必须回读规则确认结果。",
+    "payload": { "operations": [{ "operation": "save", "rule": { "title": "双号周六上班", "kind": "work", "repeat": "weekly", "weekdays": [5], "dateParity": "even", "priority": 20, "enabled": true } }] }
+  },
+  {
+    "module": "calendar",
+    "channel": "quick-notes:calendar-rule-delete",
+    "description": "删除用户明确要求移除的排班规则，必须使用刚读取的实际 id 和 revision。替换排班时优先修改已有规则，不删除无关假期。",
+    "payload": { "id": "从规则列表读取", "revision": 1 }
+  },
+  {
+    "module": "calendar",
+    "channel": "quick-notes:calendar-rule-history",
+    "description": "读取指定规则的修改历史，用于核对排班是否已保存或重复设置。",
+    "payload": { "id": "从规则列表读取" }
+  },
+  {
     "module": "quick-notes",
     "channel": "quick-notes:folders",
     "description": "读取已有便签分类和项目分组，返回实际 ID、kind、名称、别名和归档状态；可按 kind=category/group 筛选。自动归类前先读取并优先复用现有目录，只使用相同 kind 的 ID。",

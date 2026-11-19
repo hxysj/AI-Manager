@@ -535,18 +535,32 @@
     >
     <BaseModal
       v-if="purgeConfirm"
+      class="notes-purge-modal"
       title="彻底删除便签"
+      role="alertdialog"
+      aria-modal="true"
+      aria-label="彻底删除便签"
       @close="purgeConfirm = false"
-      ><p>将永久删除所选便签、原文、历史及提醒记录，此操作无法恢复。</p>
-      <button class="notes-button" type="button" @click="purgeConfirm = false">
-        取消</button
-      ><button
-        class="notes-button notes-danger"
-        type="button"
-        @click="batchLifecycle('purge', true)"
-      >
-        确认彻底删除
-      </button></BaseModal
+      @keydown.esc.stop="purgeConfirm = false"
+      ><p class="notes-purge-message">
+        将永久删除所选
+        {{ selected.size }} 条便签、原文、历史及提醒记录，此操作无法恢复。
+      </p>
+      <div class="notes-purge-actions">
+        <button
+          class="notes-button"
+          type="button"
+          @click="purgeConfirm = false"
+        >
+          取消</button
+        ><button
+          class="notes-button notes-purge-confirm"
+          type="button"
+          @click="batchLifecycle('purge', true)"
+        >
+          确认彻底删除
+        </button>
+      </div></BaseModal
     >
   </section>
 </template>
@@ -1157,6 +1171,39 @@ onBeforeUnmount(() => {
   }
   .notes-danger {
     color: var(--color-danger);
+  }
+  .notes-purge-modal {
+    :deep(.base-modal__panel) {
+      width: min(460px, calc(100vw - 48px));
+      border-radius: 12px;
+    }
+    :deep(.base-modal__header) {
+      padding: 20px 24px 12px;
+    }
+    :deep(.base-modal__header h2) {
+      font: inherit;
+      font-size: var(--font-size-base);
+    }
+    .notes-purge-message {
+      margin: 0 0 24px;
+      color: var(--color-text-muted);
+      font-size: 13px;
+      line-height: 1.8;
+    }
+    .notes-purge-actions {
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+      .notes-purge-confirm {
+        border-color: var(--color-danger);
+        background: var(--color-danger);
+        color: var(--color-panel);
+        &:hover {
+          color: var(--color-panel);
+          border-color: var(--color-danger);
+        }
+      }
+    }
   }
   .notes-caption {
     color: var(--color-text-muted);

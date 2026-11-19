@@ -211,13 +211,22 @@ function loadComponent(path) {
 }
 
 const desktopTimers = []
+const inputIdleTimers = []
 globalThis.window = {
   setTimeout(callback, milliseconds) {
+    if (milliseconds === 30000) {
+      const timer = { callback, cleared: false }
+      inputIdleTimers.push(timer)
+      return timer
+    }
     const handle = setTimeout(callback, milliseconds)
     if (milliseconds === 10000) desktopTimers.push({ callback, handle })
     return handle
   },
-  clearTimeout,
+  clearTimeout(handle) {
+    if (inputIdleTimers.includes(handle)) handle.cleared = true
+    else clearTimeout(handle)
+  },
   setInterval,
   clearInterval,
   addEventListener() {},
@@ -225,6 +234,12 @@ globalThis.window = {
 }
 globalThis.Document = class {
   activeElement = null
+  focused = true
+  hasFocus() {
+    return this.focused
+  }
+  addEventListener() {}
+  removeEventListener() {}
 }
 globalThis.document = new Document()
 const preloadedPetImages = []
@@ -1248,6 +1263,45 @@ assert.equal(
   vue.toRaw(document.activeElement),
   findNodes(inputWindow.root, "desktop-assistant-textarea")[0]
 )
+// 30 秒收起只在失焦且未悬浮时生效，交互和重开都必须使旧计时失效。
+assert.equal(inputIdleTimers.length, 0, "聚焦状态不应安排自动收起")
+document.focused = false
+inputWindow.state.handleWindowBlur()
+const blurredTimer = inputIdleTimers.at(-1)
+assert.ok(blurredTimer)
+inputWindow.state.handlePointerEnter()
+assert.equal(blurredTimer.cleared, true, "悬浮时取消倒计时")
+inputWindow.state.handleWindowBlur()
+assert.equal(inputIdleTimers.at(-1), blurredTimer, "悬浮时失焦不启动倒计时")
+blurredTimer.callback()
+assert.equal(inputWindow.state.visible, true, "悬浮期间旧回调不能关闭窗口")
+inputWindow.state.handlePointerLeave()
+const leftTimer = inputIdleTimers.at(-1)
+assert.notEqual(leftTimer, blurredTimer, "离开后重新开始 30 秒计时")
+document.focused = true
+inputWindow.state.handleWindowFocus()
+assert.equal(leftTimer.cleared, true, "聚焦时取消倒计时")
+leftTimer.callback()
+assert.equal(inputWindow.state.visible, true)
+inputWindow.state.handlePointerLeave()
+assert.equal(inputIdleTimers.at(-1), leftTimer, "聚焦时离开不安排收起")
+document.focused = false
+inputWindow.state.handleWindowBlur()
+inputWindow.state.draft = "自动收起后保留的草稿"
+const expiredTimer = inputIdleTimers.at(-1)
+expiredTimer.callback()
+await tick()
+assert.equal(inputWindow.state.visible, false, "30 秒无聚焦、无悬浮时自动收起")
+assert.equal(inputWindow.state.draft, "自动收起后保留的草稿")
+for (const callback of desktopOpenListeners) await callback()
+assert.equal(inputWindow.state.visible, true)
+const reopenedTimer = inputIdleTimers.at(-1)
+assert.notEqual(reopenedTimer, expiredTimer, "未获焦点的唤出也应重新计时")
+expiredTimer.callback()
+assert.equal(inputWindow.state.visible, true, "过期回调不能关闭重新唤出的窗口")
+document.focused = true
+inputWindow.state.handleFocusIn()
+assert.equal(reopenedTimer.cleared, true)
 inputWindow.state.draft = "你好"
 const sendCount = () =>
   calls.filter((call) => call.name === "desktopSend").length
@@ -1262,9 +1316,9 @@ for (const flags of [{ isComposing: true }, { shiftKey: true }]) {
   })
 }
 assert.equal(sendCount(), count)
-chatState.appSettings.agents.assistant.targetId = "local"
+chatState.appSettings.agents.assistant.targetId = ""
 await inputWindow.state.send()
-assert.match(inputWindow.state.error, /本地助手模型待添加/)
+assert.match(inputWindow.state.error, /请先.*选择助手模型/)
 assert.equal(sendCount(), count)
 chatState.appSettings.agents.assistant.targetId = "p1"
 await inputWindow.state.send()

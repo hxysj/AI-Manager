@@ -8,7 +8,11 @@
     @paste="pasteImages"
     @pointerdown="dragWindow"
   >
-    <div class="desktop-assistant-composer">
+    <div
+      class="desktop-assistant-composer"
+      @pointerenter="handlePointerEnter"
+      @pointerleave="handlePointerLeave"
+    >
       <button
         class="desktop-assistant-close"
         type="button"
@@ -196,13 +200,14 @@ let sequence = 0
 let eventVersion = 0
 let disposed = false
 let unfocusedTimer = null
+let inputHovered = false
 const listeners = []
 
 function applyTask(snapshot) {
   task.value = snapshot
 }
 
-// 快捷键唤出的窗口未进入前台时只保留一分钟，获得焦点后取消计时。
+// 未聚焦且未悬浮时计时收起，重新交互后取消；旧回调不能收起重新打开的窗口。
 function clearUnfocusedTimer() {
   if (unfocusedTimer === null) return
   window.clearTimeout(unfocusedTimer)
@@ -215,10 +220,24 @@ function isWindowFocused() {
 
 function scheduleUnfocusedClose() {
   clearUnfocusedTimer()
-  unfocusedTimer = window.setTimeout(() => {
+  if (disposed || !visible.value || isWindowFocused() || inputHovered) return
+  const timer = window.setTimeout(() => {
+    if (unfocusedTimer !== timer) return
     unfocusedTimer = null
-    if (visible.value && !isWindowFocused()) close()
-  }, 60_000)
+    if (!disposed && visible.value && !isWindowFocused() && !inputHovered)
+      close()
+  }, 30_000)
+  unfocusedTimer = timer
+}
+
+function handlePointerEnter() {
+  inputHovered = true
+  clearUnfocusedTimer()
+}
+
+function handlePointerLeave() {
+  inputHovered = false
+  scheduleUnfocusedClose()
 }
 
 function handleWindowFocus() {
@@ -248,6 +267,7 @@ async function pasteImages(event) {
 async function open() {
   sequence += 1
   clearUnfocusedTimer()
+  inputHovered = false
   submitting.value = false
   visible.value = true
   error.value = ""
@@ -259,6 +279,7 @@ async function open() {
 async function close() {
   sequence += 1
   clearUnfocusedTimer()
+  inputHovered = false
   visible.value = false
   await assistantApi.desktopClose()
 }
@@ -411,6 +432,7 @@ onMounted(async () => {
       } catch {
         // 初始化错误保留在输入框中，下次快捷键可重新唤出。
       }
+      scheduleUnfocusedClose()
     }
   }
 })

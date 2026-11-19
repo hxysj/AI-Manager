@@ -50,6 +50,31 @@ fn reminder_offsets_use_capture_time_and_invalid_formats_request_model_correctio
 }
 
 #[test]
+fn explicit_relative_reminder_survives_missing_or_uncertain_model_output() {
+    let captured=store::now()-5_000;
+    let capture=json!({"capturedAt":captured,"sourceText":"2分钟后提醒我吃饭","source":{"timeZone":"Asia/Shanghai"}});
+    for plans in [Value::Null,json!([]),json!([{"uncertain":true,"at":null}])] {
+        let normalized=normalize_item(json!({"content":"吃饭","pendingTime":"提醒时间待确认","reminders":plans}),&[],&capture,&json!({})).unwrap();
+        assert_eq!(normalized["reminders"][0]["nextFireAt"],captured+120_000);
+        assert_eq!(normalized["pendingTime"],"");
+    }
+    let root=std::env::temp_dir().join(format!("quick-note-relative-{}",uuid::Uuid::new_v4()));
+    let paths=crate::core::paths::resolve_app_paths(&root);
+    store::initialize(&paths).unwrap();
+    let capture=store::capture(&paths,&json!({"requestId":"relative","text":"两分钟后提醒我吃饭","source":{"timeZone":"Asia/Shanghai"}}),&json!({})).unwrap();
+    let normalized=normalize_item(json!({"content":"吃饭","reminders":[]}),&[],&capture,&json!({})).unwrap();
+    let note=store::complete_capture(&paths,store::text(&capture,"id"),&normalized).unwrap();
+    let at=capture["capturedAt"].as_i64().unwrap()+120_000;
+    assert_eq!(store::detail(&paths,store::text(&note,"id")).unwrap()["reminders"][0]["nextFireAt"],at);
+    let events=store::due_events(&paths,at).unwrap();
+    assert_eq!(events.len(),1);
+    assert_eq!(events[0]["scheduledAt"],at);
+    assert!(store::due_events(&paths,at+1).unwrap().is_empty());
+    assert_eq!(root.parent(),Some(std::env::temp_dir().as_path()));
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
 fn capture_uses_real_model_proxy_for_chat_responses_and_claude() {
     tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
         for (cli,api,endpoint) in [("codex","chat","/v1/chat/completions"),("codex","responses","/v1/responses"),("claude","messages","/v1/messages")] {
@@ -130,6 +155,8 @@ fn capture_repairs_model_output_atomically_and_stops_on_limits_cancellation_and_
                                     let body:Value=serde_json::from_slice(&bytes).unwrap();
                                     let instruction=if api=="chat"{&body["messages"][0]["content"]}else if api=="messages"{&body["system"]}else{&body["instructions"]};
                                     assert!(instruction.as_str().unwrap().contains("纠正原文中的错别字"));
+                                    assert!(instruction.as_str().unwrap().contains("按因果和执行顺序重组"));
+                                    assert!(instruction.as_str().unwrap().contains("没有完成就不写已完成"));
                                     assert!(body.get("tools").is_none());
                                     let user=if api=="responses"{&body["input"]}else{&body["messages"][if api=="chat"{1}else{0}]["content"]};
                                     if attempt>0 {

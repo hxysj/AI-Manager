@@ -854,6 +854,10 @@ async function save() {
     background: linear-gradient(135deg, #3c7dbf, #245c98);
     border-color: #3471ae;
     color: white;
+    &:hover {
+      color: white;
+      border-color: #3471ae;
+    }
   }
   .note-text-button {
     border: 0;

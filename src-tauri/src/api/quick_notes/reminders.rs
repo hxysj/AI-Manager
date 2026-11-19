@@ -12,8 +12,8 @@ pub fn tick(app: &AppHandle,paths: &AppPaths) -> Result<(),crate::core::error::M
     for event in events {
         let late=store::now()-event["scheduledAt"].as_i64().unwrap_or(0)>60_000;
         let body=format!("{}{}\n可在速记便签的提醒中心查看、完成或稍后提醒。",if late{"错过的提醒 · "}else{""},store::text(&event["note"],"content").chars().take(180).collect::<String>());
-        let result=notify(app,&event,&body);
-        store::open(paths)?.execute("UPDATE quick_note_reminder_events SET status=?2,error=?3 WHERE id=?1",
+        let result=notify(app,paths,&event,&body);
+        store::open(paths)?.execute("UPDATE quick_note_reminder_events SET status=?2,error=?3 WHERE id=?1 AND status='delivering'",
             params![store::text(&event,"id"),if result.is_ok(){"sent"}else{"failed"},result.err().map(|e|e.to_string()).unwrap_or_default()])?;
     }
     app.emit("quick-notes:changed",json!({"reminders":true})).ok();
@@ -21,14 +21,14 @@ pub fn tick(app: &AppHandle,paths: &AppPaths) -> Result<(),crate::core::error::M
 }
 
 #[cfg(not(windows))]
-fn notify(app: &AppHandle,event: &serde_json::Value,body: &str) -> Result<(),String> {
+fn notify(app: &AppHandle,_paths: &AppPaths,event: &serde_json::Value,body: &str) -> Result<(),String> {
     app.notification().builder().title(format!("速记 · {}",store::text(event,"title"))).body(body).show().map_err(|e|e.to_string())
 }
 
 // Windows 通知保留稳定标识，点击后定位原便签；通知本身不打开或聚焦窗口。
 #[cfg(windows)]
-fn notify(app: &AppHandle,event: &serde_json::Value,body: &str) -> Result<(),String> {
-    use windows::{core::HSTRING, Data::Xml::Dom::XmlDocument, Foundation::TypedEventHandler, UI::Notifications::{ToastNotification,ToastNotificationManager}};
+fn notify(app: &AppHandle,paths: &AppPaths,event: &serde_json::Value,body: &str) -> Result<(),String> {
+    use windows::{core::HSTRING, Data::Xml::Dom::XmlDocument, Foundation::TypedEventHandler, UI::Notifications::{NotificationSetting,ToastFailedEventArgs,ToastNotification,ToastNotificationManager}};
     static SHOWN:std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String,ToastNotification>>>=std::sync::OnceLock::new();
     let escape=|s:&str|s.replace('&',"&amp;").replace('<',"&lt;").replace('>',"&gt;").replace('"',"&quot;");
     let xml=XmlDocument::new().map_err(|e|e.to_string())?;
@@ -48,11 +48,29 @@ fn notify(app: &AppHandle,event: &serde_json::Value,body: &str) -> Result<(),Str
     })).map_err(|e|e.to_string())?;
     // 开发程序未安装应用快捷方式，沿用通知插件的 PowerShell 系统标识。
     let app_id=if cfg!(debug_assertions){r"{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe".to_owned()}else{app.config().identifier.clone()};
-    ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(app_id)).and_then(|notifier|notifier.Show(&toast)).map_err(|e|e.to_string())?;
+    let notifier=ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(app_id)).map_err(|e|e.to_string())?;
+    if notifier.Setting().map_err(|e|e.to_string())? != NotificationSetting::Enabled {
+        return Err("Windows 已禁用此应用的通知，请在系统通知设置中开启。".into());
+    }
     // 保留回调对象到通知关闭，防止 Rust 作用域结束后点击事件丢失。
     let key=store::text(event,"id").to_string();
     let dismissed=key.clone();
     toast.Dismissed(&TypedEventHandler::new(move |_,_| {if let Some(shown)=SHOWN.get(){shown.lock().unwrap().remove(&dismissed);}Ok(())})).map_err(|e|e.to_string())?;
-    SHOWN.get_or_init(Default::default).lock().map_err(|e|e.to_string())?.insert(key,toast);
+    // Show 成功仅表示提交，异步投递失败也必须回写提醒中心，不能显示成已发送。
+    let failed_key=key.clone();let failed_paths=paths.clone();let failed_app=app.clone();
+    toast.Failed(&TypedEventHandler::<ToastNotification,ToastFailedEventArgs>::new(move |_,args| {
+        let error=args.as_ref().and_then(|args|args.ErrorCode().ok()).map(|code|format!("Windows 通知发送失败：0x{:08X}",code.0 as u32)).unwrap_or_else(||"Windows 通知发送失败".into());
+        if let Ok(c)=store::open(&failed_paths) {
+            if let Err(error)=c.execute("UPDATE quick_note_reminder_events SET status='failed',error=?2 WHERE id=?1",params![failed_key,error]) {eprintln!("保存通知错误失败：{error}");}
+        }
+        if let Some(shown)=SHOWN.get(){shown.lock().unwrap().remove(&failed_key);}
+        failed_app.emit("quick-notes:changed",json!({"reminders":true})).ok();
+        Ok(())
+    })).map_err(|e|e.to_string())?;
+    SHOWN.get_or_init(Default::default).lock().map_err(|e|e.to_string())?.insert(key.clone(),toast.clone());
+    if let Err(error)=notifier.Show(&toast) {
+        SHOWN.get().unwrap().lock().map_err(|e|e.to_string())?.remove(&key);
+        return Err(error.to_string());
+    }
     Ok(())
 }

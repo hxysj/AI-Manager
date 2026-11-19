@@ -1179,9 +1179,15 @@ onMounted(() => {
 }
 .tools-view-detail-page.tools-view-notes {
   gap: 8px;
+  overflow: clip;
   .tools-view-detail-head {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    min-height: 44px;
     padding: 4px 12px 8px;
     border-bottom: 0;
+    background: var(--color-panel);
     .tools-view-detail-name {
       font-size: var(--font-size-base);
     }
