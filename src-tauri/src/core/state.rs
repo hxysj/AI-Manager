@@ -911,8 +911,6 @@ impl ManagerState {
             }
             "quick-switch:show-main" => app::show_main_panel(
                 &app,
-                &self.app_settings,
-                self.quick_switch_collapsed,
                 payload
                     .as_ref()
                     .and_then(|value| value.get("toolId"))

@@ -716,13 +716,7 @@ fn show_main_from_tray(app: &tauri::AppHandle) {
     let app_handle = app.clone();
 
     tauri::async_runtime::spawn(async move {
-        let Some(state) = app_handle.try_state::<AppState>() else {
-            return;
-        };
-        let (app_settings, quick_switch_collapsed) = state.quick_switch_settings().await;
-        if let Err(error) =
-            app::show_main_panel(&app_handle, &app_settings, quick_switch_collapsed, None)
-        {
+        if let Err(error) = app::show_main_panel(&app_handle, None) {
             eprintln!("{error}");
         }
     });

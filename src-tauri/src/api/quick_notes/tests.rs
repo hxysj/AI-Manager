@@ -8,6 +8,74 @@ use hyper::{Response,server::conn::http1,service::service_fn};
 use hyper_util::rt::TokioIo;
 use tokio::net::TcpListener;
 
+#[cfg(windows)]
+#[test]
+#[ignore = "需要 Windows 图形会话"]
+fn opening_note_from_tokio_worker_navigates_visible_main_window() {
+    let root = std::env::temp_dir().join(format!("quick-note-window-{}", uuid::Uuid::new_v4()));
+    let data_root = root.join("data");
+    let paths = crate::core::paths::resolve_app_paths(&data_root);
+    crate::core::database::initialize(&paths).unwrap();
+    store::initialize(&paths).unwrap();
+    let note = store::save(&paths, &json!({"content":"验证打开便签"}), "user").unwrap();
+    let note_id = note["id"].clone();
+    let context = AssistantContext {
+        paths,
+        workspace_root: root.clone(),
+        resource_dir: root.clone(),
+        cli_targets: json!([]),
+        settings: AssistantSettings::default(),
+        local_models: Default::default(),
+    };
+    let mut app_context = tauri::generate_context!();
+    app_context.config_mut().app.windows.clear();
+    app_context.config_mut().identifier = "com.monkeythief.quicknote-test".into();
+    let profile = root.join("webview");
+    let app = tauri::Builder::<tauri::Wry>::default()
+        .any_thread()
+        .setup(move |app| {
+            tauri::WebviewWindowBuilder::new(
+                app, "main", tauri::WebviewUrl::External("about:blank".parse()?),
+            ).data_directory(profile).build()?;
+            Ok(())
+        })
+        .build(app_context)
+        .unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    let mut run = Some((context, note_id.clone()));
+    app.run_return(move |app, event| {
+        if matches!(event, tauri::RunEvent::Ready) {
+            let (context, note_id) = run.take().unwrap();
+            assert!(app.get_webview_window("main").unwrap().is_visible().unwrap());
+            let sender = sender.clone();
+            let app = app.clone();
+            let worker = tauri::async_runtime::spawn({
+                let app = app.clone();
+                async move {
+                    QuickNotesService::default().dispatch(app, context, "open", json!({"id":note_id})).await
+                }
+            });
+            tauri::async_runtime::spawn(async move {
+                let _ = sender.send(worker.await);
+                if let Some(window) = app.get_webview_window("main") {
+                    window.destroy().ok();
+                }
+                app.exit(0);
+            });
+        }
+    });
+    assert_eq!(receiver.try_recv().unwrap().unwrap().unwrap()["id"], note_id);
+    let root = root.canonicalize().unwrap();
+    let data_root = data_root.canonicalize().unwrap();
+    assert_eq!(root.parent(), Some(std::env::temp_dir().canonicalize().unwrap().as_path()));
+    assert_eq!(data_root.parent(), Some(root.as_path()));
+    std::fs::remove_dir_all(data_root).unwrap();
+    // WebView2 仍持有配置目录时，由测试进程退出后释放。
+    if let Err(error) = std::fs::remove_dir_all(root) {
+        assert_eq!(error.raw_os_error(), Some(32), "清理便签测试目录失败：{error}");
+    }
+}
+
 #[test]
 fn model_folder_ids_require_matching_kind_and_names_can_reuse_aliases() {
     let folders=vec![json!({"id":"project","kind":"group","name":"AI Manager","aliases":["桌宠"]}),json!({"id":"debugging","kind":"category","name":"问题排查"})];
@@ -157,6 +225,8 @@ fn capture_repairs_model_output_atomically_and_stops_on_limits_cancellation_and_
                                     assert!(instruction.as_str().unwrap().contains("纠正原文中的错别字"));
                                     assert!(instruction.as_str().unwrap().contains("按因果和执行顺序重组"));
                                     assert!(instruction.as_str().unwrap().contains("没有完成就不写已完成"));
+                                    assert!(instruction.as_str().unwrap().contains("事项使用 worklog，即使尚未开始或没有结果"));
+                                    assert!(instruction.as_str().unwrap().contains("两项待办状态均为 pending，worklog.result 留空"));
                                     assert!(body.get("tools").is_none());
                                     let user=if api=="responses"{&body["input"]}else{&body["messages"][if api=="chat"{1}else{0}]["content"]};
                                     if attempt>0 {

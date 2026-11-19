@@ -480,8 +480,6 @@ pub async fn handle_close_action(
 
 pub fn show_main_panel(
     app: &tauri::AppHandle,
-    _app_settings: &AppSettings,
-    _quick_switch_collapsed: bool,
     tool_id: Option<&str>,
 ) -> Result<Value, ManagerError> {
     let _guard = QUICK_SWITCH_WINDOW_POSITION
