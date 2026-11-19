@@ -36,6 +36,15 @@ enum BackupScope {
 pub struct DataBackupCache {
     drafts: HashMap<String, Value>,
     local_backup_running: bool,
+    cloud_uploads: HashMap<String, CloudBackupUpload>,
+}
+
+struct CloudBackupUpload {
+    url: url::Url,
+    username: String,
+    data_hash: [u8; 32],
+    uploaded_at: u64,
+    file: PublishedWebDavBackup,
 }
 
 impl DataBackupCache {
@@ -43,6 +52,7 @@ impl DataBackupCache {
         Self {
             drafts: HashMap::new(),
             local_backup_running: false,
+            cloud_uploads: HashMap::new(),
         }
     }
 
@@ -304,32 +314,70 @@ pub async fn push_cloud_backup(
     paths: &AppPaths,
     app_settings: &mut AppSettings,
     state: &mut Value,
+    cache: &mut DataBackupCache,
     payload: Value,
 ) -> Result<Value, ManagerError> {
     let cloud_sync = normalize_cloud_sync_settings(&payload);
-    let last_updated_at = now_millis();
-    let updated_cloud_sync = CloudSyncSettings {
-        last_updated_at,
-        ..cloud_sync.clone()
+    let client = reqwest::Client::new();
+    let url = build_webdav_file_url(&cloud_sync)?;
+    let collect_started = Instant::now();
+    let backup = collect_data_backup_payload(paths, app_settings, BackupScope::Cloud).await?;
+    let mut hasher = Sha256::new();
+    serde_json::to_writer(&mut hasher, &backup)?;
+    let data_hash: [u8; 32] = hasher.finalize().into();
+    let collect_ms = collect_started.elapsed().as_millis();
+
+    let verify_started = Instant::now();
+    let mut previous_upload_at = None;
+    if let Some(previous) = cache.cloud_uploads.get(&cloud_sync.provider) {
+        if previous.url == url
+            && previous.username == cloud_sync.username
+            && previous.data_hash == data_hash
+            && verify_published_webdav_backup(&client, &cloud_sync, &url, &previous.file).await
+        {
+            previous_upload_at = Some(previous.uploaded_at);
+        }
+    }
+    let verify_ms = verify_started.elapsed().as_millis();
+    let mut result = json!({
+      "fileName": cloud_sync.file_name,
+      "skippedUpload": previous_upload_at.is_some(),
+      "backupMetrics": {"collectMs": collect_ms, "verifyMs": verify_ms}
+    });
+    let last_updated_at = if let Some(uploaded_at) = previous_upload_at {
+        uploaded_at
+    } else {
+        // 上传前清除旧记录，避免失败后复用旧的云端状态。
+        cache.cloud_uploads.remove(&cloud_sync.provider);
+        let pack_started = Instant::now();
+        let content = seal_data_backup(backup, BackupScope::Cloud)?;
+        result["backupMetrics"]["packMs"] = json!(pack_started.elapsed().as_millis());
+        result["backupMetrics"]["uploadedBytes"] = json!(content.len());
+        let upload_started = Instant::now();
+        let file = upload_webdav_backup(&client, &cloud_sync, content).await?;
+        result["backupMetrics"]["uploadMs"] = json!(upload_started.elapsed().as_millis());
+        let uploaded_at = now_millis();
+        cache.cloud_uploads.insert(
+            cloud_sync.provider.clone(),
+            CloudBackupUpload {
+                url, username: cloud_sync.username.clone(), data_hash, uploaded_at, file,
+            },
+        );
+        result["uploadedAt"] = json!(uploaded_at);
+        uploaded_at
     };
-    upload_webdav_content(
-        &cloud_sync,
-        create_scoped_data_backup(paths, app_settings, BackupScope::Cloud).await?,
-    )
-    .await?;
-    set_cloud_sync_settings(app_settings, updated_cloud_sync);
+    set_cloud_sync_settings(
+        app_settings,
+        CloudSyncSettings { last_updated_at, ..cloud_sync },
+    );
     write_json_file(
         Path::new(&app_settings.settings_file_path),
         &serialize_app_settings(app_settings),
     )
     .await?;
     state["appSettings"] = serde_json::to_value(&*app_settings)?;
-
-    Ok(json!({
-      "uploadedAt": last_updated_at,
-      "fileName": cloud_sync.file_name,
-      "state": state
-    }))
+    result["state"] = json!(state);
+    Ok(result)
 }
 
 pub async fn preview_cloud_backup_restore(
@@ -421,18 +469,29 @@ async fn create_scoped_data_backup(
     app_settings: &AppSettings,
     scope: BackupScope,
 ) -> Result<String, ManagerError> {
-    let provider_keys = export_provider_keys(paths)?;
-    let mut payload = json!({
-      "version": 1,
-      "createdAt": now_millis(),
-      "workspaceEntries": collect_backup_entries(paths, scope).await?,
-      "codexPetEntries": collect_codex_pet_entries(app_settings, scope).await?,
-      "runtimeProviderKeys": encrypt_backup_data(&provider_keys)?
-    });
+    seal_data_backup(collect_data_backup_payload(paths, app_settings, scope).await?, scope)
+}
+
+async fn collect_data_backup_payload(
+    paths: &AppPaths,
+    app_settings: &AppSettings,
+    scope: BackupScope,
+) -> Result<Value, ManagerError> {
+    let mut payload = json!({"version": 1});
+    payload["runtimeProviderKeys"] = export_provider_keys(paths)?;
+    payload["workspaceEntries"] = Value::Array(collect_backup_entries(paths, scope).await?);
+    payload["codexPetEntries"] = Value::Array(collect_codex_pet_entries(app_settings, scope).await?);
 
     if scope == BackupScope::Local {
         payload["appSettings"] = serialize_backup_app_settings(app_settings);
     }
+    Ok(payload)
+}
+
+fn seal_data_backup(mut payload: Value, scope: BackupScope) -> Result<String, ManagerError> {
+    // 时间和随机加密结果不参与内容比较。
+    payload["createdAt"] = json!(now_millis());
+    payload["runtimeProviderKeys"] = json!(encrypt_backup_data(&payload["runtimeProviderKeys"])?);
     encrypt_backup_payload(&payload, scope)
 }
 
@@ -2263,11 +2322,67 @@ async fn ensure_webdav_directory(
     Ok(())
 }
 
+#[derive(Debug)]
+struct PublishedWebDavBackup {
+    size: u64,
+    etag: Option<HeaderValue>,
+    prefix: Vec<u8>,
+}
+
+async fn verify_published_webdav_backup(
+    client: &reqwest::Client,
+    config: &CloudSyncSettings,
+    url: &url::Url,
+    backup: &PublishedWebDavBackup,
+) -> bool {
+    let Some(etag) = &backup.etag else {
+        return false;
+    };
+    // 小范围读取同时验证长度、版本和随机加密后的包内容，避免复用已被覆盖的文件。
+    let Some(end) = backup.prefix.len().checked_sub(1) else {
+        return false;
+    };
+    let response = client
+        .get(url.clone())
+        .header(AUTHORIZATION, build_webdav_auth_header(config))
+        .header(ACCEPT_ENCODING, "identity")
+        .header(IF_MATCH, etag)
+        .header(RANGE, format!("bytes=0-{end}"))
+        .send()
+        .await;
+    let Ok(mut response) = response else {
+        return false;
+    };
+    let expected_range = format!("bytes 0-{end}/{}", backup.size);
+    if response.status().as_u16() != 206
+        || strong_webdav_etag(response.headers()) != Some(etag)
+        || response.headers().get(CONTENT_RANGE).and_then(|value| value.to_str().ok())
+            != Some(expected_range.as_str())
+    {
+        return false;
+    }
+
+    let mut checked = 0;
+    loop {
+        match response.chunk().await {
+            Ok(Some(bytes)) => {
+                let end = checked + bytes.len();
+                if backup.prefix.get(checked..end) != Some(bytes.as_ref()) {
+                    return false;
+                }
+                checked = end;
+            }
+            Ok(None) => return checked == backup.prefix.len(),
+            Err(_) => return false,
+        }
+    }
+}
+
 async fn upload_webdav_backup(
     client: &reqwest::Client,
     config: &CloudSyncSettings,
     content: String,
-) -> Result<(), ManagerError> {
+) -> Result<PublishedWebDavBackup, ManagerError> {
     let file_url = build_webdav_file_url(config)?;
     let mut temporary_url = file_url.clone();
     temporary_url
@@ -2297,10 +2412,11 @@ async fn upload_and_publish_webdav_backup(
     temporary_url: &url::Url,
     file_url: &url::Url,
     content: String,
-) -> Result<(), ManagerError> {
+) -> Result<PublishedWebDavBackup, ManagerError> {
     let move_method = reqwest::Method::from_bytes(b"MOVE")
         .map_err(|error| ManagerError::System(error.to_string()))?;
     let expected_size = content.len() as u64;
+    let prefix = content.as_bytes()[..content.len().min(256)].to_vec();
     let auth = build_webdav_auth_header(config);
 
     let request = client
@@ -2353,6 +2469,7 @@ async fn upload_and_publish_webdav_backup(
             actual_size
         )));
     }
+    let temporary_etag = strong_webdav_etag(response.headers()).cloned();
 
     // 同目录 MOVE 只发布大小校验通过的备份。
     let request = client
@@ -2372,7 +2489,11 @@ async fn upload_and_publish_webdav_backup(
         )));
     }
 
-    Ok(())
+    Ok(PublishedWebDavBackup {
+        size: expected_size,
+        etag: strong_webdav_etag(response.headers()).cloned().or(temporary_etag),
+        prefix,
+    })
 }
 
 // 图片任务备份复用同一套 Koofr/坚果云 WebDAV 校验和传输逻辑。
@@ -2380,7 +2501,16 @@ pub(crate) async fn upload_webdav_content(
     config: &CloudSyncSettings,
     content: String,
 ) -> Result<(), ManagerError> {
-    upload_webdav_backup(&reqwest::Client::new(), config, content).await
+    upload_webdav_backup(&reqwest::Client::new(), config, content).await?;
+    Ok(())
+}
+
+fn strong_webdav_etag(headers: &HeaderMap) -> Option<&HeaderValue> {
+    headers.get(ETAG).filter(|value| {
+        value
+            .to_str()
+            .is_ok_and(|value| value.starts_with('"') && value.ends_with('"'))
+    })
 }
 
 fn webdav_content_length(headers: &HeaderMap) -> Option<u64> {
@@ -2434,15 +2564,7 @@ async fn download_webdav_backup(config: &CloudSyncSettings) -> Result<String, Ma
         )));
     }
     let size = webdav_content_length(response.headers());
-    let etag = response
-        .headers()
-        .get(ETAG)
-        .filter(|value| {
-            value
-                .to_str()
-                .is_ok_and(|value| value.starts_with('"') && value.ends_with('"'))
-        })
-        .cloned();
+    let etag = strong_webdav_etag(response.headers()).cloned();
     let supports_ranges = status == 200
         && response
             .headers()
@@ -3907,6 +4029,65 @@ mod tests {
             format!("HTTP/1.1 {status} Test\r\nConnection: close\r\n{headers}\r\n").into_bytes();
         response.extend_from_slice(body);
         response
+    }
+
+    #[test]
+    fn cloud_backup_skips_only_when_current_data_and_published_file_match() {
+        tauri::async_runtime::block_on(async {
+            use sha2::{Digest, Sha256};
+
+            let root = std::env::temp_dir().join(format!("ai-manager-cloud-reuse-{}", uuid::Uuid::new_v4()));
+            let paths = resolve_app_paths(&root.join("data"));
+            let mut settings = normalize_app_settings(root.join("settings.json"), Some(json!({
+                "cliConfigPaths": {"codex": root.join("codex")}
+            })));
+            let backup = super::collect_data_backup_payload(&paths, &settings, BackupScope::Cloud)
+                .await.unwrap();
+            let data_hash = Sha256::digest(serde_json::to_vec(&backup).unwrap()).into();
+
+            let match_range = "Content-Length: 6\r\nContent-Range: bytes 0-5/20\r\nETag: \"version-1\"\r\n";
+            let (config, server) = webdav_test_server(vec![
+                webdav_test_response(206, match_range, b"backup"),
+                // 同一长度和 ETag 的不同文件仍要重新上传。
+                webdav_test_response(206, match_range, b"edited"),
+                webdav_test_response(403, "Content-Length: 0\r\n", b""),
+            ]).await;
+            let mut cache = super::DataBackupCache::new();
+            cache.cloud_uploads.insert(config.provider.clone(), super::CloudBackupUpload {
+                url: super::build_webdav_file_url(&config).unwrap(),
+                username: config.username.clone(),
+                data_hash,
+                uploaded_at: 42,
+                file: super::PublishedWebDavBackup {
+                    size: 20,
+                    etag: Some(HeaderValue::from_static("\"version-1\"")),
+                    prefix: b"backup".to_vec(),
+                },
+            });
+            let input = json!({
+                "provider": "koofr", "webdavUrl": config.webdav_url, "username": config.username,
+                "password": config.password, "fileName": config.file_name
+            });
+            let mut state = json!({});
+            let result = super::push_cloud_backup(&paths, &mut settings, &mut state, &mut cache, input.clone())
+                .await.unwrap();
+            assert_eq!(result["skippedUpload"], true);
+            assert_eq!(settings.koofr_sync.last_updated_at, 42);
+            assert!(result.get("uploadedAt").is_none());
+
+            let error = super::push_cloud_backup(&paths, &mut settings, &mut state, &mut cache, input)
+                .await.unwrap_err();
+            assert!(error.to_string().contains("目录创建失败"));
+            assert!(cache.cloud_uploads.is_empty());
+            let requests = server.await.unwrap();
+            assert!(requests[0].starts_with("get /dav/test.aimbackup "));
+            assert!(requests[0].contains("range: bytes=0-5\r\n"));
+            assert!(requests[0].contains("if-match: \"version-1\"\r\n"));
+            assert!(requests[1].starts_with("get /dav/test.aimbackup "));
+            assert!(requests[2].starts_with("mkcol /dav "));
+            assert!(root.canonicalize().unwrap().starts_with(std::env::temp_dir().canonicalize().unwrap()));
+            std::fs::remove_dir_all(root).unwrap();
+        });
     }
 
     #[test]

@@ -1417,8 +1417,12 @@ async function pushCloudBackup(payload) {
         updateState(result.state)
       }
 
+      const providerName = payload.provider === "koofr" ? "Koofr" : "坚果云"
+      // 已确认两端一致时，提示用户本次省去了上传。
       showSuccessMessage(
-        `配置数据已推送到${payload.provider === "koofr" ? "Koofr" : "坚果云"}。`
+        result?.skippedUpload
+          ? `${providerName}备份已是最新。`
+          : `配置数据已推送到${providerName}。`
       )
     } catch (error) {
       showErrorMessage(error)

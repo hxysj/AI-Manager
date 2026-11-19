@@ -994,6 +994,7 @@ impl ManagerState {
                     &self.paths,
                     &mut self.app_settings,
                     &mut self.state,
+                    &mut self.data_backup_cache,
                     payload.unwrap_or_else(|| json!({})),
                 )
                 .await
