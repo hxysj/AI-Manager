@@ -35,6 +35,7 @@ pub struct ManagerState {
 
 pub struct AppState {
     manager: Mutex<ManagerState>,
+    user_data_path: PathBuf,
     close_action: RwLock<String>,
     git_tool_lock: Mutex<()>,
     local_models: local_models::LocalModelService,
@@ -80,8 +81,7 @@ impl AppState {
             self.show_assistant_reply(&app, false).await.ok();
         }
         if let Err(error) = self.assistant.sync(&app, &context).await {
-            let root = self.user_data_path().await;
-            let _ = app_logs::record_background_error(&root, "assistant:startup", error).await;
+            let _ = app_logs::record_background_error(self.user_data_path(), "assistant:startup", error).await;
         }
     }
 
@@ -89,6 +89,7 @@ impl AppState {
         let close_action = manager.app_settings.system.close_action.clone();
 
         Self {
+            user_data_path: manager.user_data_path.clone(),
             manager: Mutex::new(manager),
             close_action: RwLock::new(close_action),
             git_tool_lock: Mutex::new(()),
@@ -436,10 +437,9 @@ impl AppState {
         result
     }
 
-    pub async fn user_data_path(&self) -> PathBuf {
-        let manager = self.manager.lock().await;
-
-        manager.user_data_path.clone()
+    pub fn user_data_path(&self) -> &Path {
+        // 数据根目录在启动时确定，截图等独立服务记日志时不必等待业务锁。
+        &self.user_data_path
     }
 
     pub async fn close_action(&self) -> String {
@@ -2992,6 +2992,7 @@ mod tests {
             assert_eq!(snapshot["ready"], true);
             {
                 let mut manager = state.manager.lock().await;
+                assert_eq!(state.user_data_path(), root.as_path());
                 assert!(!manager.data_backup_cache.begin_local_backup());
                 manager.app_settings.system.close_action = "quit".into();
                 manager.app_settings.local_backup.interval_minutes = 120;

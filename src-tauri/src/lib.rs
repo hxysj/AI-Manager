@@ -54,8 +54,8 @@ async fn dispatch_api(
     };
     // 日志读写自身不再生成调用日志，前端错误也由同一开关和保留策略管理。
     if channel == "app-log:record" {
-        let path = state.user_data_path().await;
-        return app_logs::record_renderer(&path, window.label(), payload.unwrap_or(Value::Null))
+        let path = state.user_data_path();
+        return app_logs::record_renderer(path, window.label(), payload.unwrap_or(Value::Null))
             .await
             .map_err(|error| error.to_string());
     }
@@ -72,8 +72,8 @@ async fn dispatch_api(
         window.label(), context,
     );
     let path = if record_call {
-        let path = state.user_data_path().await;
-        if let Err(error) = app_logs::record_start(&path, &channel, &started).await {
+        let path = state.user_data_path();
+        if let Err(error) = app_logs::record_start(path, &channel, &started).await {
             eprintln!("[日志错误] 无法记录操作开始：{error}");
         }
         Some(path)
@@ -84,13 +84,13 @@ async fn dispatch_api(
     if record_call || result.is_err() {
         let path = match path {
             Some(path) => path,
-            None => state.user_data_path().await,
+            None => state.user_data_path(),
         };
         let assistant_result = channel.starts_with("assistant:").then(|| result.as_ref()
             .map(|_| serde_json::json!({"completed": true}))
             .map_err(|error| ManagerError::System(error.to_string())));
         if let Err(error) = app_logs::record_finish(
-            &path, &channel, &started, assistant_result.as_ref().unwrap_or(&result),
+            path, &channel, &started, assistant_result.as_ref().unwrap_or(&result),
         ).await {
             eprintln!("[日志错误] 无法记录操作结束：{error}");
         }
@@ -270,8 +270,8 @@ pub fn run() {
             tauri::async_runtime::spawn(async move {
                 loop {
                     if let Some(state) = log_handle.try_state::<AppState>() {
-                        let path = state.user_data_path().await;
-                        if let Err(error) = app_logs::cleanup(&path).await {
+                        let path = state.user_data_path();
+                        if let Err(error) = app_logs::cleanup(path).await {
                             eprintln!("[日志错误] 清理过期日志失败：{error}");
                         }
                     }
@@ -280,9 +280,9 @@ pub fn run() {
             });
             app.manage(translation::desktop::DesktopTranslator::default());
             translation::desktop::sync(app.handle(), &app_settings.agents.translation);
-            let data_root =
-                tauri::async_runtime::block_on(app.state::<AppState>().user_data_path());
-            match screenshot::ScreenshotService::new(&data_root) {
+            let state = app.state::<AppState>();
+            let data_root = state.user_data_path();
+            match screenshot::ScreenshotService::new(data_root) {
                 Ok(service) => {
                     app.manage(service);
                     let handle = app.handle().clone();
@@ -292,7 +292,7 @@ pub fn run() {
                 }
                 Err(error) => {
                     eprintln!("截图贴图数据加载失败，原数据保留：{error}");
-                    let root = data_root.clone();
+                    let root = data_root.to_path_buf();
                     tauri::async_runtime::spawn(async move {
                         if let Err(error) =
                             app_logs::record_background_error(&root, "screenshot:startup", error)
@@ -315,9 +315,9 @@ pub fn run() {
                 if let Some(state) = app_handle.try_state::<AppState>() {
                     if let Err(error) = state.start_lan_share_service(app_handle.clone()).await {
                         eprintln!("设备快传后台服务启动失败：{error}");
-                        let root = state.user_data_path().await;
+                        let root = state.user_data_path();
                         if let Err(error) =
-                            app_logs::record_background_error(&root, "lan-share:startup", error)
+                            app_logs::record_background_error(root, "lan-share:startup", error)
                                 .await
                         {
                             eprintln!("[日志错误] {error}");
@@ -330,9 +330,9 @@ pub fn run() {
                 if let Some(state) = app_handle.try_state::<AppState>() {
                     if let Err(error) = state.start_enabled_proxy_servers().await {
                         eprintln!("{error}");
-                        let root = state.user_data_path().await;
+                        let root = state.user_data_path();
                         if let Err(error) =
-                            app_logs::record_background_error(&root, "proxy:startup", error).await
+                            app_logs::record_background_error(root, "proxy:startup", error).await
                         {
                             eprintln!("[日志错误] {error}");
                         }

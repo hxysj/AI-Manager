@@ -322,10 +322,16 @@ defineEmits([
     flex: 0 0 20px;
     color: var(--color-text-muted);
     place-items: center;
+
+    :deep(svg) {
+      display: block;
+    }
   }
 
   &__nav-label {
     font-size: var(--font-size-base);
+    line-height: 20px;
+    white-space: nowrap;
   }
 }
 </style>

@@ -568,13 +568,13 @@ const SkillDrawer = defineAsyncComponent(
 )
 
 const baseNavItems = [
-  { id: "providers", label: "Providers", icon: Network },
-  { id: "usage", label: "Usage", icon: BarChart3 },
-  { id: "skills", label: "Skills", icon: ShieldCheck },
-  { id: "sessions", label: "Sessions", icon: Gauge },
-  { id: "rules", label: "Rules", icon: Compass },
-  { id: "tools", label: "Tools", icon: Wrench },
-  { id: "settings", label: "Settings", icon: Settings }
+  { id: "providers", label: "服务商", icon: Network },
+  { id: "usage", label: "用量统计", icon: BarChart3 },
+  { id: "skills", label: "技能", icon: ShieldCheck },
+  { id: "sessions", label: "会话", icon: Gauge },
+  { id: "rules", label: "规则", icon: Compass },
+  { id: "tools", label: "工具", icon: Wrench },
+  { id: "settings", label: "设置", icon: Settings }
 ]
 
 const themeStorageKey = "ai-manager-theme"

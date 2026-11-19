@@ -21,7 +21,7 @@ use sha2::{Digest, Sha256};
 use std::collections::{HashMap, HashSet};
 use std::io::{Read, Write};
 use std::path::{Component, Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 
@@ -312,7 +312,7 @@ pub async fn push_cloud_backup(
         last_updated_at,
         ..cloud_sync.clone()
     };
-    upload_webdav_backup(
+    upload_webdav_content(
         &cloud_sync,
         create_scoped_data_backup(paths, app_settings, BackupScope::Cloud).await?,
     )
@@ -2219,17 +2219,33 @@ fn cloud_sync_provider_name(config: &CloudSyncSettings) -> &'static str {
     }
 }
 
-async fn ensure_webdav_directory(config: &CloudSyncSettings) -> Result<(), ManagerError> {
-    let response = reqwest::Client::new()
-        .request(
-            reqwest::Method::from_bytes(b"MKCOL")
-                .map_err(|error| ManagerError::System(error.to_string()))?,
-            &config.webdav_url,
-        )
-        .header(AUTHORIZATION, build_webdav_auth_header(config))
+async fn send_webdav_upload_request(
+    config: &CloudSyncSettings,
+    stage: &'static str,
+    request: reqwest::RequestBuilder,
+) -> Result<reqwest::Response, ManagerError> {
+    let started = Instant::now();
+    request
         .send()
         .await
+        .map_err(|source| ManagerError::WebDavRequest {
+            provider: cloud_sync_provider_name(config),
+            stage,
+            elapsed_ms: started.elapsed().as_millis(),
+            source: source.without_url(),
+        })
+}
+
+async fn ensure_webdav_directory(
+    client: &reqwest::Client,
+    config: &CloudSyncSettings,
+) -> Result<(), ManagerError> {
+    let method = reqwest::Method::from_bytes(b"MKCOL")
         .map_err(|error| ManagerError::System(error.to_string()))?;
+    let request = client
+        .request(method, &config.webdav_url)
+        .header(AUTHORIZATION, build_webdav_auth_header(config));
+    let response = send_webdav_upload_request(config, "创建备份目录", request).await?;
 
     let status = response.status().as_u16();
 
@@ -2248,20 +2264,51 @@ async fn ensure_webdav_directory(config: &CloudSyncSettings) -> Result<(), Manag
 }
 
 async fn upload_webdav_backup(
+    client: &reqwest::Client,
     config: &CloudSyncSettings,
     content: String,
 ) -> Result<(), ManagerError> {
-    ensure_webdav_directory(config).await?;
-    let expected_size = content.len() as u64;
+    let file_url = build_webdav_file_url(config)?;
+    let mut temporary_url = file_url.clone();
+    temporary_url
+        .path_segments_mut()
+        .map_err(|_| ManagerError::System("WebDAV 地址非法".to_string()))?
+        .pop()
+        .push(&format!("aimanager-upload-{}.tmp", uuid::Uuid::new_v4()));
+    ensure_webdav_directory(client, config).await?;
 
-    let response = reqwest::Client::new()
-        .put(build_webdav_file_url(config)?)
-        .header(AUTHORIZATION, build_webdav_auth_header(config))
-        .header(CONTENT_TYPE, "application/octet-stream")
-        .body(content)
-        .send()
-        .await
+    let result =
+        upload_and_publish_webdav_backup(client, config, &temporary_url, &file_url, content).await;
+    if result.is_err() {
+        // 临时文件清理不应延迟返回原始错误，正式备份也不参与清理。
+        let cleanup = client
+            .delete(temporary_url)
+            .header(AUTHORIZATION, build_webdav_auth_header(config));
+        tauri::async_runtime::spawn(async move {
+            let _ = cleanup.send().await;
+        });
+    }
+    result
+}
+
+async fn upload_and_publish_webdav_backup(
+    client: &reqwest::Client,
+    config: &CloudSyncSettings,
+    temporary_url: &url::Url,
+    file_url: &url::Url,
+    content: String,
+) -> Result<(), ManagerError> {
+    let move_method = reqwest::Method::from_bytes(b"MOVE")
         .map_err(|error| ManagerError::System(error.to_string()))?;
+    let expected_size = content.len() as u64;
+    let auth = build_webdav_auth_header(config);
+
+    let request = client
+        .put(temporary_url.clone())
+        .header(AUTHORIZATION, &auth)
+        .header(CONTENT_TYPE, "application/octet-stream")
+        .body(content);
+    let response = send_webdav_upload_request(config, "上传备份", request).await?;
 
     let status = response.status().as_u16();
 
@@ -2276,12 +2323,11 @@ async fn upload_webdav_backup(
         )));
     }
 
-    let response = reqwest::Client::new()
-        .head(build_webdav_file_url(config)?)
-        .header(AUTHORIZATION, build_webdav_auth_header(config))
-        .send()
-        .await
-        .map_err(|error| ManagerError::System(error.to_string()))?;
+    let request = client
+        .head(temporary_url.clone())
+        .header(AUTHORIZATION, &auth)
+        .header(ACCEPT_ENCODING, "identity");
+    let response = send_webdav_upload_request(config, "上传后校验", request).await?;
     let status = response.status().as_u16();
 
     if status != 200 {
@@ -2308,6 +2354,24 @@ async fn upload_webdav_backup(
         )));
     }
 
+    // 同目录 MOVE 只发布大小校验通过的备份。
+    let request = client
+        .request(move_method, temporary_url.clone())
+        .header(AUTHORIZATION, &auth)
+        .header("Destination", file_url.as_str())
+        .header("Overwrite", "T");
+    let response = send_webdav_upload_request(config, "替换正式备份", request).await?;
+    let status = response.status().as_u16();
+    if ![200, 201, 204].contains(&status) {
+        let detail = read_webdav_error_detail(response, config).await?;
+        return Err(ManagerError::System(format!(
+            "{}替换正式备份失败：{}{}",
+            cloud_sync_provider_name(config),
+            status,
+            detail
+        )));
+    }
+
     Ok(())
 }
 
@@ -2316,7 +2380,7 @@ pub(crate) async fn upload_webdav_content(
     config: &CloudSyncSettings,
     content: String,
 ) -> Result<(), ManagerError> {
-    upload_webdav_backup(config, content).await
+    upload_webdav_backup(&reqwest::Client::new(), config, content).await
 }
 
 fn webdav_content_length(headers: &HeaderMap) -> Option<u64> {
@@ -2574,25 +2638,31 @@ async fn read_webdav_error_detail(
     Ok(format!("，{}", body.chars().take(300).collect::<String>()))
 }
 
-fn build_webdav_file_url(config: &CloudSyncSettings) -> Result<String, ManagerError> {
-    let root_url = if config.webdav_url.ends_with('/') {
-        config.webdav_url.clone()
-    } else {
-        format!("{}/", config.webdav_url)
-    };
-    let mut url =
-        url::Url::parse(&root_url).map_err(|error| ManagerError::System(error.to_string()))?;
+fn build_webdav_file_url(config: &CloudSyncSettings) -> Result<url::Url, ManagerError> {
+    let mut url = url::Url::parse(&config.webdav_url)
+        .map_err(|error| ManagerError::System(error.to_string()))?;
     let mut segments = url
         .path_segments_mut()
         .map_err(|_| ManagerError::System("WebDAV 地址非法".to_string()))?;
     segments.pop_if_empty();
 
-    for segment in config.file_name.split('/').filter(|item| !item.is_empty()) {
+    let mut file_segments = config.file_name.split('/').filter(|item| !item.is_empty());
+    let first_segment = file_segments
+        .next()
+        .ok_or_else(|| ManagerError::System("WebDAV 备份文件名不能为空".to_string()))?;
+    if matches!(first_segment, "." | "..") {
+        return Err(ManagerError::System("WebDAV 备份文件名非法".to_string()));
+    }
+    segments.push(first_segment);
+    for segment in file_segments {
+        if matches!(segment, "." | "..") {
+            return Err(ManagerError::System("WebDAV 备份文件名非法".to_string()));
+        }
         segments.push(segment);
     }
     drop(segments);
 
-    Ok(url.to_string())
+    Ok(url)
 }
 
 fn build_webdav_auth_header(config: &CloudSyncSettings) -> String {
@@ -3762,9 +3832,24 @@ mod tests {
                         .unwrap();
                 let mut request = Vec::new();
                 let mut buffer = [0u8; 2048];
-                while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let header_end = loop {
+                    if let Some(end) = request.windows(4).position(|window| window == b"\r\n\r\n") {
+                        break end + 4;
+                    }
                     let count = stream.read(&mut buffer).await.unwrap();
                     assert!(count > 0 && request.len() < 16384);
+                    request.extend_from_slice(&buffer[..count]);
+                };
+                let headers = std::str::from_utf8(&request[..header_end])
+                    .unwrap()
+                    .to_lowercase();
+                let body_length = headers
+                    .lines()
+                    .find_map(|line| line.strip_prefix("content-length:"))
+                    .map_or(0, |value| value.trim().parse::<usize>().unwrap());
+                while request.len() < header_end + body_length {
+                    let count = stream.read(&mut buffer).await.unwrap();
+                    assert!(count > 0);
                     request.extend_from_slice(&buffer[..count]);
                 }
                 requests.push(String::from_utf8(request).unwrap().to_lowercase());
@@ -3822,6 +3907,97 @@ mod tests {
             format!("HTTP/1.1 {status} Test\r\nConnection: close\r\n{headers}\r\n").into_bytes();
         response.extend_from_slice(body);
         response
+    }
+
+    #[test]
+    fn webdav_upload_reports_the_failed_stage_and_preserves_the_cause() {
+        tauri::async_runtime::block_on(async {
+            use std::error::Error;
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            let requests = [
+                ("mkcol ", "创建备份目录"),
+                ("put ", "上传备份"),
+                ("head ", "上传后校验"),
+                ("move ", "替换正式备份"),
+            ];
+            let empty = |status| webdav_test_response(status, "Content-Length: 0\r\n", b"");
+            let head = webdav_test_response(200, "Content-Length: 6\r\n", b"");
+            let success = [empty(201), empty(201), head, empty(204)];
+
+            for (failed, (method, phase)) in requests.iter().enumerate() {
+                let mut responses = success[..failed].to_vec();
+                responses.push(Vec::new());
+                if failed > 0 {
+                    responses.push(empty(204));
+                }
+                let (config, server) = webdav_test_server(responses).await;
+                let error = super::upload_webdav_backup(&client, &config, "backup".into())
+                    .await
+                    .unwrap_err();
+                let message = error.to_string();
+                assert!(
+                    message.contains(&format!("Koofr{phase}失败")),
+                    "{phase}：{message}"
+                );
+                assert!(!message.contains("http://"));
+                assert!(!message.contains(&config.password));
+                assert!(error.source().and_then(Error::source).is_some());
+                let seen = server.await.unwrap();
+                assert!(seen[failed].starts_with(method));
+                if failed > 0 {
+                    let temporary_path = seen[1].split_whitespace().nth(1).unwrap();
+                    assert!(seen[failed + 1].starts_with(&format!("delete {temporary_path} ")));
+                }
+            }
+        });
+    }
+
+    #[test]
+    fn webdav_upload_only_replaces_the_backup_after_validation() {
+        tauri::async_runtime::block_on(async {
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            let created = webdav_test_response(201, "Content-Length: 0\r\n", b"");
+            let no_content = webdav_test_response(204, "Content-Length: 0\r\n", b"");
+            let short_head = webdav_test_response(200, "Content-Length: 3\r\n", b"");
+            let (config, server) = webdav_test_server(vec![
+                created.clone(),
+                created.clone(),
+                short_head,
+                no_content.clone(),
+            ])
+            .await;
+            let error = super::upload_webdav_backup(&client, &config, "backup".into())
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("上传不完整"));
+            let seen = server.await.unwrap();
+            let temporary_path = seen[1].split_whitespace().nth(1).unwrap();
+            assert!(temporary_path.starts_with("/dav/aimanager-upload-"));
+            assert!(seen[2].starts_with(&format!("head {temporary_path} ")));
+            assert!(seen[3].starts_with(&format!("delete {temporary_path} ")));
+            assert!(!seen.iter().any(|request| request.contains("test.aimbackup")));
+
+            let head = webdav_test_response(200, "Content-Length: 6\r\n", b"");
+            let (mut config, server) =
+                webdav_test_server(vec![created.clone(), created, head, no_content]).await;
+            config.file_name = "nested dir/test.aimbackup".to_string();
+            super::upload_webdav_backup(&client, &config, "backup".into())
+                .await
+                .unwrap();
+            let seen = server.await.unwrap();
+            let temporary_path = seen[1].split_whitespace().nth(1).unwrap();
+            assert!(temporary_path.starts_with("/dav/nested%20dir/aimanager-upload-"));
+            assert!(seen[0].starts_with("mkcol /dav "));
+            assert!(seen[1].starts_with(&format!("put {temporary_path} ")));
+            assert!(seen[1].ends_with("\r\n\r\nbackup"));
+            assert!(seen[2].starts_with(&format!("head {temporary_path} ")));
+            assert!(seen[3].starts_with(&format!("move {temporary_path} ")));
+            assert!(seen[3].contains(&format!(
+                "\r\ndestination: {}/nested%20dir/test.aimbackup\r\n",
+                config.webdav_url
+            )));
+            assert!(seen[3].contains("\r\noverwrite: t\r\n"));
+        });
     }
 
     #[test]

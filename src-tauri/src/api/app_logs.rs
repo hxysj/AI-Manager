@@ -278,6 +278,7 @@ fn error_details(error: &ManagerError) -> Value {
           ManagerError::Io(_) => "io",
           ManagerError::System(_) => "system",
           ManagerError::OpenAiRequest { .. } => "http",
+          ManagerError::WebDavRequest { .. } => "webdav-request",
           ManagerError::Json(_) => "json",
           ManagerError::Sqlite(_) => "sqlite",
       },

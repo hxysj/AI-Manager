@@ -12,6 +12,14 @@ pub enum ManagerError {
     System(String),
     #[error("OpenAI 请求失败：{status_code} {message}")]
     OpenAiRequest { status_code: u16, message: String },
+    #[error("{provider}{stage}失败（耗时 {elapsed_ms} 毫秒）：{source}")]
+    WebDavRequest {
+        provider: &'static str,
+        stage: &'static str,
+        elapsed_ms: u128,
+        #[source]
+        source: reqwest::Error,
+    },
     #[error("数据序列化失败：{0}")]
     Json(#[from] serde_json::Error),
     #[error("数据库处理失败：{0}")]
