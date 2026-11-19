@@ -20,6 +20,8 @@ export const assistantApi = {
     request("assistant:desktop-send", { message, images }),
   desktopOpen: () => request("assistant:desktop-open"),
   desktopReady: () => request("assistant:desktop-ready"),
+  desktopResize: (height, menuOpen) =>
+    request("assistant:desktop-resize", { height, menuOpen }),
   desktopClose: () => request("assistant:desktop-close"),
   desktopDrag: () => request("assistant:desktop-drag"),
   desktopStatus: () => request("assistant:desktop-status"),

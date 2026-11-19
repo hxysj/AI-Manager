@@ -114,6 +114,8 @@ function loadComponent(path) {
           }),
           desktopSend: api.desktopSend,
           desktopReady: api.desktopReady,
+          desktopResize: (height, menuOpen) =>
+            api.desktopResize({ height, menuOpen }),
           desktopClose: api.desktopClose,
           onDesktopOpen: async (callback) => {
             desktopOpenListeners.add(callback)
@@ -277,7 +279,13 @@ function hostNode(type, text = "") {
       document.activeElement = this
     },
     getBoundingClientRect() {
-      return { left: 0, top: 0, right: 560, bottom: 560 }
+      return {
+        left: 0,
+        top: 0,
+        right: 560,
+        bottom: 560,
+        height: this.clientHeight
+      }
     },
     get options() {
       return this.children.filter((node) => node.type === "option")
@@ -1243,6 +1251,7 @@ handlers.onStateChangedReady = (callback) => {
   return () => appStateListeners.delete(callback)
 }
 handlers.desktopReady = () => ({ visible: true })
+handlers.desktopResize = () => true
 handlers.desktopClose = () => true
 handlers.desktopSend = (message) => {
   beginChat()
@@ -1256,13 +1265,38 @@ handlers.desktopSend = (message) => {
 const DesktopInput = loadComponent(
   "src/features/assistant/components/DesktopInput.vue"
 )
+let resizeObserved = null
+globalThis.ResizeObserver = class {
+  constructor(callback) {
+    this.callback = callback
+  }
+  observe(element) {
+    resizeObserved = { element, callback: this.callback }
+  }
+  disconnect() {
+    resizeObserved = null
+  }
+}
 const inputWindow = mount(DesktopInput)
-await tick()
+await tickDelay(0)
 assert.equal(inputWindow.state.visible, true)
-assert.equal(
-  vue.toRaw(document.activeElement),
-  findNodes(inputWindow.root, "desktop-assistant-textarea")[0]
+assert.ok(
+  vue.toRaw(document.activeElement) ===
+    findNodes(inputWindow.root, "desktop-assistant-textarea")[0],
+  "原生窗口首次调整尺寸后，输入框仍应自动聚焦"
 )
+const lastInputResize = () =>
+  calls.findLast((call) => call.name === "desktopResize")?.payload
+assert.deepEqual(lastInputResize(), { height: 400, menuOpen: false })
+inputWindow.state.modelMenuOpen = true
+await tick()
+assert.deepEqual(lastInputResize(), { height: 400, menuOpen: true })
+inputWindow.state.modelMenuOpen = false
+await tick()
+assert.deepEqual(lastInputResize(), { height: 400, menuOpen: false })
+resizeObserved.element.clientHeight = 460
+await resizeObserved.callback()
+assert.deepEqual(lastInputResize(), { height: 460, menuOpen: false })
 // 30 秒收起只在失焦且未悬浮时生效，交互和重开都必须使旧计时失效。
 assert.equal(inputIdleTimers.length, 0, "聚焦状态不应安排自动收起")
 document.focused = false

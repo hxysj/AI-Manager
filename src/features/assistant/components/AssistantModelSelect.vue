@@ -12,13 +12,16 @@
       placeholder="选择 Provider 和模型"
       :popper-class="compact ? 'assistant-model-compact-popper' : ''"
       :popper-style="compact ? { maxWidth: 'calc(100vw - 24px)' } : undefined"
-      placement="top-end"
-      :fallback-placements="['top-end', 'bottom-end']"
+      :placement="compact ? 'bottom-end' : 'top-end'"
+      :fallback-placements="
+        compact ? ['bottom-end'] : ['top-end', 'bottom-end']
+      "
       filterable
       allow-create
       default-first-option
       :disabled="disabled || modelSaving"
       @update:model-value="selectModel"
+      @visible-change="$emit('menu-change', $event)"
     >
       <el-option-group
         v-for="group in modelGroups"
@@ -58,7 +61,7 @@ const props = defineProps({
   persist: { type: Boolean, default: true },
   disabled: Boolean
 })
-const emit = defineEmits(["change", "saving", "error"])
+const emit = defineEmits(["change", "saving", "error", "menu-change"])
 const settings = computed(() => props.settings)
 const modelSaving = ref(false)
 const { localModels, localModelsError } = useAssistantLocalModels()
@@ -239,7 +242,7 @@ onBeforeUnmount(() => {
     border-color: var(--color-primary);
   }
 }
-// 桌面窗口高度固定，缩小列表并在弹层内滚动，避免被原生窗口裁切。
+// 桌面窗口展开时为这段滚动列表留出空间。
 :global(.assistant-model-compact-popper .el-select-dropdown__wrap) {
   max-height: 120px;
 }

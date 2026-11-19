@@ -204,7 +204,7 @@ pub(crate) fn configure_agent(
             return Err(store::fail("请选择多协议工具使用的服务商"));
         }
         for instance in store::query(&c,
-            "SELECT id FROM service_agent_instances WHERE agent_type=?1 AND status<>'detached'
+            "SELECT id FROM service_agent_instances WHERE agent_type=?1 AND (status<>'detached' OR provider_id IS NOT NULL)
             AND config_path NOT LIKE 'internal:%' AND config_path NOT LIKE 'test:%'", &[&agent])? {
             detach(paths, store::text(&instance, "id"))?;
         }
@@ -785,6 +785,11 @@ fn apply(
         );
         c.execute("UPDATE service_agent_instances SET status='active',sync_status='synced',applied_revision=?2,
             last_synced_at=?3,last_error='',updated_at=?3,applied_hash=?4 WHERE id=?1",params![instance,config["revision"].as_i64(),store::now(),applied_hash])?;
+        // 已成功切换目录时，旧目录的暂停记录不能在下一次启用时再次接管。
+        c.execute("UPDATE service_agent_instances SET provider_id=NULL,model_id=NULL,last_error=''
+            WHERE agent_type=?1 AND id<>?2 AND status='detached' AND provider_id IS NOT NULL
+            AND config_path NOT LIKE 'internal:%' AND config_path NOT LIKE 'test:%'",
+            params![agent,instance])?;
         Ok::<_, ManagerError>(())
     };
     if refresh.is_some() {
@@ -923,6 +928,10 @@ fn restored_content(path: &Path, before: Option<&str>, after: &str, current: Opt
 }
 
 pub(crate) fn detach(paths: &AppPaths, instance: &str) -> Result<(), ManagerError> {
+    detach_instance(paths, instance, false)
+}
+
+fn detach_instance(paths: &AppPaths, instance: &str, remember: bool) -> Result<(), ManagerError> {
     let mut c = database::open(paths)?;
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
     // 与网关入站共用写事务，检查在途请求和撤销 Token 之间不能再插入请求。
@@ -991,8 +1000,10 @@ pub(crate) fn detach(paths: &AppPaths, instance: &str) -> Result<(), ManagerErro
         tx.commit()?;
         return Err(store::fail(conflicts.join("；")));
     }
-    tx.execute("UPDATE service_agent_instances SET status='detached',sync_status='restored',provider_id=NULL,model_id=NULL,
-        last_error='',revision=revision+1,updated_at=?2 WHERE id=?1",params![instance,store::now()])?;
+    // 关闭共享模式只暂停接管。手动解除接管仍然清空选择。
+    tx.execute("UPDATE service_agent_instances SET status='detached',sync_status='restored',
+        provider_id=CASE WHEN ?3 THEN provider_id END,model_id=CASE WHEN ?3 THEN model_id END,
+        last_error='',revision=revision+1,updated_at=?2 WHERE id=?1",params![instance,store::now(),remember])?;
     // 旧版可能留下同一 Agent 的多个目录，关闭其中一个时保留其余目录的访问。
     if let Some(other) = store::query(&tx,"SELECT i.id FROM service_agent_instances i
         WHERE i.agent_type=(SELECT agent_type FROM service_agent_instances WHERE id=?1) AND i.status='active' AND i.sync_status='synced'
@@ -1004,6 +1015,25 @@ pub(crate) fn detach(paths: &AppPaths, instance: &str) -> Result<(), ManagerErro
     }
     tx.execute("UPDATE service_gateway_tokens SET status='revoked',revoked_at=?2 WHERE instance_id=?1 AND status='active'",params![instance,store::now()])?;
     tx.commit()?;
+    Ok(())
+}
+
+fn resume_paused_agents(paths: &AppPaths) -> Result<(), ManagerError> {
+    let c = database::open(paths)?;
+    for instance in store::query(&c, "SELECT id,agent_type,agent_version,config_path,provider_id,model_id
+        FROM service_agent_instances WHERE status='detached' AND provider_id IS NOT NULL
+        AND agent_type IN ('codex','claude','claude-desktop')
+        AND config_path NOT LIKE 'internal:%' AND config_path NOT LIKE 'test:%'
+        AND config_path NOT LIKE 'external:%'", &[])? {
+        let agent = store::text(&instance, "agent_type");
+        // 重新读取旧模式留下的文件作为备份，沿用原来的服务商、模型和固定令牌。
+        if let Err(error) = apply(paths, &json!([{"id":agent,"version":instance["agent_version"]}]),
+            &json!({"agentType":agent,"providerId":instance["provider_id"],"modelId":instance["model_id"],
+                "configPath":instance["config_path"]}), Some(&instance)) {
+            c.execute("UPDATE service_agent_instances SET last_error=?2 WHERE id=?1",
+                params![store::text(&instance,"id"),format!("恢复上次接管失败：{error}")])?;
+        }
+    }
     Ok(())
 }
 
@@ -1037,12 +1067,22 @@ pub(crate) fn switch_backend(paths: &AppPaths, backend: &str) -> Result<(), Mana
             store::migrate(paths)?;
         }
         if backend == "legacy" {
+            let mut remembered = std::collections::HashSet::new();
             for instance in store::query(
                 &c,
-                "SELECT id FROM service_agent_instances WHERE status<>'detached'",
+                "SELECT i.id,i.agent_type,(
+                    i.status='active' AND i.agent_type IN ('codex','claude','claude-desktop')
+                    AND i.config_path NOT LIKE 'internal:%' AND i.config_path NOT LIKE 'test:%'
+                    AND i.config_path NOT LIKE 'external:%'
+                ) AS resumable FROM service_agent_instances i WHERE i.status<>'detached'
+                ORDER BY EXISTS(SELECT 1 FROM service_gateway_tokens t WHERE t.instance_id=i.id AND t.status='active') DESC,
+                    i.last_synced_at DESC,i.id",
                 &[],
             )? {
-                detach(paths, store::text(&instance, "id"))?;
+                // 历史版本可能有多个目录，记住当前使用固定令牌的目录。
+                let remember = instance["resumable"] == 1
+                    && remembered.insert(store::text(&instance, "agent_type").to_string());
+                detach_instance(paths, store::text(&instance, "id"), remember)?;
             }
         }
         let mut c = database::open(paths)?;
@@ -1059,11 +1099,17 @@ pub(crate) fn switch_backend(paths: &AppPaths, backend: &str) -> Result<(), Mana
     if let Err(error) = &result {
         c.execute("UPDATE service_operations SET status='failed',error_message=?2,completed_at=?3 WHERE id=?1 AND operation_type='switch'",params![operation,error.to_string(),store::now()])?;
     }
+    // 启用后恢复接管。关闭中途失败且仍为共享模式时，接回已暂停的实例。
+    let resumed = if store::active(paths)? {
+        resume_paused_agents(paths)
+    } else {
+        Ok(())
+    };
     c.execute(
         "UPDATE app_metadata SET value='1' WHERE key='service_provider:accepting'",
         [],
     )?;
-    result
+    result.and(resumed)
 }
 
 pub(crate) fn recover(paths: &AppPaths) -> Result<(), ManagerError> {
@@ -1087,6 +1133,9 @@ pub(crate) fn recover(paths: &AppPaths) -> Result<(), ManagerError> {
     // 升级时自动补同步旧版本保存服务商后遗留的 pending 实例，不更换现有令牌。
     for provider in store::query(&c,"SELECT DISTINCT provider_id FROM service_agent_instances WHERE status='active' AND sync_status='pending'",&[])? {
         let _ = sync_provider(paths,store::text(&provider,"provider_id"));
+    }
+    if store::active(paths)? {
+        resume_paused_agents(paths)?;
     }
     Ok(())
 }

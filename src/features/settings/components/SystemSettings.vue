@@ -7,11 +7,14 @@
           <div class="system-settings-text">
             <h3 class="system-settings-title">共享服务商模式</h3>
             <p class="system-settings-description">
-              {{ providerModePending
-                ? (serviceMode ? "正在恢复接管文件并切回旧模式…" : "正在同步 Codex 配置并启用新模式…")
-                : (serviceMode
-                  ? "已启用 · 各 Agent 共用服务商配置，通过本地网关转换协议。关闭后恢复旧模式；历史用量继续保留。"
-                  : "启用时自动同步旧 Codex 服务商与官方账号，并切换到新配置界面。Usage 页面和历史用量继续使用。")
+              {{
+                providerModePending
+                  ? serviceMode
+                    ? "正在保存 Agent 选择并恢复旧模式配置…"
+                    : "正在同步服务商并恢复上次的 Agent 选择…"
+                  : serviceMode
+                    ? "已启用 · 各 Agent 通过本地网关共用服务商。关闭时保存各 Agent 的服务商和模型，并恢复旧模式配置。"
+                    : "启用时同步旧 Codex 服务商与官方账号，并恢复各 Agent 上次使用的服务商和模型。"
               }}
             </p>
           </div>
@@ -184,7 +187,9 @@ async function toggleProviderMode() {
   if (props.pending || providerModePending.value) return
   providerModePending.value = true
   try {
-    return await props.switchProviderBackend(serviceMode.value ? "legacy" : "service")
+    return await props.switchProviderBackend(
+      serviceMode.value ? "legacy" : "service"
+    )
   } finally {
     providerModePending.value = false
   }

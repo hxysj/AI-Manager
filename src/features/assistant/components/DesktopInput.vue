@@ -1,6 +1,7 @@
 <template>
   <section
     v-if="visible"
+    ref="panel"
     class="desktop-assistant-input"
     aria-label="和助手说话"
     tabindex="-1"
@@ -105,6 +106,7 @@
           @change="settings = $event"
           @saving="modelSaving = $event"
           @error="error = $event"
+          @menu-change="modelMenuOpen = $event"
         />
         <button
           class="desktop-assistant-send"
@@ -129,7 +131,7 @@
 </template>
 
 <script setup>
-import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue"
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { ArrowUp, Square, X } from "lucide-vue-next"
 import { appApi, assistantApi } from "@/api"
 import { quickNotesApi } from "@/api/modules/quick-notes"
@@ -145,10 +147,12 @@ const quickNoteMode = ref(false)
 const noteSaving = ref(false)
 const noteCapture = ref(null)
 const error = ref("")
+const panel = ref(null)
 const input = ref(null)
 const catalog = ref({})
 const images = ref([])
 const modelSaving = ref(false)
+const modelMenuOpen = ref(false)
 const settings = ref({})
 const task = ref({})
 const noteTask = ref({})
@@ -201,7 +205,36 @@ let eventVersion = 0
 let disposed = false
 let unfocusedTimer = null
 let inputHovered = false
+let resizeQueue = Promise.resolve()
 const listeners = []
+
+// 串行调整原生窗口，防止模型列表快速开合时旧的高度覆盖新高度。
+function resizeInput() {
+  resizeQueue = resizeQueue.then(async () => {
+    if (disposed || !visible.value || !panel.value) return
+    try {
+      await assistantApi.desktopResize(
+        Math.ceil(panel.value.getBoundingClientRect().height),
+        modelMenuOpen.value
+      )
+    } catch (failure) {
+      if (!disposed && visible.value)
+        error.value = failure.message || String(failure)
+    }
+  })
+  return resizeQueue
+}
+
+watch(panel, (element, _, onCleanup) => {
+  if (!element) return
+  const observer = new ResizeObserver(resizeInput)
+  observer.observe(element)
+  onCleanup(() => observer.disconnect())
+})
+watch(modelMenuOpen, resizeInput, { flush: "post" })
+watch(visible, (value) => {
+  if (!value) modelMenuOpen.value = false
+})
 
 function applyTask(snapshot) {
   task.value = snapshot
@@ -273,6 +306,7 @@ async function open() {
   error.value = ""
   await nextTick()
   input.value?.focus()
+  resizeInput()
   if (!isWindowFocused()) scheduleUnfocusedClose()
 }
 
@@ -417,6 +451,7 @@ onMounted(async () => {
     if (version === eventVersion) applyTask(snapshot)
     visible.value = true
     await nextTick()
+    await resizeInput()
     const result = await assistantApi.desktopReady()
     if (!disposed) {
       visible.value = result.visible
@@ -427,6 +462,8 @@ onMounted(async () => {
       error.value = failure.message || String(failure)
       visible.value = true
       try {
+        await nextTick()
+        await resizeInput()
         const result = await assistantApi.desktopReady()
         if (!disposed) visible.value = result.visible
       } catch {
@@ -450,20 +487,18 @@ onBeforeUnmount(() => {
 
 <style scoped lang="less">
 .desktop-assistant-input {
-  height: 100vh;
-  padding: 10px;
+  padding: 4px;
   outline: none;
   .desktop-assistant-composer {
     position: relative;
     display: flex;
-    max-height: 100%;
     flex-direction: column;
     gap: 8px;
     padding: 12px;
     border: 1px solid var(--color-line);
     border-radius: 14px;
     background: var(--color-panel);
-    box-shadow: 0 4px 12px rgba(29, 71, 129, 0.14);
+    box-shadow: 0 1px 4px rgba(29, 71, 129, 0.14);
     color: var(--color-text);
     cursor: move;
     font-size: var(--font-size-sm);

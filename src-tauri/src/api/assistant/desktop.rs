@@ -5,6 +5,10 @@ use tauri::{
     AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewUrl, WebviewWindowBuilder,
 };
 
+const INPUT_WIDTH: f64 = 440.0;
+const INITIAL_INPUT_HEIGHT: f64 = 128.0;
+const MODEL_MENU_HEIGHT: f64 = 148.0;
+
 #[derive(Clone, Default)]
 pub struct DesktopAssistant {
     inner: Arc<Mutex<DesktopState>>,
@@ -19,6 +23,7 @@ struct DesktopState {
     error: String,
     ready: bool,
     requested: bool,
+    input_height: Option<f64>,
 }
 
 pub fn sync(app: &AppHandle, settings: &AssistantSettings) {
@@ -30,6 +35,7 @@ pub fn sync(app: &AppHandle, settings: &AssistantSettings) {
         if !settings.enabled {
             state.requested = false;
             state.ready = false;
+            state.input_height = None;
             state.error.clear();
         }
     }
@@ -51,7 +57,7 @@ pub fn sync(app: &AppHandle, settings: &AssistantSettings) {
     }
 }
 
-pub fn dispatch(app: &AppHandle, action: &str) -> Result<Value, ManagerError> {
+pub fn dispatch(app: &AppHandle, action: &str, payload: Option<Value>) -> Result<Value, ManagerError> {
     let service = app.state::<DesktopAssistant>();
     match action {
         "status" => {
@@ -90,6 +96,41 @@ pub fn dispatch(app: &AppHandle, action: &str) -> Result<Value, ManagerError> {
             }
             Ok(Value::Null)
         }
+        "resize" => {
+            let payload = payload.unwrap_or_default();
+            let height = payload["height"]
+                .as_f64()
+                .filter(|height| (1.0..=1024.0).contains(height))
+                .ok_or_else(|| failure("输入框高度无效"))?;
+            if let Some(window) = app.get_webview_window("assistant-desktop") {
+                service.inner.lock().unwrap().input_height = Some(height);
+                // 只缓存卡片高度，关闭后再次唤出时无需为下拉层预留空间。
+                let height = if payload["menuOpen"] == true {
+                    height + MODEL_MENU_HEIGHT
+                } else {
+                    height
+                };
+                let monitor = window.current_monitor().map_err(failure)?;
+                let scale = window.scale_factor().map_err(failure)?;
+                let current = window.inner_size().map_err(failure)?;
+                let mut size = PhysicalSize::new(current.width, (height * scale).ceil() as u32);
+                if let Some(monitor) = monitor {
+                    let area = monitor.work_area();
+                    size.height = size.height.min(area.size.height);
+                    let position = window.outer_position().map_err(failure)?;
+                    let min_y = i64::from(area.position.y);
+                    let max_y = min_y + i64::from(area.size.height - size.height);
+                    let y = i64::from(position.y).clamp(min_y, max_y) as i32;
+                    if y != position.y {
+                        window.set_position(PhysicalPosition::new(position.x, y)).map_err(failure)?;
+                    }
+                }
+                if size != current {
+                    window.set_size(size).map_err(failure)?;
+                }
+            }
+            Ok(Value::Null)
+        }
         _ => Err(ManagerError::UnknownChannel(format!(
             "assistant:desktop-{action}"
         ))),
@@ -108,6 +149,7 @@ fn open_input(app: &AppHandle) -> Result<(), ManagerError> {
     }
     state.requested = true;
     let ready = state.ready;
+    let height = state.input_height.unwrap_or(INITIAL_INPUT_HEIGHT);
     drop(state);
     let window = match app.get_webview_window("assistant-desktop") {
         Some(window) => window,
@@ -117,7 +159,7 @@ fn open_input(app: &AppHandle) -> Result<(), ManagerError> {
             WebviewUrl::App("index.html?panel=assistant-input".into()),
         )
         .title("和助手说话")
-        .inner_size(440.0, 300.0)
+        .inner_size(INPUT_WIDTH, height)
         .decorations(false)
         .resizable(false)
         .skip_taskbar(true)
@@ -136,8 +178,8 @@ fn open_input(app: &AppHandle) -> Result<(), ManagerError> {
     {
         let scale = monitor.scale_factor();
         let size = PhysicalSize::new(
-            (440.0 * scale).round() as u32,
-            (300.0 * scale).round() as u32,
+            (INPUT_WIDTH * scale).round() as u32,
+            ((height * scale).ceil() as u32).min(monitor.work_area().size.height),
         );
         let position = input_position(cursor, monitor.work_area(), size, scale);
         window.set_position(position).map_err(failure)?;
@@ -184,6 +226,7 @@ pub fn window_event(app: &AppHandle, label: &str, event: &tauri::WindowEvent) {
         let mut state = service.inner.lock().unwrap();
         state.ready = false;
         state.requested = false;
+        state.input_height = None;
     }
 }
 

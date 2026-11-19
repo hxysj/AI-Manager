@@ -1115,9 +1115,11 @@ fn service_takeover_restores_original_and_preserves_external_file_changes() {
     let restored = std::fs::read_to_string(directory.join("config.toml")).unwrap();
     assert_eq!(toml_edit::de::from_str::<Value>(&restored).unwrap(), toml_edit::de::from_str::<Value>(original).unwrap());
     assert!(!directory.join(".ai_manager_service_models.json").exists());
-    service_provider::switch_backend(&f.paths, "service").unwrap();
     std::fs::write(directory.join("config.toml"), original).unwrap();
-    service_provider::activate(&f.paths, &json!([]), &value).unwrap();
+    service_provider::switch_backend(&f.paths, "service").unwrap();
+    assert!(directory.join(".ai_manager_service_models.json").exists());
+    assert!(std::fs::read_to_string(directory.join("config.toml"))
+        .unwrap().contains("model_provider = \"ai_manager_service\""));
     service_provider::detach(&f.paths, text(&instance, "instanceId")).unwrap();
     assert_eq!(
         std::fs::read_to_string(directory.join("config.toml")).unwrap(),
@@ -1126,6 +1128,63 @@ fn service_takeover_restores_original_and_preserves_external_file_changes() {
     assert!(!directory.join(".ai_manager_service_models.json").exists());
     service_provider::switch_backend(&f.paths, "legacy").unwrap();
     assert!(!active(&f.paths).unwrap());
+}
+
+#[test]
+fn service_reenable_restores_each_agents_selection_and_fixed_token() {
+    let f = Fixture::new();
+    let first = f.provider();
+    let second = f.provider();
+    let c = database::open(&f.paths).unwrap();
+    service_provider::switch_backend(&f.paths, "service").unwrap();
+    let mut clients = Vec::new();
+    for (agent, provider, name, original) in [
+        ("codex", &first, "config.toml", "model = 'legacy'\n"),
+        ("claude", &second, "settings.json", "{\"model\":\"legacy\"}\n"),
+    ] {
+        let mut config = super::config(&c, provider).unwrap();
+        config["models"] = json!(["model", "remembered"]);
+        save(&f.paths, &config).unwrap();
+        let model: String = c.query_row("SELECT id FROM service_provider_models
+            WHERE provider_id=?1 AND upstream_model_id='remembered'", [provider], |r| r.get(0)).unwrap();
+        let directory = f.root.join(agent);
+        std::fs::create_dir_all(&directory).unwrap();
+        let file = directory.join(name);
+        std::fs::write(&file, original).unwrap();
+        let instance = service_provider::activate(&f.paths, &json!([]),
+            &json!({"agentType":agent,"providerId":provider,"modelId":model,"configPath":directory})).unwrap();
+        let encrypted: String = c.query_row("SELECT value FROM app_metadata WHERE key=?1",
+            [format!("service_provider:agent_token:{agent}")], |r| r.get(0)).unwrap();
+        let token = decrypt_provider_key(&encrypted).unwrap();
+        let token_id = service::authorize(&c, &token).unwrap()["tokenId"].clone();
+        clients.push((provider, model, file, original, instance["instanceId"].clone(), token, token_id));
+    }
+    service_provider::switch_backend(&f.paths, "legacy").unwrap();
+    service_provider::recover(&f.paths).unwrap();
+    for (_, _, file, original, _, token, _) in &clients {
+        assert_eq!(std::fs::read_to_string(file).unwrap(), *original);
+        assert!(service::authorize(&c, token).is_err());
+        std::fs::write(file, original.replace("legacy", "changed_in_legacy")).unwrap();
+    }
+    service_provider::switch_backend(&f.paths, "service").unwrap();
+    for (provider, model, file, _, instance, token, token_id) in &clients {
+        let identity = service::authorize(&c, token).unwrap();
+        assert_eq!(identity["providerId"], provider.as_str());
+        assert_eq!(identity["modelId"], model.as_str());
+        assert_eq!(identity["instanceId"], *instance);
+        assert_eq!(identity["tokenId"], *token_id);
+        assert!(std::fs::read_to_string(file).unwrap().contains("remembered"));
+    }
+    let claude = &clients[1];
+    service_provider::detach(&f.paths, claude.4.as_str().unwrap()).unwrap();
+    service_provider::switch_backend(&f.paths, "legacy").unwrap();
+    for (_, _, file, original, _, _, _) in &clients {
+        assert_eq!(std::fs::read_to_string(file).unwrap(), original.replace("legacy", "changed_in_legacy"));
+    }
+    service_provider::switch_backend(&f.paths, "service").unwrap();
+    assert!(service::authorize(&c, &clients[0].5).is_ok());
+    assert!(service::authorize(&c, &claude.5).is_err());
+    assert!(std::fs::read_to_string(&claude.2).unwrap().contains("changed_in_legacy"));
 }
 
 #[test]

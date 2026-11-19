@@ -108,8 +108,8 @@ async fn dispatch_command(
     if let Some(action) = channel.strip_prefix("translation:desktop-") {
         return translation::desktop::dispatch(&app, action, payload);
     }
-    if let Some(action @ ("status" | "open" | "ready" | "close" | "drag")) = channel.strip_prefix("assistant:desktop-") {
-        return assistant::desktop::dispatch(&app, action);
+    if let Some(action @ ("status" | "open" | "ready" | "close" | "drag" | "resize")) = channel.strip_prefix("assistant:desktop-") {
+        return assistant::desktop::dispatch(&app, action, payload);
     }
     if channel.starts_with("translation:") || channel.starts_with("assistant:") || channel == "screenshot:ocr" {
         return state.dispatch(app, channel, payload).await;
