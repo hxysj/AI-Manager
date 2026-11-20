@@ -66,6 +66,8 @@ pub struct LanShareRuntime {
     token: String,
     access_url: String,
     lan_ip: String,
+    last_available_lan_ip: String,
+    local_ip_changes: Vec<LanShareMessage>,
     port: u16,
     active_sessions: HashMap<String, String>,
     clients: HashMap<String, mpsc::UnboundedSender<WsOutbound>>,
@@ -197,6 +199,8 @@ impl LanShareServerRegistry {
                 token: String::new(),
                 access_url: String::new(),
                 lan_ip: String::new(),
+                last_available_lan_ip: String::new(),
+                local_ip_changes: Vec::new(),
                 port: DEFAULT_PORT,
                 active_sessions: HashMap::new(),
                 clients: HashMap::new(),
@@ -610,6 +614,7 @@ pub async fn get_state(
             "qrSvg": qr_svg,
             "lanIp": runtime.lan_ip,
             "lanIps": lan_ips,
+            "localIpChanges": runtime.local_ip_changes,
             "port": runtime.port,
             "onlineDevices": runtime.clients.len() + runtime.native.online_count()
         },
@@ -1608,6 +1613,23 @@ fn refresh_access_address(runtime: &mut LanShareRuntime, lan_ips: &[String]) -> 
     if runtime.lan_ip == lan_ip && runtime.access_url == access_url {
         return false;
     }
+    if !lan_ip.is_empty() {
+        let previous_ip = &runtime.last_available_lan_ip;
+        if !previous_ip.is_empty() && previous_ip != &lan_ip {
+            let change = ip_change_message(
+                "",
+                "",
+                "本机",
+                previous_ip,
+                &lan_ip,
+                now_millis(),
+            );
+            runtime.local_ip_changes.insert(0, change);
+            runtime.local_ip_changes.truncate(30);
+        }
+        // 断开后保留最近的有效地址，恢复时才知道是否实际换了 IP。
+        runtime.last_available_lan_ip.clone_from(&lan_ip);
+    }
     runtime.lan_ip = lan_ip;
     runtime.access_url = access_url;
     true
@@ -1631,6 +1653,7 @@ pub async fn set_access_ip(
     }
     // 服务监听全部网卡；保留端口和访问凭据，让已连接设备继续传输。
     runtime.lan_ip = lan_ip.clone();
+    runtime.last_available_lan_ip = lan_ip.clone();
     runtime.access_url = format!(
         "http://{}:{}/?token={}",
         lan_ip, runtime.port, runtime.token
@@ -4188,7 +4211,7 @@ fn mobile_page_html() -> String {
         clearInterval(presenceTimer);
         presenceTimer = null;
         if (deviceRemoved) return;
-        setStatus("连接已断开，正在重连...");
+        setStatus("连接已断开，正在重连。若电脑 IP 已变化，请重新扫描电脑上的二维码。");
         reconnectTimer = window.setTimeout(connectWs, 1600);
       };
       ws.onmessage = event => {
@@ -4595,6 +4618,7 @@ pub async fn start_service(
             "qrSvg": if runtime.access_url.is_empty() { String::new() } else { qr_svg(&runtime.access_url)? },
             "lanIp": runtime.lan_ip,
             "lanIps": lan_ips,
+            "localIpChanges": runtime.local_ip_changes,
             "port": runtime.port,
             "onlineDevices": runtime.clients.len() + runtime.native.online_count()
         })));
@@ -4664,12 +4688,14 @@ pub async fn start_service(
     runtime.token = token;
     runtime.access_url = access_url.clone();
     runtime.lan_ip = lan_ip.clone();
+    runtime.last_available_lan_ip = lan_ip.clone();
     runtime.port = port;
     let rotation_registry = registry.clone();
     let rotation_app = app.clone();
     let rotation_paths = paths.clone();
     let mut previous_ips = lan_ips.clone();
     runtime.maintenance = Some(tauri::async_runtime::spawn(async move {
+        let mut published_ip_change = None;
         let mut network_interval = tokio::time::interval(Duration::from_secs(3));
         network_interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         let mut token_interval = tokio::time::interval(Duration::from_secs(15 * 60));
@@ -4683,10 +4709,13 @@ pub async fn start_service(
                     let mut runtime = rotation_registry.inner.lock().await;
                     if runtime.handle.is_none() { break; }
                     let changed = refresh_access_address(&mut runtime, &ips);
+                    let ip_change = runtime.local_ip_changes.first().map(|message| message.id.clone());
                     drop(runtime);
-                    if changed || ips != previous_ips {
+                    if changed || ips != previous_ips || ip_change != published_ip_change {
                         previous_ips = ips;
-                        let _ = emit_state_changed(&rotation_app, &rotation_registry, &rotation_paths).await;
+                        if emit_state_changed(&rotation_app, &rotation_registry, &rotation_paths).await.is_ok() {
+                            published_ip_change = ip_change;
+                        }
                     }
                 },
                 _ = token_interval.tick().fuse() => {
@@ -4739,6 +4768,9 @@ fn stop_runtime(runtime: &mut LanShareRuntime) {
     }
     runtime.token.clear();
     runtime.access_url.clear();
+    runtime.lan_ip.clear();
+    runtime.last_available_lan_ip.clear();
+    runtime.local_ip_changes.clear();
     runtime.clients.clear();
     runtime.active_sessions.clear();
 }
@@ -5005,6 +5037,35 @@ async fn rewrite_device_references(
     Ok(())
 }
 
+fn ip_change_message(
+    session_id: &str,
+    device_id: &str,
+    device_name: &str,
+    old_ip: &str,
+    new_ip: &str,
+    created_at: u64,
+) -> LanShareMessage {
+    let subject = if device_id.is_empty() {
+        "本机"
+    } else {
+        "对端"
+    };
+    LanShareMessage {
+        id: create_id(),
+        session_id: session_id.to_string(),
+        device_id: device_id.to_string(),
+        device_name: device_name.to_string(),
+        direction: "system".into(),
+        message_type: "ip-change".into(),
+        attachments: Vec::new(),
+        content: format!("{subject} IP 已变化：{old_ip} → {new_ip}"),
+        ip: new_ip.to_string(),
+        created_at,
+        delivered: true,
+        read: true,
+    }
+}
+
 fn update_device_ip_references(
     paths: &AppPaths,
     device_id: &str,
@@ -5019,6 +5080,7 @@ fn update_device_ip_references(
     let mut messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages)?;
     let mut changed_sessions = false;
     let mut changed_messages = false;
+    let now = now_millis();
     for session in sessions
         .iter_mut()
         .filter(|session| session.device_id == device_id && session.mode != "group")
@@ -5029,12 +5091,22 @@ fn update_device_ip_references(
                 .filter(|message| message.session_id == session.id && message.ip.is_empty())
             {
                 message.ip = old_ip.to_string();
-                changed_messages = true;
             }
+            messages.insert(
+                0,
+                ip_change_message(
+                    &session.id,
+                    device_id,
+                    &session.device_name,
+                    old_ip,
+                    new_ip,
+                    now,
+                ),
+            );
+            changed_messages = true;
         }
         if session.ip != new_ip {
             session.ip = new_ip.to_string();
-            session.updated_at = now_millis();
             changed_sessions = true;
         }
     }
@@ -5044,6 +5116,7 @@ fn update_device_ip_references(
         write_json_blocking(&paths.lan_share_files.sessions, &json!(sessions))?;
     }
     if changed_messages {
+        messages.truncate(1000);
         write_json_blocking(&paths.lan_share_files.messages, &json!(messages))?;
     }
     Ok(())
@@ -6252,7 +6325,9 @@ async fn mobile_messages(
         let mut messages: Vec<LanShareMessage> =
             read_array(&context.paths.lan_share_files.messages)?;
 
-        messages.retain(|message| message.session_id == session.id);
+        messages.retain(|message| {
+            message.session_id == session.id && message.direction != "system"
+        });
         messages.sort_by(|left, right| left.created_at.cmp(&right.created_at));
         (session, messages)
     };
@@ -8014,6 +8089,31 @@ mod tests {
             )
             .await
             .unwrap();
+            // 检测到对端的新地址就应有提示，不需要等下一次收发。
+            let after_change = super::list_messages(
+                &registry,
+                &paths,
+                json!({ "sessionId": first_session_id, "deviceId": first.id }),
+            )
+            .await
+            .unwrap();
+            let notice = &after_change["data"][0];
+            assert_eq!(notice["direction"], "system");
+            assert_eq!(
+                notice["content"],
+                "对端 IP 已变化：192.168.1.8 → 192.168.1.20"
+            );
+            assert_eq!(notice["read"], true);
+            upsert_device(
+                &registry,
+                &paths,
+                &second.id,
+                "我的手机",
+                "Android Chrome",
+                "192.168.1.20",
+            )
+            .await
+            .unwrap();
             let latest = append_message(
                 &registry,
                 &paths,
@@ -8036,6 +8136,13 @@ mod tests {
             assert_eq!(devices[0].ip, "192.168.1.20");
             assert_eq!(sessions.len(), 1);
             assert_eq!(latest.session_id, first_session_id);
+            assert_eq!(
+                messages
+                    .iter()
+                    .filter(|message| message.message_type == "ip-change")
+                    .count(),
+                1
+            );
             assert_eq!(
                 messages
                     .iter()
@@ -8826,6 +8933,7 @@ mod service_tests {
             runtime.token = "stable-token".into();
             runtime.port = 17639;
             runtime.lan_ip = "192.168.1.10".into();
+            runtime.last_available_lan_ip = runtime.lan_ip.clone();
             runtime.access_url = "http://192.168.1.10:17639/?token=stable-token".into();
             runtime.native.config.hidden = true;
             runtime.clients.insert("connected-device".into(), sender);
@@ -8852,6 +8960,11 @@ mod service_tests {
                 &mut runtime,
                 &["192.168.2.20".into()]
             ));
+            assert_eq!(runtime.local_ip_changes.len(), 1);
+            assert_eq!(
+                runtime.local_ip_changes[0].content,
+                "本机 IP 已变化：192.168.1.10 → 192.168.2.20"
+            );
             assert_eq!(runtime.token, "stable-token");
             assert_eq!(runtime.port, 17639);
             assert!(runtime.handle.is_some());
@@ -8870,6 +8983,7 @@ mod service_tests {
             runtime.handle = Some(tauri::async_runtime::spawn(std::future::pending()));
             runtime.token = "stable-token".into();
             runtime.lan_ip = "192.168.1.10".into();
+            runtime.last_available_lan_ip = runtime.lan_ip.clone();
             runtime.access_url = "http://192.168.1.10:17631/?token=stable-token".into();
             assert!(super::refresh_access_address(&mut runtime, &[]));
             assert!(runtime.lan_ip.is_empty());
@@ -8878,11 +8992,22 @@ mod service_tests {
             assert!(!super::refresh_access_address(&mut runtime, &[]));
             assert!(super::refresh_access_address(
                 &mut runtime,
+                &["192.168.1.10".into()]
+            ));
+            assert!(runtime.local_ip_changes.is_empty());
+            assert!(super::refresh_access_address(&mut runtime, &[]));
+            assert!(super::refresh_access_address(
+                &mut runtime,
                 &["10.0.0.20".into()]
             ));
             assert_eq!(
                 runtime.access_url,
                 "http://10.0.0.20:17631/?token=stable-token"
+            );
+            assert_eq!(runtime.local_ip_changes.len(), 1);
+            assert_eq!(
+                runtime.local_ip_changes[0].content,
+                "本机 IP 已变化：192.168.1.10 → 10.0.0.20"
             );
             stop_runtime(&mut runtime);
             assert!(!super::refresh_access_address(

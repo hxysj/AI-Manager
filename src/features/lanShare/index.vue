@@ -1068,6 +1068,7 @@ const state = reactive({
     qrSvg: "",
     lanIp: "",
     lanIps: [],
+    localIpChanges: [],
     port: 0,
     onlineDevices: 0
   },
@@ -1515,6 +1516,7 @@ onBeforeUnmount(() => {
 
 function applyState(payload) {
   const nextState = payload?.service ? payload : unwrapData(payload) || {}
+  const previousIpChangeId = state.service.localIpChanges?.[0]?.id
   state.service = nextState.service || state.service
   accessQrSvg.value = state.service.qrSvg || ""
   state.devices = nextState.devices || []
@@ -1524,6 +1526,14 @@ function applyState(payload) {
   state.native = nextState.native || state.native
   if (nextState.native?.error) {
     showRightToast(nextState.native.error)
+  }
+  const ipChange = state.service.localIpChanges?.[0]
+  if (
+    initialSessionResolved &&
+    ipChange &&
+    ipChange.id !== previousIpChangeId
+  ) {
+    showRightToast(ipChange.content)
   }
   stateVersion.value += 1
 

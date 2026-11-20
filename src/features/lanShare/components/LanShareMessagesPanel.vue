@@ -27,11 +27,18 @@
           v-if="ipChangesByMessageId.get(message.id)"
           class="chat-ip-change-divider"
         >
-          IP 已变化：{{ ipChangesByMessageId.get(message.id).fromIp }} →
+          对端 IP 已变化：{{ ipChangesByMessageId.get(message.id).fromIp }} →
           {{ ipChangesByMessageId.get(message.id).toIp }}
         </div>
 
+        <div
+          v-if="message.direction === 'system'"
+          class="chat-ip-change-divider"
+        >
+          {{ message.content }}
+        </div>
         <article
+          v-else
           :data-message-id="message.id"
           class="chat-message"
           :class="{
@@ -642,21 +649,30 @@ const displayMessages = computed(() => {
   const incoming = incomingTasks.value.filter(
     (task) => task.sessionId === props.currentSessionId
   )
-  return [...serverList, ...pendingTasks, ...incoming].sort(
+  const localChanges = (props.service.localIpChanges || [])
+    .filter((message) => message.createdAt >= props.currentSession?.createdAt)
+    .reverse()
+  return [...serverList, ...localChanges, ...pendingTasks, ...incoming].sort(
     (left, right) => left.createdAt - right.createdAt
   )
 })
 
-// 相邻消息来自不同 IP 时插入时间线分割线，保留同一设备的连续历史。
+// 旧聊天记录从消息 IP 补出分隔线。新系统消息已标出变化，不重复显示。
 const ipChangesByMessageId = computed(() => {
   const changes = new Map()
-  let previousIp = ""
+  const previousIps = new Map()
   for (const message of displayMessages.value) {
     const currentIp = String(message.ip || "").trim()
-    if (previousIp && currentIp && previousIp !== currentIp) {
+    if (!message.deviceId || message.isPending || !currentIp) continue
+    const previousIp = previousIps.get(message.deviceId)
+    if (
+      message.direction !== "system" &&
+      previousIp &&
+      previousIp !== currentIp
+    ) {
       changes.set(message.id, { fromIp: previousIp, toIp: currentIp })
     }
-    if (currentIp) previousIp = currentIp
+    previousIps.set(message.deviceId, currentIp)
   }
   return changes
 })
@@ -970,9 +986,8 @@ async function loadMessages() {
       })
     )
     if (disposed || seed !== loadSeed) return
-    const nextMessages = (Array.isArray(result) ? result : []).sort(
-      (left, right) => left.createdAt - right.createdAt
-    )
+    // 接口按最新在前返回，反转后同毫秒写入的系统消息也会先于之后收到的文件。
+    const nextMessages = Array.isArray(result) ? result.slice().reverse() : []
     const progressById = new Map(
       messages.value
         .filter((message) => message.transferProgress)

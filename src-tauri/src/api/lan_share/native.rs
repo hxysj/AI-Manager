@@ -738,6 +738,7 @@ async fn refresh_peer(
     let changed = address_changed
         || trusted.peer.name != peer.name
         || trusted.peer.supports_groups != peer.supports_groups;
+    let previous_ip = trusted.peer.ip.clone();
     trusted.peer = peer.clone();
     if address_changed {
         if let Some(task) = runtime.native.delivery_tasks.remove(&peer.id) {
@@ -747,12 +748,13 @@ async fn refresh_peer(
     if changed {
         write_json(&paths.lan_share_files.config, &json!(runtime.native.config)).await?;
         let mut devices: Vec<LanShareDevice> = read_array(&paths.lan_share_files.devices)?;
+        let mut old_ip = previous_ip;
         if let Some(device) = devices.iter_mut().find(|device| device.id == peer.id) {
-            device.ip = peer.ip.clone();
+            old_ip = std::mem::replace(&mut device.ip, peer.ip.clone());
             device.last_seen_at = now_millis();
         }
+        super::update_device_ip_references(paths, &peer.id, &old_ip, &peer.ip)?;
         write_json(&paths.lan_share_files.devices, &json!(devices)).await?;
-        // 心跳发现地址变化时同步直接会话，消息时间线才能标出新旧 IP。
         super::ensure_session(paths, &peer.id, "", &peer.name, &peer.ip)?;
     }
     runtime.native.nearby.insert(peer.id.clone(), peer.clone());
@@ -2710,6 +2712,15 @@ mod tests {
             assert!(saved.peers[0].peer.supports_groups);
             let devices: Vec<LanShareDevice> = read_array(&paths.lan_share_files.devices).unwrap();
             assert_eq!(devices[0].ip, changed.ip);
+            assert!(!refresh_peer(&registry, &paths, &changed, "paired-secret")
+                .await
+                .unwrap());
+            let messages: Vec<LanShareMessage> = read_array(&paths.lan_share_files.messages).unwrap();
+            assert_eq!(messages.len(), 1);
+            assert_eq!(
+                messages[0].content,
+                "对端 IP 已变化：192.168.1.2 → 192.168.2.3"
+            );
             let auth = TransportAuth {
                 sender: original.id.clone(),
                 receiver: "native-local".into(),

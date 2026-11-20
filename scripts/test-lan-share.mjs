@@ -50,6 +50,7 @@ const fixture = {
     lanIp: "192.168.1.1",
     port: 17631,
     lanIps: [],
+    localIpChanges: [],
     accessUrl: "",
     qrSvg: ""
   },
@@ -202,9 +203,21 @@ fixture.service.lanIp = "192.168.2.10"
 fixture.service.lanIps = ["192.168.2.10"]
 fixture.service.accessUrl = "http://192.168.2.10:17631/?token=stable"
 fixture.service.qrSvg = "<svg>new-network</svg>"
+const localIpChange = {
+  id: "local-ip-change",
+  direction: "system",
+  messageType: "ip-change",
+  content: "本机 IP 已变化：192.168.1.1 → 192.168.2.10",
+  createdAt: 20
+}
+fixture.service.localIpChanges = [localIpChange]
 listeners.state(structuredClone(fixture))
 assert.equal(state.state.service.lanIp, "192.168.2.10")
 assert.equal(state.accessQrSvg, "<svg>new-network</svg>")
+assert.equal(state.toastMessage, localIpChange.content)
+state.dismissToast()
+listeners.state(structuredClone(fixture))
+assert.equal(state.toastMessage, "", "相同的状态推送不会重复弹出 IP 提示")
 fixture.service.lanIp = ""
 fixture.service.lanIps = []
 fixture.service.accessUrl = ""
@@ -502,8 +515,9 @@ for (const fileName of [
   )
   const vnode = vue.h(module.exports.default, {
     currentDevice: { id: known.id, native: true },
+    currentSession: { id: "session", createdAt: 10 },
     currentSessionId: "session",
-    service: { running: true }
+    service: { running: true, localIpChanges: [localIpChange] }
   })
   vnode.appContext = { ...vue.createApp({})._context }
   vnode.appContext.config.errorHandler = (error) =>
@@ -511,6 +525,38 @@ for (const fileName of [
   renderer.render(vnode, root)
   await tick()
   const panel = vnode.component.setupState
+  assert.equal(panel.displayMessages[0].content, localIpChange.content)
+  const remoteIpChange = {
+    id: "remote-ip-change",
+    deviceId: known.id,
+    direction: "system",
+    messageType: "ip-change",
+    ip: "192.168.2.8",
+    createdAt: 30
+  }
+  api.listMessages = async () => [
+    {
+      id: "after-ip-change",
+      deviceId: known.id,
+      ip: remoteIpChange.ip,
+      createdAt: remoteIpChange.createdAt
+    },
+    remoteIpChange,
+    {
+      id: "before-ip-change",
+      deviceId: known.id,
+      ip: "192.168.1.8",
+      createdAt: 15
+    }
+  ]
+  await panel.loadMessages()
+  assert.deepEqual(
+    panel.displayMessages.map((message) => message.id),
+    ["before-ip-change", localIpChange.id, remoteIpChange.id, "after-ip-change"]
+  )
+  assert.equal(panel.ipChangesByMessageId.size, 0, "系统提示后不再重复推断 IP 变化")
+  api.listMessages = async () => []
+  await panel.loadMessages()
   assert.equal(
     panel.sendBlocked,
     false,
