@@ -293,6 +293,8 @@ const localRequire = (name) => {
       systemApi: { openExternal: (payload) => invoke("open-external", payload) }
     }
   if (name === "@/utils/formatters") return formatterModule.exports
+  if (name === "@/constants/reasoning-efforts")
+    return require("../src/constants/reasoning-efforts.js")
   if (name === "@/utils/message")
     return {
       createMessage: {
@@ -544,13 +546,17 @@ assert.ok(
     !listHtml.includes("已禁用服务商")
 )
 // 官方授权失败显示在对应账号，接口 JSON 不进入页面，重新授权仍指向原账号。
-const expiredFailure = 'OpenAI 请求失败：401 {"error":{"message":"Your authentication token has expired. Please try refreshing it.","code":"token_expired"},"status":401}'
+const expiredFailure =
+  'OpenAI 请求失败：401 {"error":{"message":"Your authentication token has expired. Please try refreshing it.","code":"token_expired"},"status":401}'
 const expiredState = {
   ...listState,
   accounts: listState.accounts.map((account) => ({
     ...account,
     refreshStatus: "failed",
-    quota: { ...account.quota, refreshError: { message: expiredFailure, statusCode: 401 } }
+    quota: {
+      ...account.quota,
+      refreshError: { message: expiredFailure, statusCode: 401 }
+    }
   }))
 }
 const expiredHtml = await renderCenter(expiredState, (value) => {
@@ -708,47 +714,45 @@ const googleOfficial = {
   name: "Google 工作账号",
   kind: "google_account"
 }
-const googleDetailHtml = await renderCenter(
-  {
-    ...listState,
-    providers: [googleOfficial],
-    googleAccounts: [
-      {
-        providerId: googleOfficial.id,
-        email: "google@example.test",
-        subject: "google-subject-id",
-        metadata: {
-          plan: "g1-pro-tier",
-          project: "cloud-project-id",
-          status: "reauth_required",
-          message: "Google 授权已失效，请重新登录",
-          updatedAt: 1794960000000,
-          quotaGroups: [
-            {
-              displayName: "共享分组",
-              buckets: [
-                {
-                  window: "WINDOW_5H",
-                  remainingFraction: 0,
-                  resetTime: "2100-01-01T00:00:00Z"
-                },
-                { window: "WINDOW_WEEKLY", remainingFraction: null }
-              ]
-            }
-          ]
-        }
+const googleQuotaState = {
+  ...listState,
+  providers: [googleOfficial],
+  googleAccounts: [
+    {
+      providerId: googleOfficial.id,
+      email: "google@example.test",
+      subject: "google-subject-id",
+      metadata: {
+        plan: "g1-pro-tier",
+        project: "cloud-project-id",
+        status: "reauth_required",
+        message: "Google 授权已失效，请重新登录",
+        updatedAt: 1794960000000,
+        quotaGroups: [
+          {
+            displayName: "共享分组",
+            buckets: [
+              {
+                window: "WINDOW_5H",
+                remainingFraction: 0,
+                resetTime: "2100-01-01T00:00:00Z"
+              },
+              { window: "WINDOW_WEEKLY", remainingFraction: null }
+            ]
+          }
+        ]
       }
-    ]
-  },
-  (value) => {
-    value.openProviderDetail(googleOfficial)
-    value.refreshingQuotaIds.value.add(googleOfficial.id)
-  }
-)
+    }
+  ]
+}
+const googleDetailHtml = await renderCenter(googleQuotaState, (value) => {
+  value.openProviderDetail(googleOfficial)
+  value.refreshingQuotaIds.value.add(googleOfficial.id)
+})
 for (const text of [
   "google@example.test",
   "google-subject-id",
-  "Google AI Pro",
+  ">Pro<",
   "cloud-project-id",
   "需重新登录",
   "登录授权已失效",
@@ -763,6 +767,25 @@ assert.ok(googleDetailHtml.includes('aria-valuenow="0"'))
 assert.ok(googleDetailHtml.includes('aria-valuetext="额度未知"'))
 assert.ok(!googleDetailHtml.includes("导入 auth.json"))
 assert.ok(!googleDetailHtml.includes("获取模型"))
+const googleListHtml = await renderCenter(googleQuotaState, (value) => {
+  value.providerTab.value = "codex_account"
+})
+assert.ok(googleListHtml.includes("共享分组"))
+assert.ok(googleListHtml.includes("5 小时额度"))
+assert.ok(googleListHtml.includes('aria-valuenow="0"'))
+assert.ok(googleListHtml.includes('aria-valuetext="额度未知"'))
+assert.ok(!googleListHtml.includes("provider-card-refreshing"))
+const googleLoadingHtml = await renderCenter(
+  { ...googleQuotaState, googleAccounts: [] },
+  (value) => {
+    value.providerTab.value = "codex_account"
+    value.refreshingQuotaIds.value.add(googleOfficial.id)
+  }
+)
+assert.ok(googleLoadingHtml.includes("quota-placeholder"))
+assert.ok(!googleLoadingHtml.includes("provider-card-refreshing"))
+assert.ok(!googleLoadingHtml.includes("icon-button-refreshing"))
+assert.ok(googleLoadingHtml.includes("正在获取分组额度…"))
 const apiDetailHtml = await renderCenter(state, (value) => {
   value.openProviderDetail(state.providers[0])
 })
@@ -1734,7 +1757,7 @@ assert.equal(
 )
 assert.equal(bindings.busy.value, false)
 
-// 实际挂载验证：Agent/服务商页与来源弹框不查询额度；官方页按需查询、去重并在离开时停止余下任务。
+// 实际挂载验证：官方页并行查询各账号，Agent/服务商页和来源弹框不查询额度。
 failState = false
 const previousState = state
 state = {
@@ -1745,6 +1768,14 @@ state = {
     {
       id: "google",
       name: "Google",
+      kind: "google_account",
+      enabled: 1,
+      hasCredential: 1
+    },
+    { ...official, id: "codex-secondary" },
+    {
+      id: "google-secondary",
+      name: "Google 工作账号",
       kind: "google_account",
       enabled: 1,
       hasCredential: 1
@@ -1803,21 +1834,37 @@ assert.ok(
 assert.equal(liveBindings.agentBinding.value.defaultModelName, "fetched-model")
 liveBindings.closeAgentConfig()
 assert.ok(!calls.some((item) => item.action === "refresh-quota"))
-let releaseQuota
-quotaHandler = () =>
+const pendingQuotas = new Map()
+quotaHandler = ({ providerId }) =>
   new Promise((resolve) => {
-    releaseQuota = resolve
+    pendingQuotas.set(providerId, resolve)
   })
 liveBindings.providerTab.value = "codex_account"
 await settle()
-assert.equal(calls.filter((item) => item.action === "refresh-quota").length, 1)
+assert.deepEqual(
+  new Set(pendingQuotas.keys()),
+  new Set([official.id, "google", "codex-secondary", "google-secondary"])
+)
 const repeatedQuotaBatch = liveBindings.refreshOfficialQuotas()
-assert.equal(await liveBindings.refreshQuota(official), false)
+assert.equal(
+  await liveBindings.refreshQuota(
+    state.providers.find((item) => item.id === "google")
+  ),
+  false
+)
+pendingQuotas.get("google")({})
+pendingQuotas.delete("google")
+await settle()
+assert.equal(liveBindings.refreshingQuotaIds.value.has("google"), false)
+assert.equal(liveBindings.refreshingQuotaIds.value.has(official.id), true)
 liveBindings.providerTab.value = "agents"
-releaseQuota({})
+for (const resolve of pendingQuotas.values()) resolve({})
 await repeatedQuotaBatch
 await settle()
-assert.equal(calls.filter((item) => item.action === "refresh-quota").length, 1)
+assert.equal(calls.filter((item) => item.action === "refresh-quota").length, 4)
+pendingQuotas.clear()
+state.providers = state.providers.filter((item) => !item.id.endsWith("-secondary"))
+await liveBindings.refresh()
 quotaHandler = async ({ providerId }) => {
   if (providerId === official.id) throw new Error(expiredFailure)
   return {}
@@ -1832,8 +1879,15 @@ assert.deepEqual(
   [official.id, "google"]
 )
 assert.equal(liveBindings.refreshingQuotaIds.value.size, 0)
-assert.equal(liveBindings.officialAccountIssues.value[official.id].requiresReauth, true)
-assert.ok(liveBindings.officialAccountIssues.value[official.id].message.includes("登录凭据已过期"))
+assert.equal(
+  liveBindings.officialAccountIssues.value[official.id].requiresReauth,
+  true
+)
+assert.ok(
+  liveBindings.officialAccountIssues.value[official.id].message.includes(
+    "登录凭据已过期"
+  )
+)
 assert.equal(liveBindings.officialAccountIssues.value.google, null)
 assert.ok(!messages.some((message) => message.includes("token_expired")))
 await liveBindings.refresh()
@@ -1848,7 +1902,9 @@ await settle()
 liveBindings.providerTab.value = "codex_account"
 await settle()
 assert.deepEqual(
-  calls.filter((item) => item.action === "refresh-quota").map((item) => item.payload.providerId),
+  calls
+    .filter((item) => item.action === "refresh-quota")
+    .map((item) => item.payload.providerId),
   [official.id, "google", "google", "google"]
 )
 liveBindings.openOfficialLogin(official)
@@ -1857,29 +1913,47 @@ await liveBindings.completeOfficialLogin()
 assert.equal(liveBindings.officialAccountIssues.value[official.id], null)
 quotaHandler = async () => ({})
 assert.equal(await liveBindings.refreshQuota(official, false), true)
-quotaHandler = async () => { throw new Error("连接失败，请检查网络代理") }
+quotaHandler = async () => {
+  throw new Error("连接失败，请检查网络代理")
+}
 await liveBindings.refreshQuota(official, false)
-assert.equal(liveBindings.officialAccountIssues.value[official.id].requiresReauth, false)
-assert.match(liveBindings.officialAccountIssues.value[official.id].message, /连接失败/)
+assert.equal(
+  liveBindings.officialAccountIssues.value[official.id].requiresReauth,
+  false
+)
+assert.match(
+  liveBindings.officialAccountIssues.value[official.id].message,
+  /连接失败/
+)
 quotaHandler = async () => ({})
 await liveBindings.refreshQuota(official, false)
 assert.equal(liveBindings.officialAccountIssues.value[official.id], null)
+calls.length = 0
+liveBindings.openOfficialLogin({ kind: "google_account" })
+await liveBindings.completeOfficialLogin("google")
+await settle()
+assert.deepEqual(
+  calls
+    .filter((item) => item.action === "refresh-quota")
+    .map((item) => item.payload.providerId),
+  ["google"]
+)
 liveBindings.providerTab.value = "api"
 await settle()
-quotaHandler = () =>
+quotaHandler = ({ providerId }) =>
   new Promise((resolve) => {
-    releaseQuota = resolve
+    pendingQuotas.set(providerId, resolve)
   })
 calls.length = 0
 liveBindings.providerTab.value = "codex_account"
 await settle()
 const pendingQuotaBatch = liveBindings.refreshOfficialQuotas()
 liveApp.unmount()
-releaseQuota({})
+for (const resolve of pendingQuotas.values()) resolve({})
 await pendingQuotaBatch
 assert.deepEqual(
   calls.map((item) => item.action),
-  ["refresh-quota"]
+  ["refresh-quota", "refresh-quota"]
 )
 quotaHandler = undefined
 state = previousState
@@ -1888,7 +1962,15 @@ state = previousState
 let expiredBindings
 const expiredApp = testRenderer.createApp({
   setup(_, context) {
-    expiredBindings = Center.setup({ initialState: expiredState, cliTargets, runtimeConfigSchemas, loginState: null }, context)
+    expiredBindings = Center.setup(
+      {
+        initialState: expiredState,
+        cliTargets,
+        runtimeConfigSchemas,
+        loginState: null
+      },
+      context
+    )
     return () => null
   }
 })
@@ -1896,7 +1978,10 @@ calls.length = 0
 expiredApp.mount({})
 expiredBindings.providerTab.value = "codex_account"
 await settle()
-assert.equal(expiredBindings.officialAccountIssues.value[official.id].requiresReauth, true)
+assert.equal(
+  expiredBindings.officialAccountIssues.value[official.id].requiresReauth,
+  true
+)
 assert.equal(calls.length, 0, "重新进入后，授权已过期的账号无需再次请求")
 expiredApp.unmount()
 

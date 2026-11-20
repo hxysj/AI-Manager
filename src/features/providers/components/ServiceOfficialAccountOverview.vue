@@ -77,7 +77,10 @@
           "
           @click="$emit('refresh')"
         >
-          <RefreshCw :size="14" :class="{ 'official-spinning': refreshing }" />
+          <RefreshCw
+            :size="14"
+            :class="{ 'official-spinning': refreshing && !isGoogle }"
+          />
           {{ refreshing ? "刷新中…" : "刷新官方额度" }}
         </button>
       </div>
@@ -294,7 +297,7 @@ import {
   UserRound
 } from "lucide-vue-next"
 import AiIcon from "@/components/AiIcon.vue"
-import { formatDateTime } from "@/utils/formatters"
+import { formatDateTime, formatGoogleQuotaGroups } from "@/utils/formatters"
 
 const props = defineProps({
   provider: { type: Object, required: true },
@@ -326,8 +329,8 @@ const planLabel = computed(
       team: "Team",
       business: "Business",
       enterprise: "Enterprise",
-      "g1-pro-tier": "Google AI Pro",
-      "g1-ultra-tier": "Google AI Ultra",
+      "g1-pro-tier": "Pro",
+      "g1-ultra-tier": "Ultra",
       "free-tier": "免费版",
       FREE: "免费版"
     })[plan.value] ||
@@ -391,33 +394,14 @@ const connectionFields = computed(() => [
 // Codex 复用列表的周期数据，Google 按官方共享额度分组展示，不生成可编辑模型目录。
 const quotaItems = computed(() =>
   isGoogle.value
-    ? (metadata.value.quotaGroups || []).flatMap((group, groupIndex) =>
-        (group.buckets || []).map((bucket, index) => {
-          const window = String(bucket.window || "")
-            .replace(/^WINDOW_/i, "")
-            .toLowerCase()
-          const label =
-            { "5h": "5 小时额度", weekly: "周额度" }[window] ||
-            bucket.displayName ||
-            bucket.window ||
-            "额度"
-          const remaining = bucket.remainingFraction
-          return {
-            id: `${groupIndex}-${index}`,
-            name: `${group.displayName || `共享额度 ${groupIndex + 1}`} · ${label}`,
-            remaining:
-              typeof remaining === "number" && Number.isFinite(remaining)
-                ? Math.round(Math.max(0, Math.min(1, remaining)) * 1000) / 10
-                : null,
-            resetAt: bucket.resetTime
-          }
-        })
+    ? formatGoogleQuotaGroups(metadata.value.quotaGroups).flatMap((group) =>
+        group.windows.map((window) => ({
+          ...window,
+          id: `${group.id}-${window.id}`,
+          name: `${group.name} · ${window.name}`
+        }))
       )
-    : props.quotaWindows.map((window, index) => ({
-        ...window,
-        id: index,
-        resetAt: window.resetAt ? window.resetAt * 1000 : null
-      }))
+    : props.quotaWindows
 )
 
 function resetLabel(value) {

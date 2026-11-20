@@ -352,6 +352,7 @@ pub fn state(paths: &AppPaths) -> Result<Value, ManagerError> {
         "baseUrl":format!("http://127.0.0.1:{PORT}"), "providers":providers,"models":models,"bindings":bindings,
         "keys":keys,"instances":instances,"migrations":migrations,"migrationItems":migration_items,
         "compatibility":compatibility,"routes":routes,"accounts":accounts,"googleAccounts":google_accounts,"managedFiles":files,"usage":usage(&c)?,
+        "antigravityClients":if cfg!(windows) && active(paths)? { json!(crate::api::antigravity::installed_clients()) } else { Value::Null },
         "desktopModelRoutes":crate::api::claude_desktop::ROUTES.iter().map(|(id,label,_)|json!({"id":id,"label":label})).collect::<Vec<_>>()}),
     )
 }

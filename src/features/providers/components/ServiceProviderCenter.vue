@@ -66,33 +66,35 @@
     </header>
 
     <div v-if="providerTab === 'agents'" class="agent-list">
-      <article
-        v-for="agent in detectedAgents"
-        :key="agent.id"
-        class="agent-card"
-      >
+      <article v-for="agent in agentCards" :key="agent.id" class="agent-card">
         <span class="agent-avatar">
           <AiIcon
             v-if="agent.icon"
             class="agent-icon"
             :name="agent.icon"
-            :alt="agentLabel(agent.id)"
+            :alt="agent.label || agentLabel(agent.id)"
           />
           <Bot v-else :size="24" />
         </span>
         <div class="agent-main">
           <div class="agent-heading">
             <span class="agent-name" data-emphasis>{{
-              agentLabel(agent.id)
+              agent.label || agentLabel(agent.id)
             }}</span>
-            <span class="agent-version">{{ agent.version || "已检测" }}</span>
+            <span class="agent-version">{{
+              agent.installed ? agent.version || "已检测" : "未检测到安装"
+            }}</span>
           </div>
           <span class="agent-source">
             <span
               v-if="currentAgentInstance(agent.id)"
               class="agent-source-dot"
             ></span>
-            {{ currentAgentSource(agent.id) }}
+            {{
+              agent.nativeLogin
+                ? "仅支持 Google 官方账号"
+                : currentAgentSource(agent.id)
+            }}
           </span>
           <span
             v-if="agent.configPath"
@@ -105,16 +107,20 @@
         <button
           class="agent-config-button"
           type="button"
-          :aria-label="`配置 ${agentLabel(agent.id)}`"
-          :disabled="busy"
-          @click="openAgentConfig(agent)"
+          :aria-label="`配置 ${agent.label || agentLabel(agent.id)}`"
+          :disabled="busy || !agent.installed"
+          @click="
+            agent.nativeLogin
+              ? openAntigravityConfig(agent)
+              : openAgentConfig(agent)
+          "
         >
           <Settings2 :size="16" />
           配置
           <ChevronRight :size="15" />
         </button>
       </article>
-      <div v-if="!detectedAgents.length" class="provider-empty">
+      <div v-if="!agentCards.length" class="provider-empty">
         尚未检测到 Codex、Claude Code 或 Claude Desktop，请安装后刷新。
       </div>
     </div>
@@ -219,61 +225,91 @@
           >
             {{ provider.baseUrl }}
           </span>
-          <div
-            v-if="
-              provider.kind === 'codex_account' && quotaWindows(provider).length
-            "
-            class="quota-list"
-          >
-            <div
-              v-for="quota in quotaWindows(provider)"
-              :key="quota.name"
-              class="quota-item"
-              :class="{
-                'quota-warning':
-                  quota.remaining != null && quota.remaining < 30,
-                'quota-danger': quota.remaining != null && quota.remaining < 10,
-                'quota-unknown': quota.remaining == null,
-                'quota-refreshing': refreshingQuotaIds.has(provider.id)
-              }"
-              :title="
-                quota.resetAt
-                  ? `重置时间：${formatTime(quota.resetAt * 1000)}`
-                  : '重置时间未知'
-              "
+          <template v-if="officialQuotaGroups[provider.id]?.length">
+            <template
+              v-for="group in officialQuotaGroups[provider.id]"
+              :key="group.id"
             >
-              <div class="quota-heading">
-                <span class="quota-icon"></span>
-                <span class="quota-name">{{ quota.name }}</span>
+              <span v-if="group.name" class="quota-group-name">{{
+                group.name
+              }}</span>
+              <div class="quota-list">
+                <div
+                  v-for="quota in group.windows"
+                  :key="quota.id"
+                  class="quota-item"
+                  :class="{
+                    'quota-warning':
+                      quota.remaining != null && quota.remaining < 30,
+                    'quota-danger':
+                      quota.remaining != null && quota.remaining < 10,
+                    'quota-unknown': quota.remaining == null,
+                    'quota-refreshing': refreshingQuotaIds.has(provider.id)
+                  }"
+                  :title="
+                    quota.resetAt
+                      ? `重置时间：${formatTime(quota.resetAt)}`
+                      : '重置时间未知'
+                  "
+                >
+                  <div class="quota-heading">
+                    <span class="quota-icon"></span>
+                    <span class="quota-name">{{ quota.name }}</span>
+                  </div>
+                  <div
+                    class="quota-track"
+                    :aria-busy="refreshingQuotaIds.has(provider.id)"
+                    role="progressbar"
+                    :aria-label="`${group.name ? `${group.name} · ` : ''}${quota.name}剩余额度`"
+                    :aria-valuenow="quota.remaining ?? undefined"
+                    :aria-valuetext="
+                      quota.remaining == null
+                        ? '额度未知'
+                        : `${quota.remaining}%`
+                    "
+                    :aria-valuemin="0"
+                    :aria-valuemax="100"
+                  >
+                    <span
+                      class="quota-fill"
+                      :style="{ width: `${quota.remaining ?? 0}%` }"
+                    ></span>
+                  </div>
+                  <div class="quota-meta">
+                    <span class="quota-value">{{
+                      quota.remaining == null ? "未知" : `${quota.remaining}%`
+                    }}</span>
+                    <span aria-hidden="true">·</span>
+                    <span class="quota-reset">{{
+                      formatResetCountdown(quota.resetAt)
+                    }}</span>
+                  </div>
+                </div>
               </div>
-              <div
-                class="quota-track"
-                :aria-busy="refreshingQuotaIds.has(provider.id)"
-                role="progressbar"
-                :aria-label="`${quota.name}剩余额度`"
-                :aria-valuenow="quota.remaining ?? undefined"
-                :aria-valuetext="
-                  quota.remaining == null ? '额度未知' : `${quota.remaining}%`
-                "
-                :aria-valuemin="0"
-                :aria-valuemax="100"
-              >
-                <span
-                  class="quota-fill"
-                  :style="{ width: `${quota.remaining ?? 0}%` }"
-                ></span>
-              </div>
-              <div class="quota-meta">
-                <span class="quota-value">{{
-                  quota.remaining == null ? "未知" : `${quota.remaining}%`
-                }}</span>
-                <span aria-hidden="true">·</span>
-                <span class="quota-reset">{{
-                  formatResetCountdown(quota.resetAt)
-                }}</span>
-              </div>
-            </div>
-          </div>
+            </template>
+          </template>
+          <span
+            v-else-if="
+              provider.kind === 'google_account' &&
+              provider.enabled &&
+              provider.hasCredential &&
+              (refreshingQuotaIds.has(provider.id) ||
+                !officialAccountIssues[provider.id])
+            "
+            class="provider-meta quota-status"
+            role="status"
+          >
+            <span
+              v-if="refreshingQuotaIds.has(provider.id)"
+              class="quota-placeholder"
+              aria-hidden="true"
+            ></span>
+            {{
+              refreshingQuotaIds.has(provider.id)
+                ? "正在获取分组额度…"
+                : "暂无分组额度"
+            }}
+          </span>
           <span v-if="provider.kind === 'api'" class="provider-meta">
             {{ providerModels(provider.id).length }} 个模型
           </span>
@@ -293,7 +329,9 @@
               v-if="provider.kind !== 'api'"
               class="icon-button"
               :class="{
-                'icon-button-refreshing': refreshingQuotaIds.has(provider.id)
+                'icon-button-refreshing':
+                  provider.kind !== 'google_account' &&
+                  refreshingQuotaIds.has(provider.id)
               }"
               type="button"
               :title="
@@ -1066,6 +1104,93 @@
     </BaseModal>
 
     <BaseModal
+      v-if="antigravityClient && !officialLogin"
+      class="agent-config-modal antigravity-config-modal"
+      :title="`配置 ${antigravityClient.label}`"
+      description="仅支持通过 Google 授权登录的官方账号。"
+      role="dialog"
+      aria-modal="true"
+      :aria-label="`配置 ${antigravityClient.label}`"
+      @close="!busy && (antigravityClientId = '')"
+    >
+      <form class="agent-config-form" @submit.prevent="runAntigravity(true)">
+        <div class="agent-config-body" :aria-busy="busy">
+          <label
+            v-if="antigravityClient.supportsAccountSwitch"
+            class="agent-source-field"
+          >
+            Google 官方账号
+            <span class="agent-select">
+              <select
+                v-model="antigravityProviderId"
+                class="input"
+                :disabled="busy"
+              >
+                <option value="">
+                  {{
+                    antigravityAccounts.length ? "请选择账号" : "暂无可用账号"
+                  }}
+                </option>
+                <option
+                  v-for="account in antigravityAccounts"
+                  :key="account.id"
+                  :value="account.id"
+                >
+                  {{ providerDisplayName(account) }}
+                </option>
+              </select>
+              <ChevronDown
+                class="agent-select-arrow"
+                :size="16"
+                aria-hidden="true"
+              />
+            </span>
+          </label>
+          <p v-else class="agent-config-empty" role="status">
+            请打开客户端，在客户端内完成 Google 登录。
+          </p>
+        </div>
+        <footer class="agent-config-footer">
+          <p
+            v-if="antigravityClient.supportsAccountSwitch"
+            class="agent-config-hint"
+          >
+            <Info :size="16" />
+            应用前请退出 Antigravity。应用后会更新此设备的共享 Google 登录凭据。
+          </p>
+          <div class="agent-config-actions">
+            <button
+              v-if="antigravityClient.supportsAccountSwitch"
+              class="btn"
+              type="button"
+              :disabled="busy"
+              @click="openOfficialLogin({ kind: 'google_account' })"
+            >
+              <Plus :size="16" />
+              添加账号
+            </button>
+            <button
+              class="btn"
+              type="button"
+              :disabled="busy"
+              @click="runAntigravity(false)"
+            >
+              打开客户端
+            </button>
+            <button
+              v-if="antigravityClient.supportsAccountSwitch"
+              class="btn btn-primary"
+              type="submit"
+              :disabled="busy || !selectedAntigravityAccount"
+            >
+              应用并打开
+            </button>
+          </div>
+        </footer>
+      </form>
+    </BaseModal>
+
+    <BaseModal
       v-if="compatibilityForm"
       title="Agent 兼容性测试"
       :description="`${providerName(compatibilityForm.providerId)} · 验证工具调用、工具结果与流式文本兼容性。`"
@@ -1196,7 +1321,11 @@ import ServiceOfficialAccountOverview from "./ServiceOfficialAccountOverview.vue
 import ServiceProviderOverview from "./ServiceProviderOverview.vue"
 import { serviceProviderApi } from "@/api/modules/service-providers"
 import { createMessage } from "@/utils/message"
-import { formatDateTime, formatServiceProviderName } from "@/utils/formatters"
+import {
+  formatDateTime,
+  formatGoogleQuotaGroups,
+  formatServiceProviderName
+} from "@/utils/formatters"
 
 const props = defineProps({
   initialState: { type: Object, default: () => ({}) },
@@ -1334,6 +1463,44 @@ const detectedAgents = computed(() =>
       item.installed && ["codex", "claude", "claude-desktop"].includes(item.id)
   )
 )
+// 原生登录客户端只在 Agent 列表展示，不参与网关接管和模型配置。
+const agentCards = computed(() => {
+  const clients = data.value.antigravityClients
+  if (!Array.isArray(clients)) return detectedAgents.value
+  const nativeClients = clients.length
+    ? clients
+    : [{ id: "antigravity", label: "Antigravity", installed: false }]
+  return [
+    ...detectedAgents.value,
+    ...nativeClients.map((item) => ({
+      ...item,
+      nativeLogin: true,
+      icon: "antigravity.svg"
+    }))
+  ]
+})
+const antigravityClientId = ref("")
+const antigravityProviderId = ref("")
+const antigravityClient = computed(() =>
+  data.value.antigravityClients?.find(
+    (client) => client.id === antigravityClientId.value
+  )
+)
+const antigravityAccounts = computed(() =>
+  data.value.providers.filter(
+    (item) =>
+      item.kind === "google_account" &&
+      item.enabled &&
+      item.hasCredential &&
+      Boolean(googleAccount(item.id)?.subject) &&
+      googleAccount(item.id)?.metadata?.status !== "reauth_required"
+  )
+)
+const selectedAntigravityAccount = computed(() =>
+  antigravityAccounts.value.find(
+    (account) => account.id === antigravityProviderId.value
+  )
+)
 const agentBindingIndex = computed(
   () =>
     form.value?.bindings.findIndex(
@@ -1431,6 +1598,24 @@ const providerAccount = (id) =>
   data.value.accounts?.find((item) => item.providerId === id)
 const googleAccount = (id) =>
   data.value.googleAccounts?.find((item) => item.providerId === id)
+// Google 使用官方共享额度分组，Codex 保持原来的周期卡片样式。
+const officialQuotaGroups = computed(() =>
+  Object.fromEntries(
+    data.value.providers
+      .filter((provider) => provider.kind !== "api")
+      .map((provider) => {
+        if (provider.kind === "google_account")
+          return [
+            provider.id,
+            formatGoogleQuotaGroups(
+              googleAccount(provider.id)?.metadata?.quotaGroups
+            )
+          ]
+        const windows = quotaWindows(provider)
+        return [provider.id, windows.length ? [{ id: "codex", windows }] : []]
+      })
+  )
+)
 // 错误按账号展示；只提取接口的原因，授权失效和网络故障使用不同的操作入口。
 const officialAccountIssues = computed(() =>
   Object.fromEntries(
@@ -1550,8 +1735,8 @@ function providerPlanLabel(provider) {
       team: "Team",
       business: "Business",
       enterprise: "Enterprise",
-      "g1-pro-tier": "Google AI Pro",
-      "g1-ultra-tier": "Google AI Ultra",
+      "g1-pro-tier": "Pro",
+      "g1-ultra-tier": "Ultra",
       "free-tier": "免费版",
       FREE: "免费版"
     }[plan] ||
@@ -1565,6 +1750,7 @@ function quotaWindows(provider) {
   return [limits?.primary_window, limits?.secondary_window]
     .filter(Boolean)
     .map((window, index) => ({
+      id: index,
       name:
         window.limit_window_seconds === 604800
           ? "周额度"
@@ -1577,14 +1763,14 @@ function quotaWindows(provider) {
         window.used_percent == null
           ? null
           : Math.max(0, Math.min(100, 100 - window.used_percent)),
-      resetAt: window.reset_at
+      resetAt: Number(window.reset_at) * 1000 || null
     }))
 }
 
 // 保留真实重置日期供悬浮查看，卡片内只显示剩余时间。
 function formatResetCountdown(value) {
   if (!value) return "重置时间未知"
-  const remaining = value * 1000 - countdownNow.value
+  const remaining = value - countdownNow.value
   if (remaining <= 0) return "待刷新"
   const minutes = Math.floor(remaining / 60000)
   const days = Math.floor(minutes / 1440)
@@ -1642,17 +1828,14 @@ async function refresh(refreshQuotas = false) {
 async function refreshOfficialQuotas() {
   if (disposed || providerTab.value !== "codex_account") return
   if (officialQuotaTask) return officialQuotaTask
-  officialQuotaTask = (async () => {
-    for (const source of data.value.providers.filter(
-      (item) => item.kind !== "api" && item.enabled && item.hasCredential
-    )) {
-      if (disposed || providerTab.value !== "codex_account") break
-      const provider = data.value.providers.find(
-        (item) => item.id === source.id
+  // 同批次的每个账号独立刷新，额度各自返回后立即更新。
+  officialQuotaTask = Promise.all(
+    data.value.providers
+      .filter(
+        (item) => item.kind !== "api" && item.enabled && item.hasCredential
       )
-      if (provider) await refreshQuota(provider, false)
-    }
-  })()
+      .map((provider) => refreshQuota(provider, false))
+  )
   try {
     await officialQuotaTask
   } finally {
@@ -1785,13 +1968,22 @@ async function closeOfficialLogin() {
   officialLogin.value = null
 }
 
-async function completeOfficialLogin() {
+async function completeOfficialLogin(providerId) {
   if (officialLogin.value?.provider?.id)
     delete officialQuotaErrors.value[officialLogin.value.provider.id]
   officialLogin.value = null
   officialLoginState.value = null
-  providerTab.value = "codex_account"
-  await refresh()
+  // 从 Antigravity 添加账号后回到原弹窗，授权成功后仍需用户确认应用。
+  const fromAntigravity = Boolean(antigravityClientId.value)
+  if (fromAntigravity) antigravityProviderId.value = providerId || ""
+  const refreshed = await refresh()
+  if (!fromAntigravity && providerTab.value !== "codex_account") {
+    providerTab.value = "codex_account"
+  } else if (!fromAntigravity && refreshed && providerId) {
+    // 已停在当前标签时不会触发切换监听，直接刷新新授权的 Google 账号。
+    const provider = data.value.providers.find((item) => item.id === providerId)
+    if (provider?.kind === "google_account") void refreshQuota(provider, false)
+  }
   createMessage.success("官方账号已保存，名称已根据登录信息自动生成")
 }
 
@@ -1921,6 +2113,34 @@ async function openAgentConfig(agent) {
   agentConfig.value = agent
   agentProviderId.value = currentAgentInstance(agent.id)?.providerId || ""
   await selectAgentProvider()
+}
+
+function openAntigravityConfig(agent) {
+  if (busy.value || !agent.installed) return
+  antigravityClientId.value = agent.id
+  antigravityProviderId.value = ""
+}
+
+// 凭据写入与启动结果由原生客户端操作直接返回。
+async function runAntigravity(apply) {
+  if (busy.value || !antigravityClient.value) return
+  if (apply && !selectedAntigravityAccount.value) return
+  busy.value = true
+  try {
+    const result = await serviceProviderApi.invoke(
+      apply ? "antigravity-apply" : "antigravity-open",
+      {
+        clientId: antigravityClientId.value,
+        providerId: antigravityProviderId.value
+      }
+    )
+    antigravityClientId.value = ""
+    createMessage.success(result.message)
+  } catch (error) {
+    createMessage.error(error?.message || String(error))
+  } finally {
+    busy.value = false
+  }
 }
 
 async function selectAgentProvider() {
@@ -2676,6 +2896,29 @@ async function showBackup(id) {
         .provider-meta {
           font-size: var(--font-size-xs);
         }
+        .quota-group-name {
+          color: var(--color-text-muted);
+          font-size: var(--font-size-sm);
+        }
+        .quota-status {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          .quota-placeholder {
+            width: 44px;
+            height: 6px;
+            flex: none;
+            border-radius: 999px;
+            background: linear-gradient(
+              100deg,
+              var(--color-panel-soft) 20%,
+              var(--color-info-line) 50%,
+              var(--color-panel-soft) 80%
+            );
+            background-size: 200% 100%;
+            animation: quota-loading 1.2s linear infinite;
+          }
+        }
         .quota-list {
           display: flex;
           flex-wrap: wrap;
@@ -3316,6 +3559,11 @@ async function showBackup(id) {
           }
         }
       }
+    }
+  }
+  .antigravity-config-modal {
+    :deep(.base-modal__panel) {
+      width: 620px;
     }
   }
   .provider-form {

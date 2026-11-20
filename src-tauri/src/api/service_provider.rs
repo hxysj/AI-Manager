@@ -6,7 +6,56 @@ use crate::core::{
 };
 use rusqlite::{params, TransactionBehavior};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, OnceLock, Weak};
+use tokio::sync::{Mutex, OwnedMutexGuard};
+
+// 同一账号的凭据续期需要互斥，不同账号可以同时续期。
+pub(crate) async fn lock_account_token(paths: &AppPaths, provider: &str) -> OwnedMutexGuard<()> {
+    type AccountLocks = HashMap<(String, String), Weak<Mutex<()>>>;
+    static LOCKS: OnceLock<Mutex<AccountLocks>> = OnceLock::new();
+    let lock = {
+        let mut locks = LOCKS.get_or_init(|| Mutex::new(HashMap::new())).lock().await;
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        let entry = locks
+            .entry((paths.storage_files.database.clone(), provider.to_owned()))
+            .or_default();
+        entry.upgrade().unwrap_or_else(|| {
+            let lock = Arc::new(Mutex::new(()));
+            *entry = Arc::downgrade(&lock);
+            lock
+        })
+    };
+    lock.lock_owned().await
+}
+
+pub(crate) async fn refresh_quota(paths: &AppPaths, provider: &str) -> Result<Value, ManagerError> {
+    if !store::active(paths)? {
+        return Err(store::fail("请先启用服务商配置中心"));
+    }
+    let config = store::config(&database::open(paths)?, provider)?;
+    match store::text(&config, "kind") {
+        "google_account" => crate::api::google_account::refresh(paths, provider).await,
+        "codex_account" => codex_account::refresh_service_quota(paths, provider).await,
+        _ => Err(store::fail("仅官方账号支持额度刷新")),
+    }
+}
+
+#[cfg(test)]
+#[test]
+fn quota_token_locks_only_serialize_the_same_account() {
+    let paths = crate::core::paths::resolve_app_paths(Path::new("quota-lock-test"));
+    tauri::async_runtime::block_on(async {
+        let first = lock_account_token(&paths, "account-a").await;
+        let mut same_account = std::pin::pin!(lock_account_token(&paths, "account-a"));
+        let mut other_account = std::pin::pin!(lock_account_token(&paths, "account-b"));
+        assert!(futures_util::poll!(same_account.as_mut()).is_pending());
+        assert!(futures_util::poll!(other_account.as_mut()).is_ready());
+        drop(first);
+        assert!(futures_util::poll!(same_account.as_mut()).is_ready());
+    });
+}
 
 pub async fn dispatch(
     paths: &AppPaths,
@@ -109,13 +158,6 @@ pub async fn dispatch(
         "quick-switch" => return quick_switch(paths, targets, &value),
         "configure-agent" => return configure_agent(paths, targets, &value),
         "issue-token" => return issue_token(paths, &value),
-        "refresh-quota" => {
-            if store::config(&database::open(paths)?, store::text(&value, "providerId"))?["kind"] == "google_account" {
-                return crate::api::google_account::refresh(paths, store::text(&value, "providerId")).await;
-            }
-            return codex_account::refresh_service_quota(paths, store::text(&value, "providerId"))
-                .await
-        }
         "detach" => {
             detach(paths, store::text(&value, "id"))?;
         }

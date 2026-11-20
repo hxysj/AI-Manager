@@ -480,8 +480,7 @@ pub async fn get_proxy_auth(
 // 共享网关只管理新账号凭据，不读取客户端 auth.json，也不激活旧账号。
 pub(crate) async fn service_proxy_auth(paths: &AppPaths, provider_id: &str) -> Result<Value, ManagerError> {
     use crate::core::{database, service_provider_store as store};
-    static REFRESH_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-    let _guard = REFRESH_LOCK.lock().await;
+    let _guard = crate::api::service_provider::lock_account_token(paths, provider_id).await;
     let (mut account, proxy) = {
         let connection = database::open(paths)?;
         let config=store::config(&connection,provider_id)?;

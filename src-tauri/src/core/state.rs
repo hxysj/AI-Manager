@@ -203,6 +203,24 @@ impl AppState {
             return network_quality::dispatch(&app, action, payload.unwrap_or_else(|| json!({})))
                 .await;
         }
+        // 各官方账号独立查询额度，在网络请求期间不持有应用状态锁。
+        if channel == "service-provider:refresh-quota" {
+            let paths = self.manager.lock().await.paths.clone();
+            let payload = payload.unwrap_or_else(|| json!({}));
+            let result = service_provider::refresh_quota(
+                &paths,
+                payload["providerId"].as_str().unwrap_or(""),
+            )
+            .await;
+            let mut manager = self.manager.lock().await;
+            if manager.paths.storage_files.database == paths.storage_files.database
+                && crate::core::service_provider_store::active(&paths)?
+            {
+                refresh_runtime_provider_state(&paths, &mut manager.state)?;
+                manager.emit_state_changed(&app)?;
+            }
+            return result;
+        }
         // Google 额度刷新释放应用锁，外部接口较慢时不阻塞其他页面。
         if channel == "google-account:refresh" {
             let paths = self.manager.lock().await.paths.clone();
@@ -631,6 +649,9 @@ impl ManagerState {
     ) -> Result<Value, ManagerError> {
         if let Some(action) = channel.strip_prefix("service-provider:") {
             let payload = payload.unwrap_or_else(|| json!({}));
+            if matches!(action, "antigravity-open" | "antigravity-apply") {
+                return crate::api::antigravity::dispatch(&self.paths, action, &payload).await;
+            }
             if action == "refresh-agents" {
                 self.refresh_state().await?;
                 self.emit_state_changed(&app)?;

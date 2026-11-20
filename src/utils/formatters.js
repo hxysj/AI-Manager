@@ -41,6 +41,39 @@ export function formatServiceProviderName(provider, state = {}) {
   )
 }
 
+// Google 的额度按共享模型分组，同一组内按周期从短到长展示。
+export function formatGoogleQuotaGroups(groups) {
+  return (groups || [])
+    .map((group, groupIndex) => ({
+      id: groupIndex,
+      name: group.displayName || `共享额度 ${groupIndex + 1}`,
+      windows: (group.buckets || [])
+        .map((bucket, index) => {
+          const window = String(bucket.window || "")
+            .replace(/^WINDOW_/i, "")
+            .toLowerCase()
+          const period = { "5h": 18000, weekly: 604800 }[window]
+          return {
+            id: index,
+            name:
+              { "5h": "5 小时额度", weekly: "周额度" }[window] ||
+              bucket.displayName ||
+              bucket.window ||
+              "额度",
+            order: period || Number.MAX_SAFE_INTEGER,
+            remaining: Number.isFinite(bucket.remainingFraction)
+              ? Math.round(
+                  Math.max(0, Math.min(1, bucket.remainingFraction)) * 1000
+                ) / 10
+              : null,
+            resetAt: Date.parse(bucket.resetTime) || null
+          }
+        })
+        .sort((left, right) => left.order - right.order)
+    }))
+    .filter((group) => group.windows.length)
+}
+
 export function formatCount(value, singularLabel, pluralLabel = singularLabel) {
   const count = Number(value || 0)
   const label = count === 1 ? singularLabel : pluralLabel

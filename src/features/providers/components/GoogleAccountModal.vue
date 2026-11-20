@@ -254,8 +254,8 @@ const waiting = computed(() => loginState.value.status === "pending")
 const planLabel = computed(
   () =>
     ({
-      "g1-pro-tier": "Google AI Pro",
-      "g1-ultra-tier": "Google AI Ultra",
+      "g1-pro-tier": "Pro",
+      "g1-ultra-tier": "Ultra",
       "free-tier": "免费版",
       FREE: "免费版"
     })[account.value?.google?.plan] || account.value?.google?.plan

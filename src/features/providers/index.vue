@@ -4025,8 +4025,8 @@ function rateLimitWindows(rateLimit) {
 
 function formatPlanName(value) {
   const googlePlans = {
-    "g1-pro-tier": "Google AI Pro",
-    "g1-ultra-tier": "Google AI Ultra",
+    "g1-pro-tier": "Pro",
+    "g1-ultra-tier": "Ultra",
     "free-tier": "免费版",
     FREE: "免费版"
   }

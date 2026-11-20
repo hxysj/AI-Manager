@@ -11,7 +11,7 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::{
     convert::Infallible,
-    sync::{Arc, OnceLock},
+    sync::Arc,
     time::Duration,
 };
 use tauri_plugin_opener::OpenerExt;
@@ -22,12 +22,13 @@ use tokio::{
 };
 
 const TOKEN_URL: &str = "https://oauth2.googleapis.com/token";
+const ANTIGRAVITY_CLIENT_ID: &str =
+    "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
 const ENDPOINTS: [&str; 3] = [
     "https://daily-cloudcode-pa.sandbox.googleapis.com/v1internal",
     "https://daily-cloudcode-pa.googleapis.com/v1internal",
     "https://cloudcode-pa.googleapis.com/v1internal",
 ];
-static TOKEN_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Default)]
 pub struct GoogleLogin {
@@ -81,9 +82,8 @@ impl GoogleLogin {
         let verifier = URL_SAFE_NO_PAD.encode(random);
         let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
         let state = uuid::Uuid::new_v4().to_string();
-        let client_id = std::env::var("GOOGLE_OAUTH_CLIENT_ID").unwrap_or_else(|_| {
-            "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com".into()
-        });
+        let client_id = std::env::var("GOOGLE_OAUTH_CLIENT_ID")
+            .unwrap_or_else(|_| ANTIGRAVITY_CLIENT_ID.into());
         let client_secret = std::env::var("GOOGLE_OAUTH_CLIENT_SECRET")
             .unwrap_or_else(|_| "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".into());
         let mut url = url::Url::parse("https://accounts.google.com/o/oauth2/v2/auth").unwrap();
@@ -305,9 +305,32 @@ pub(crate) async fn access_token(
     id: &str,
     force: bool,
 ) -> Result<String, ManagerError> {
-    let _guard = TOKEN_LOCK.get_or_init(|| Mutex::new(())).lock().await;
+    Ok(usable_tokens(paths, id, force, false).await?["access_token"]
+        .as_str()
+        .unwrap_or_default()
+        .to_owned())
+}
+
+#[cfg(windows)]
+pub(super) async fn antigravity_tokens(paths: &AppPaths, id: &str) -> Result<Value, ManagerError> {
+    usable_tokens(paths, id, false, true).await
+}
+
+async fn usable_tokens(
+    paths: &AppPaths,
+    id: &str,
+    force: bool,
+    antigravity: bool,
+) -> Result<Value, ManagerError> {
+    let _guard = crate::api::service_provider::lock_account_token(paths, id).await;
     let service_mode = store::active(paths)?;
     let generation = store::generation(&database::open(paths)?)?;
+    if antigravity {
+        let config = store::config(&database::open(paths)?, id)?;
+        if !service_mode || config["kind"] != "google_account" || !config["deletedAt"].is_null() {
+            return Err(error("Antigravity 仅支持 Google 官方 OAuth 账号"));
+        }
+    }
     let provider = find_account(paths, id)?;
     if provider["enabled"] == false {
         return Err(error("Google 账号已禁用"));
@@ -318,6 +341,9 @@ pub(crate) async fn access_token(
     } else {
         (read_tokens(paths, id)?, None)
     };
+    if antigravity && tokens["client_id"] != ANTIGRAVITY_CLIENT_ID {
+        return Err(error("此 Google 授权使用了不同的 OAuth 客户端，请使用 Antigravity 对应的 Google 授权重新登录"));
+    }
     if force || tokens["expires_at"].as_i64().unwrap_or(0) <= chrono::Utc::now().timestamp() + 900 {
         let client = proxy::http_client(provider["google"]["proxy"].as_str().unwrap_or(""))?;
         let response = client
@@ -362,13 +388,15 @@ pub(crate) async fn access_token(
         if refreshed["refresh_token"].is_string() {
             tokens["refresh_token"] = refreshed["refresh_token"].clone();
         }
+        if refreshed["id_token"].is_string() {
+            tokens["id_token"] = refreshed["id_token"].clone();
+        }
         save_tokens(paths, id, &tokens, credential_generation)?;
     }
-    tokens["access_token"]
-        .as_str()
-        .filter(|value| !value.is_empty())
-        .map(str::to_owned)
-        .ok_or_else(|| error("Google 访问凭据无效，请重新登录"))
+    if tokens["access_token"].as_str().unwrap_or("").is_empty() {
+        return Err(error("Google 访问凭据无效，请重新登录"));
+    }
+    Ok(tokens)
 }
 
 pub(crate) async fn upstream(
