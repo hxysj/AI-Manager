@@ -15,7 +15,7 @@ mod legacy_tests;
 mod restore;
 pub use restore::{preview_rows, row_choice_key, RestoreRowDifference};
 
-// 仅跨设备恢复的业务数据进入备份，其他表只保留结构。
+// 仅跨设备恢复的业务数据进入备份，接管实例、网关令牌和受管文件账本只保留表结构。
 const BACKUP_INCLUDED_TABLES: [&str; 18] = [
     "providers",
     "skills",
@@ -292,7 +292,7 @@ pub fn restore_selected(
     selected_tables: &[String],
 ) -> Result<(), ManagerError> {
     let selected_tables = selected_tables.iter().cloned().collect::<HashSet<_>>();
-    restore_tables(paths, content, &selected_tables, None)
+    restore_tables(paths, content, &selected_tables, None, |_| Ok(()))
 }
 
 pub fn restore_merged(
@@ -300,11 +300,20 @@ pub fn restore_merged(
     content: &[u8],
     choices: &serde_json::Map<String, serde_json::Value>,
 ) -> Result<(), ManagerError> {
+    restore_merged_with(paths, content, choices, |_| Ok(()))
+}
+
+pub(crate) fn restore_merged_with(
+    paths: &AppPaths,
+    content: &[u8],
+    choices: &serde_json::Map<String, serde_json::Value>,
+    after_merge: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<(), ManagerError>,
+) -> Result<(), ManagerError> {
     let tables = BACKUP_INCLUDED_TABLES
         .iter()
         .map(|table| table.to_string())
         .collect();
-    restore_tables(paths, content, &tables, Some(choices))
+    restore_tables(paths, content, &tables, Some(choices), after_merge)
 }
 
 fn restore_tables(
@@ -312,6 +321,7 @@ fn restore_tables(
     content: &[u8],
     selected_tables: &HashSet<String>,
     choices: Option<&serde_json::Map<String, serde_json::Value>>,
+    after_merge: impl FnOnce(&rusqlite::Transaction<'_>) -> Result<(), ManagerError>,
 ) -> Result<(), ManagerError> {
     with_restore_snapshot(paths, content, |snapshot_path| {
         let mut connection = open_restore_connection(paths, snapshot_path)?;
@@ -334,14 +344,16 @@ fn restore_tables(
         } else {
             transaction.execute("INSERT INTO restore_choices VALUES ('*')", [])?;
         }
+        let takeovers = restore::read_takeover_bindings(&transaction)?;
 
         for table in restore_tables {
             if table == "skills" {
                 restore_skills(&transaction)?;
             } else {
-                restore_table(&transaction, &table)?;
+                restore::merge_table(&transaction, &table, &takeovers)?;
             }
         }
+        after_merge(&transaction)?;
         transaction.execute(
             "INSERT INTO app_metadata(key, value) VALUES ('restored_at', ?1)
              ON CONFLICT(key) DO UPDATE SET value = excluded.value",
@@ -367,9 +379,6 @@ fn with_restore_snapshot<T>(
         crate::core::provider_store::initialize(paths)?;
     }
     crate::core::service_provider_store::initialize(paths)?;
-    if service_mode && open(paths)?.query_row("SELECT EXISTS(SELECT 1 FROM service_agent_instances WHERE status<>'detached')",[],|r|r.get::<_,bool>(0))? {
-        return Err(ManagerError::System("请先在配置中心解除所有实例接管，再恢复业务备份".into()));
-    }
     std::fs::create_dir_all(&paths.temp_dir)?;
     let snapshot_path = Path::new(&paths.temp_dir).join(format!(
         "ai-manager-restore-{}-{}.db",
@@ -469,10 +478,6 @@ fn read_table_names(connection: &Connection, schema: &str) -> Result<Vec<String>
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-fn restore_table(transaction: &rusqlite::Transaction<'_>, table: &str) -> Result<(), ManagerError> {
-    restore::merge_table(transaction, table)
-}
-
 // 安装、启用和回收站信息属于本机，恢复业务数据时保留当前值。
 const SKILL_LOCAL_COLUMNS: &[&str] = &[
     "disabled",
@@ -504,7 +509,7 @@ fn restore_skills(transaction: &rusqlite::Transaction<'_>) -> Result<(), Manager
             .collect::<Result<HashMap<_, _>, _>>()?;
         rows
     };
-    restore_table(transaction, "skills")?;
+    restore::merge_table(transaction, "skills", &[])?;
     let restored = transaction.prepare("SELECT item_key FROM skills WHERE item_key IN (SELECT row_key FROM restore_applied WHERE table_name='skills')")?
         .query_map([], |row| row.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?;
     let updates = SKILL_LOCAL_COLUMNS
@@ -565,7 +570,7 @@ fn read_table_columns(
     Ok(rows.collect::<Result<Vec<_>, _>>()?)
 }
 
-// 只跨设备同步明确的业务配置，解析器版本、缓存修订号等始终属于本机。
+// 固定 Agent 令牌等设备数据留在本机，仅允许同步明确列出的业务配置。
 fn restore_row_filter(table: &str) -> &'static str {
     if table == "app_metadata" {
         "WHERE key='usage:exchange_rate'"

@@ -15,7 +15,7 @@ mod tests;
 pub const SCHEMA: &str = include_str!("service_provider_store/schema.sql");
 pub const MODE_KEY: &str = "service_provider:active_backend";
 pub const GENERATION_KEY: &str = "service_provider:mode_generation";
-// 官方账号随配置存储，但凭据、身份及额度属于本机数据，不参与业务备份和覆盖恢复。
+// 官方账号字段不进入业务数据库快照，登录凭据由备份的独立加密字段处理。
 pub const ACCOUNT_LOCAL_COLUMNS: &[&str] = &[
     "account_id", "account_email", "credentials_ciphertext", "token_expires_at",
     "credential_generation", "refresh_status", "quota_json", "account_updated_at",
@@ -882,20 +882,33 @@ pub fn save_key(
     name: &str,
     secret: &str,
 ) -> Result<(), ManagerError> {
+    save_key_version(c, provider, logical, name, secret, true)
+}
+
+pub(crate) fn save_key_version(
+    c: &Connection,
+    provider: &str,
+    logical: &str,
+    name: &str,
+    secret: &str,
+    activate: bool,
+) -> Result<(), ManagerError> {
     if logical.is_empty() || secret.is_empty() {
         return Err(fail("Key 标识和内容不能为空"));
     }
     let fingerprint = hash(secret);
     c.execute("UPDATE service_provider_keys SET is_current=0,is_active=0,status='archived',secret_ciphertext='',updated_at=?3
         WHERE provider_id=?1 AND logical_id=?2 AND fingerprint<>?4",params![provider,logical,now(),fingerprint])?;
-    c.execute(
-        "UPDATE service_provider_keys SET is_active=0 WHERE provider_id=?1",
-        [provider],
-    )?;
+    if activate {
+        c.execute(
+            "UPDATE service_provider_keys SET is_active=0 WHERE provider_id=?1",
+            [provider],
+        )?;
+    }
     c.execute("INSERT INTO service_provider_keys(id,provider_id,logical_id,name,secret_ciphertext,fingerprint,is_active,created_at,updated_at)
-        VALUES(?1,?2,?3,?4,?5,?6,1,?7,?7) ON CONFLICT(provider_id,logical_id,fingerprint) DO UPDATE SET name=excluded.name,
-        secret_ciphertext=excluded.secret_ciphertext,is_current=1,is_active=1,status='active',updated_at=excluded.updated_at",
-        params![id(),provider,logical,name,encrypt_provider_key(secret)?,fingerprint,now()])?;
+        VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?8) ON CONFLICT(provider_id,logical_id,fingerprint) DO UPDATE SET name=excluded.name,
+        secret_ciphertext=excluded.secret_ciphertext,is_current=1,is_active=excluded.is_active,status='active',updated_at=excluded.updated_at",
+        params![id(),provider,logical,name,encrypt_provider_key(secret)?,fingerprint,activate,now()])?;
     Ok(())
 }
 

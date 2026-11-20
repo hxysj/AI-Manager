@@ -25,6 +25,8 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager};
 use tauri_plugin_dialog::{DialogExt, FilePath};
 
+mod service_credentials;
+
 const MAX_COMPRESSED_BACKUP_PAYLOAD_SIZE: u64 = 1024 * 1024 * 1024;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -480,6 +482,10 @@ async fn collect_data_backup_payload(
     let mut payload = json!({"version": 1});
     payload["runtimeProviderKeys"] = export_provider_keys(paths)?;
     payload["workspaceEntries"] = Value::Array(collect_backup_entries(paths, scope).await?);
+    let service_credentials = service_credentials::collect(paths)?;
+    if !service_credentials.is_empty() {
+        payload[service_credentials::FIELD] = serde_json::to_value(service_credentials)?;
+    }
     payload["codexPetEntries"] = Value::Array(collect_codex_pet_entries(app_settings, scope).await?);
 
     if scope == BackupScope::Local {
@@ -492,6 +498,9 @@ fn seal_data_backup(mut payload: Value, scope: BackupScope) -> Result<String, Ma
     // 时间和随机加密结果不参与内容比较。
     payload["createdAt"] = json!(now_millis());
     payload["runtimeProviderKeys"] = json!(encrypt_backup_data(&payload["runtimeProviderKeys"])?);
+    if let Some(credentials) = payload.get(service_credentials::FIELD) {
+        payload[service_credentials::FIELD] = json!(encrypt_backup_data(credentials)?);
+    }
     encrypt_backup_payload(&payload, scope)
 }
 
@@ -603,6 +612,8 @@ async fn preview_data_backup_restore_content(
     if let Some(keys) = backup.get("runtimeProviderKeys").and_then(Value::as_str) {
         append_provider_keys_preview(paths, &decrypt_backup_data(keys)?, &mut preview)?;
     }
+    let credentials = service_credentials::decode(&backup)?;
+    service_credentials::append_preview(paths, &credentials, &mut preview)?;
     append_app_settings_restore_preview(&mut preview, app_settings, &backup)?;
     append_codex_pets_restore_preview(&mut preview, app_settings, &codex_pet_entries).await?;
 
@@ -740,6 +751,14 @@ fn inspect_data_backup(content: &str) -> Result<Value, ManagerError> {
             ),
         ));
     }
+    if backup.get(service_credentials::FIELD).is_some() {
+        let credentials = service_credentials::decode(&backup)?;
+        entries.push(create_backup_view_entry(
+            "service-provider-credentials",
+            "配置中心凭据",
+            format!("已加密保存 {} 条 API Key 和官方账号登录凭据。\n", credentials.len()),
+        ));
+    }
 
     Ok(json!({
       "version": backup.get("version").cloned().unwrap_or(Value::Null),
@@ -758,10 +777,6 @@ async fn restore_data_backup_content(
     choices: &Value,
 ) -> Result<bool, ManagerError> {
     let service_mode = crate::core::service_provider_store::active(paths)?;
-    if service_mode && database::open(paths)?.query_row(
-        "SELECT EXISTS(SELECT 1 FROM service_agent_instances WHERE status<>'detached')", [], |row| row.get::<_, bool>(0))? {
-        return Err(ManagerError::System("请先解除所有 Agent 接管和调用 Token，再恢复业务备份".into()));
-    }
     let backup = parse_backup(content)?;
     let choices = choices.as_object().cloned().unwrap_or_default();
     let runtime_provider_keys = backup
@@ -769,6 +784,7 @@ async fn restore_data_backup_content(
         .and_then(Value::as_str)
         .map(decrypt_backup_data)
         .transpose()?;
+    let service_credentials = service_credentials::decode(&backup)?;
 
     ensure_app_directories(paths).await?;
     let (workspace_entries, codex_pet_entries) = prepare_pet_restore_entries(
@@ -811,7 +827,7 @@ async fn restore_data_backup_content(
     skill_store::initialize(paths)?;
     rule_store::initialize(paths)?;
     if !service_mode { provider_store::initialize(paths)?; }
-    restore_database_entries(paths, &workspace_entries, &choices).await?;
+    restore_database_entries(paths, &workspace_entries, &choices, &service_credentials).await?;
     if let Some(runtime_provider_keys) = runtime_provider_keys {
         merge_provider_keys(paths, &runtime_provider_keys, &choices).await?;
     }
@@ -1787,6 +1803,7 @@ async fn restore_database_entries(
     paths: &AppPaths,
     entries: &[Value],
     choices: &Map<String, Value>,
+    credentials: &[service_credentials::Credential],
 ) -> Result<(), ManagerError> {
     let entry_path = "storage/ai-manager.db";
     let Some(entry) = entries.iter().find(|entry| {
@@ -1798,7 +1815,9 @@ async fn restore_database_entries(
     let backup_content = base64::engine::general_purpose::STANDARD
         .decode(string_value(entry.get("content")))
         .map_err(|error| ManagerError::System(error.to_string()))?;
-    database::restore_merged(paths, &backup_content, choices)?;
+    database::restore_merged_with(paths, &backup_content, choices, |transaction| {
+        service_credentials::merge(transaction, credentials, choices)
+    })?;
     Ok(())
 }
 
@@ -2278,7 +2297,7 @@ fn cloud_sync_provider_name(config: &CloudSyncSettings) -> &'static str {
     }
 }
 
-async fn send_webdav_upload_request(
+async fn send_webdav_request(
     config: &CloudSyncSettings,
     stage: &'static str,
     request: reqwest::RequestBuilder,
@@ -2304,7 +2323,7 @@ async fn ensure_webdav_directory(
     let request = client
         .request(method, &config.webdav_url)
         .header(AUTHORIZATION, build_webdav_auth_header(config));
-    let response = send_webdav_upload_request(config, "创建备份目录", request).await?;
+    let response = send_webdav_request(config, "创建备份目录", request).await?;
 
     let status = response.status().as_u16();
 
@@ -2424,7 +2443,7 @@ async fn upload_and_publish_webdav_backup(
         .header(AUTHORIZATION, &auth)
         .header(CONTENT_TYPE, "application/octet-stream")
         .body(content);
-    let response = send_webdav_upload_request(config, "上传备份", request).await?;
+    let response = send_webdav_request(config, "上传备份", request).await?;
 
     let status = response.status().as_u16();
 
@@ -2443,7 +2462,7 @@ async fn upload_and_publish_webdav_backup(
         .head(temporary_url.clone())
         .header(AUTHORIZATION, &auth)
         .header(ACCEPT_ENCODING, "identity");
-    let response = send_webdav_upload_request(config, "上传后校验", request).await?;
+    let response = send_webdav_request(config, "上传后校验", request).await?;
     let status = response.status().as_u16();
 
     if status != 200 {
@@ -2477,7 +2496,7 @@ async fn upload_and_publish_webdav_backup(
         .header(AUTHORIZATION, &auth)
         .header("Destination", file_url.as_str())
         .header("Overwrite", "T");
-    let response = send_webdav_upload_request(config, "替换正式备份", request).await?;
+    let response = send_webdav_request(config, "替换正式备份", request).await?;
     let status = response.status().as_u16();
     if ![200, 201, 204].contains(&status) {
         let detail = read_webdav_error_detail(response, config).await?;
@@ -2522,6 +2541,36 @@ fn webdav_content_length(headers: &HeaderMap) -> Option<u64> {
         .ok()
 }
 
+async fn read_webdav_backup_metadata(
+    client: &reqwest::Client,
+    config: &CloudSyncSettings,
+) -> Result<reqwest::Response, ManagerError> {
+    let file_url = build_webdav_file_url(config)?;
+    let auth = build_webdav_auth_header(config);
+    let mut attempt = 1;
+    loop {
+        let request = client
+            .head(file_url.clone())
+            .header(AUTHORIZATION, auth.as_str())
+            .header(ACCEPT_ENCODING, "identity")
+            .timeout(Duration::from_secs(30));
+        let result = send_webdav_request(config, "读取备份信息", request).await;
+        let retryable = match &result {
+            Ok(response) => matches!(response.status().as_u16(), 408 | 502 | 503 | 504),
+            Err(ManagerError::WebDavRequest { source, .. }) => {
+                source.is_request() || source.is_timeout()
+            }
+            Err(_) => false,
+        };
+        // 与文件下载一致，为临时故障留出恢复时间。
+        if !retryable || attempt == 3 {
+            return result;
+        }
+        tokio::time::sleep(Duration::from_millis(500 * attempt)).await;
+        attempt += 1;
+    }
+}
+
 async fn download_webdav_backup(config: &CloudSyncSettings) -> Result<String, ManagerError> {
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(15))
@@ -2532,20 +2581,7 @@ async fn download_webdav_backup(config: &CloudSyncSettings) -> Result<String, Ma
         .no_zstd()
         .build()
         .map_err(|cause| ManagerError::System(cause.to_string()))?;
-    let response = client
-        .head(build_webdav_file_url(config)?)
-        .header(AUTHORIZATION, build_webdav_auth_header(config))
-        .header(ACCEPT_ENCODING, "identity")
-        .timeout(Duration::from_secs(30))
-        .send()
-        .await
-        .map_err(|cause| {
-            ManagerError::System(format!(
-                "{}读取备份信息失败：{}",
-                cloud_sync_provider_name(config),
-                cause.without_url()
-            ))
-        })?;
+    let response = read_webdav_backup_metadata(&client, config).await?;
     let status = response.status().as_u16();
     if status == 404 {
         return Err(ManagerError::System(format!(
@@ -2949,6 +2985,9 @@ fn decrypt_backup_data(value: &str) -> Result<Value, ManagerError> {
     let encrypted = engine
         .decode(parts.next().unwrap_or(""))
         .map_err(|error| ManagerError::System(error.to_string()))?;
+    if iv.len() != 12 || tag.len() != 16 || parts.next().is_some() {
+        return Err(ManagerError::System("备份凭据密文格式不正确".into()));
+    }
     let mut payload = encrypted;
 
     payload.extend(tag);
@@ -3988,37 +4027,89 @@ mod tests {
     }
 
     #[test]
-    fn service_backup_entry_points_work_without_reading_legacy_provider_storage() {
+    fn service_credentials_round_trip_through_local_and_cloud_backups() {
         tauri::async_runtime::block_on(async {
             use crate::core::service_provider_store as store;
             let root=std::env::temp_dir().join(format!("ai-manager-service-backup-{}",uuid::Uuid::new_v4()));
             let paths=resolve_app_paths(&root.join("source"));
             store::initialize(&paths).unwrap();
-            store::save(&paths,&json!({"name":"新服务商","baseUrl":"https://example.test/v1","apiKey":"private-service-key",
+            let api = store::save(&paths,&json!({"name":"新服务商","baseUrl":"https://example.test/v1","apiKey":"private-service-key",
                 "models":["test-model"],"bindings":[{"agentType":"codex","enabled":true}]})).unwrap();
+            let codex = store::save(&paths, &json!({"name": "Codex 官方", "kind": "codex_account"})).unwrap();
+            let google = store::save(&paths, &json!({"name": "Google 官方", "kind": "google_account"})).unwrap();
+            let api_id = store::text(&api, "id");
+            let codex_id = store::text(&codex, "id");
+            let google_id = store::text(&google, "id");
+            let c = database::open(&paths).unwrap();
+            store::save_key_version(&c, api_id, "backup", "备用 Key", "private-spare-key", false).unwrap();
+            store::save_key_version(&c, api_id, "revoked", "已撤销", "private-revoked-key", false).unwrap();
+            c.execute("UPDATE service_provider_keys SET status='revoked',secret_ciphertext='' WHERE logical_id='revoked'", []).unwrap();
+            let codex_login = json!({"account_id": "codex-account", "email": "codex@example.test",
+                "access_token": "codex-access", "refresh_token": "codex-refresh", "id_token": "codex-id",
+                "expires_at": 9999999999000i64});
+            let google_login = json!({"access_token": "google-access", "refresh_token": "google-refresh",
+                "client_id": "google-client", "client_secret": "google-secret", "expires_at": 9999999999i64});
+            store::save_account(&c, codex_id, &codex_login).unwrap();
+            store::save_google_credentials(
+                &c, google_id, &json!({"subject": "google-account", "email": "google@example.test",
+                    "port": 34567, "project": "google-project"}), &google_login,
+            ).unwrap();
+            let source_google_key = store::google_local_key(&c, google_id).unwrap();
+            drop(c);
             crate::api::service_provider::switch_backend(&paths,"service").unwrap();
             let settings=normalize_app_settings(root.join("source-settings.json"),Some(json!({
                 "cliConfigPaths":{"codex":root.join("client-source")}
             })));
-            let backup=super::create_data_backup(&paths,&settings).await.unwrap();
-            let payload=super::parse_backup(&backup).unwrap();
-            assert_eq!(super::decrypt_backup_data(payload["runtimeProviderKeys"].as_str().unwrap()).unwrap(),json!({}));
-            let restored=resolve_app_paths(&root.join("restored"));
-            store::initialize(&restored).unwrap();
-            crate::api::service_provider::switch_backend(&restored,"service").unwrap();
-            let mut settings=normalize_app_settings(root.join("target-settings.json"),Some(json!({
-                "cliConfigPaths":{"codex":root.join("client-target")}
-            })));
-            let preview=preview_data_backup_restore_content(&restored,&settings,&backup).await.unwrap();
-            assert!(preview.to_string().contains("服务商配置"));
-            restore_data_backup_content(&restored,&mut settings,&backup,&json!({"*":"backup"})).await.unwrap();
-            let state=store::state(&restored).unwrap();
-            assert_eq!(state["providers"][0]["name"],"新服务商");
-            assert_eq!(state["providers"][0]["hasCredential"],0);
-            assert!(store::active(&restored).unwrap());
-            let c=database::open(&restored).unwrap();
-            assert!(!store::table_exists(&c,"providers").unwrap());
-            drop(c);
+            for (scope, folder) in [(BackupScope::Local, "local"), (BackupScope::Cloud, "cloud")] {
+                let backup = super::create_scoped_data_backup(&paths, &settings, scope).await.unwrap();
+                let payload = super::parse_backup(&backup).unwrap();
+                assert_eq!(super::decrypt_backup_data(payload["runtimeProviderKeys"].as_str().unwrap()).unwrap(), json!({}));
+                assert!(payload[super::service_credentials::FIELD].is_string());
+                let target = root.join(folder);
+                let restored = resolve_app_paths(&target);
+                crate::api::service_provider::switch_backend(&restored, "service").unwrap();
+                let mut settings = normalize_app_settings(target.join("settings.json"), Some(json!({
+                    "cliConfigPaths": {"codex": target.join("client")}
+                })));
+                let preview = preview_data_backup_restore_content(&restored, &settings, &backup).await.unwrap();
+                let inspection = super::inspect_data_backup(&backup).unwrap().to_string();
+                for secret in ["private-service-key", "private-spare-key", "private-revoked-key",
+                    "codex-access", "codex-refresh", "codex-id", "google-access", "google-refresh", "google-secret"] {
+                    assert!(!payload.to_string().contains(secret));
+                    assert!(!preview.to_string().contains(secret));
+                    assert!(!inspection.contains(secret));
+                }
+                assert!(inspection.contains("配置中心凭据"));
+                assert!(preview["added"].as_array().unwrap().iter().any(|row| row["type"] == "Google 登录凭据"));
+                restore_data_backup_content(&restored, &mut settings, &backup, &json!({})).await.unwrap();
+                let c = database::open(&restored).unwrap();
+                assert!(!store::table_exists(&c, "providers").unwrap());
+                assert_eq!(store::credential(&c, api_id).unwrap()["secret"], "private-service-key");
+                assert_eq!(store::account(&c, codex_id).unwrap()["refreshToken"], "codex-refresh");
+                assert_eq!(store::google_tokens(&c, google_id).unwrap(), google_login);
+                assert_eq!(store::google_provider(&c, google_id).unwrap()["google"]["project"], "google-project");
+                assert_ne!(store::google_local_key(&c, google_id).unwrap(), source_google_key);
+                assert_eq!(store::query(&c, "SELECT logical_id,is_active FROM service_provider_keys
+                    WHERE provider_id=?1 AND is_current=1 ORDER BY logical_id", &[&api_id]).unwrap(),
+                    vec![json!({"logical_id":"backup","is_active":0}), json!({"logical_id":"default","is_active":1})]);
+
+                store::save_key(&c, api_id, "default", "本机 Key", "local-api-key").unwrap();
+                let mut local_login = codex_login.clone();
+                local_login["refresh_token"] = json!("local-refresh");
+                store::save_account(&c, codex_id, &local_login).unwrap();
+                restore_data_backup_content(&restored, &mut settings, &backup, &json!({})).await.unwrap();
+                assert_eq!(store::credential(&c, api_id).unwrap()["secret"], "local-api-key");
+                assert_eq!(store::account(&c, codex_id).unwrap()["refreshToken"], "local-refresh");
+                let preview = preview_data_backup_restore_content(&restored, &settings, &backup).await.unwrap();
+                let choices = preview["conflicts"].as_array().unwrap().iter()
+                    .filter(|row| row["type"] == "API Key" || row["type"] == "Codex 登录凭据")
+                    .map(|row| (row["key"].as_str().unwrap().to_owned(), json!("backup")))
+                    .collect::<Map<_, _>>();
+                assert_eq!(choices.len(), 2);
+                restore_data_backup_content(&restored, &mut settings, &backup, &json!(choices)).await.unwrap();
+                assert_eq!(store::credential(&c, api_id).unwrap()["secret"], "private-service-key");
+                assert_eq!(store::account(&c, codex_id).unwrap()["refreshToken"], "codex-refresh");
+            }
             assert!(root.canonicalize().unwrap().starts_with(std::env::temp_dir().canonicalize().unwrap()));
             std::fs::remove_dir_all(root).unwrap();
         });
@@ -4182,6 +4273,54 @@ mod tests {
     }
 
     #[test]
+    fn webdav_download_retries_transient_metadata_failures() {
+        tauri::async_runtime::block_on(async {
+            let headers = "Content-Length: 6\r\n";
+            let (config, server) = webdav_test_server(vec![
+                Vec::new(),
+                webdav_test_response(503, "Content-Length: 0\r\n", b""),
+                webdav_test_response(200, headers, b""),
+                webdav_test_response(200, headers, b"backup"),
+            ])
+            .await;
+            assert_eq!(
+                super::download_webdav_backup(&config).await.unwrap(),
+                "backup"
+            );
+            let requests = server.await.unwrap();
+            assert!(requests[..3]
+                .iter()
+                .all(|request| request.starts_with("head ")));
+            assert!(requests[3].starts_with("get "));
+        });
+    }
+
+    #[test]
+    fn webdav_download_metadata_failure_preserves_transport_cause() {
+        tauri::async_runtime::block_on(async {
+            use std::error::Error;
+            let client = reqwest::Client::builder().no_proxy().build().unwrap();
+            let (config, server) = webdav_test_server(vec![Vec::new(); 3]).await;
+            let error = super::read_webdav_backup_metadata(&client, &config)
+                .await
+                .unwrap_err();
+            assert!(error.to_string().contains("Koofr读取备份信息失败"));
+            assert!(!error.to_string().contains(&config.webdav_url));
+            let requests = server.await.unwrap();
+            assert_eq!(requests.len(), 3);
+            assert!(error.source().and_then(Error::source).is_some(), "{error:?}");
+
+            let unauthorized = webdav_test_response(401, "Content-Length: 0\r\n", b"");
+            let (config, server) = webdav_test_server(vec![unauthorized]).await;
+            let error = super::download_webdav_backup(&config).await.unwrap_err();
+            let message = error.to_string();
+            assert!(message.contains("401"), "{message}");
+            assert!(!message.contains(&config.password));
+            assert_eq!(server.await.unwrap().len(), 1);
+        });
+    }
+
+    #[test]
     fn webdav_download_retries_only_the_interrupted_range_and_preserves_utf8() {
         tauri::async_runtime::block_on(async {
             let chunk_size = 4 * 1024 * 1024;
@@ -4309,6 +4448,189 @@ mod tests {
             assert!(cause.contains("本地数据未恢复"));
             assert!(!cause.contains("test-secret"));
             assert_eq!(server.await.unwrap().len(), 3);
+        });
+    }
+
+    #[test]
+    fn cross_device_backup_restore_keeps_active_agent_tokens() {
+        tauri::async_runtime::block_on(async {
+            use crate::api::{multi_protocol_gateway::service, service_provider};
+            use crate::core::{quick_notes_store, service_provider_store as store};
+            use serde_json::Value;
+
+            let root = std::env::temp_dir()
+                .join(format!("ai-manager-cloud-takeover-{}", uuid::Uuid::new_v4()));
+            let paths = resolve_app_paths(&root.join("data"));
+            let codex = root.join("codex");
+            let claude = root.join("claude");
+            let source_codex = root.join("source-codex");
+            let source_claude = root.join("source-claude");
+            let mut settings = normalize_app_settings(root.join("settings.json"), Some(json!({
+                "dataPath": root.join("data"), "cliConfigPaths": {"codex": codex, "claude": claude}
+            })));
+            let source_settings = normalize_app_settings(root.join("source-settings.json"), Some(json!({
+                "dataPath": root.join("source"),
+                "cliConfigPaths": {"codex": source_codex, "claude": source_claude}
+            })));
+            store::initialize(&paths).unwrap();
+            let provider = store::save(&paths, &json!({
+                "name": "本机服务商", "baseUrl": "https://local.example.test/v1", "apiKey": "local-key",
+                "models": ["active-model", "other-model"],
+                "bindings": [
+                    {"agentType": "codex", "enabled": true, "defaultModelName": "active-model",
+                     "options": {"syncModelList": false}},
+                    {"agentType": "claude", "enabled": true, "defaultModelName": "active-model"}
+                ]
+            })).unwrap();
+            let provider_id = store::text(&provider, "id");
+            service_provider::switch_backend(&paths, "service").unwrap();
+            let connection = database::open(&paths).unwrap();
+            let model_id = |name: &str| connection.query_row(
+                "SELECT id FROM service_provider_models WHERE provider_id=?1 AND upstream_model_id=?2",
+                rusqlite::params![provider_id, name],
+                |row| row.get::<_, String>(0),
+            ).unwrap();
+            let model = model_id("active-model");
+            let other_model = model_id("other-model");
+            let source_paths = resolve_app_paths(&root.join("source"));
+            service_provider::switch_backend(&source_paths, "service").unwrap();
+            database::restore_merged(
+                &source_paths, &database::backup(&paths).unwrap(), &Map::new(),
+            ).unwrap();
+            let source = database::open(&source_paths).unwrap();
+            store::save_key(&source, provider_id, "source", "", "source-key").unwrap();
+            source.execute_batch(
+                "UPDATE service_provider_configs SET enabled=1;
+                 UPDATE service_provider_agent_bindings SET enabled=1;",
+            ).unwrap();
+            source.execute(
+                "INSERT INTO service_agent_model_routes(id,provider_id,agent_type,client_model_name,model_id)
+                 VALUES('backup-route',?1,'codex','active-model',?2)",
+                rusqlite::params![provider_id, other_model],
+            ).unwrap();
+            let activate = |paths: &super::AppPaths, agent: &str, directory: &Path, model_id: &str| {
+                let instance = service_provider::activate(paths, &json!([]), &json!({
+                    "agentType": agent, "providerId": provider_id, "modelId": model_id,
+                    "configPath": directory
+                })).unwrap();
+                let file = directory.join(if agent == "codex" { "config.toml" } else { "settings.json" });
+                let content = std::fs::read_to_string(&file).unwrap();
+                let token = if agent == "codex" {
+                    let config: Value = toml_edit::de::from_str(&content).unwrap();
+                    config["model_providers"]["ai_manager_service"]["experimental_bearer_token"]
+                        .as_str().unwrap().to_owned()
+                } else {
+                    let config: Value = serde_json::from_str(&content).unwrap();
+                    config["env"]["ANTHROPIC_AUTH_TOKEN"].as_str().unwrap().to_owned()
+                };
+                (file, content, token, instance)
+            };
+            let mut clients = Vec::new();
+            for (agent, directory, source_directory) in [
+                ("codex", &codex, &source_codex),
+                ("claude", &claude, &source_claude),
+            ] {
+                let (_, _, source_token, _) =
+                    activate(&source_paths, agent, source_directory, &other_model);
+                let (file, content, token, instance) = activate(&paths, agent, directory, &model);
+                assert_ne!(token, source_token);
+                assert!(service::authorize(&source, &source_token).is_ok());
+                let auth = service::authorize(&connection, &token).unwrap();
+                assert_eq!(auth["instanceId"], instance["instanceId"]);
+                clients.push((file, content, token, source_token, auth));
+            }
+            source.execute(
+                "UPDATE service_provider_configs SET name='备份服务商',
+                    base_url='https://backup.example.test/v1', upstream_protocol='chat', deleted_at=1
+                 WHERE id=?1",
+                [provider_id],
+            ).unwrap();
+            source.execute(
+                "UPDATE service_provider_models SET enabled=0, display_name='备份模型' WHERE id=?1",
+                [&model],
+            ).unwrap();
+            source.execute(
+                "UPDATE service_provider_agent_bindings SET default_model_id=?2 WHERE provider_id=?1",
+                rusqlite::params![provider_id, other_model],
+            ).unwrap();
+            quick_notes_store::save(
+                &source_paths, &json!({"id": "restored-note", "title": "备份便签"}), "user",
+            ).unwrap();
+            let backup = super::create_scoped_data_backup(&source_paths, &source_settings, BackupScope::Cloud)
+                .await.unwrap();
+            let local_backup_dir = super::get_local_backup_directory_path(&root);
+            std::fs::create_dir_all(&local_backup_dir).unwrap();
+            std::fs::write(local_backup_dir.join("test.aimbackup"), &backup).unwrap();
+            let (config, server) = webdav_test_server(vec![
+                webdav_test_response(405, "Content-Length: 0\r\n", b""),
+                webdav_test_response(
+                    200,
+                    &format!("Content-Length: {}\r\n", backup.len()),
+                    backup.as_bytes(),
+                ),
+            ]).await;
+            let mut cache = super::DataBackupCache::new();
+            let local_preview = super::preview_local_backup_restore(
+                &root, &paths, &settings, &mut cache, json!({"backupId": "test.aimbackup"}),
+            ).await.unwrap();
+            let preview = super::preview_cloud_backup_restore(
+                &paths, &settings, &mut cache, serde_json::to_value(config).unwrap(),
+            ).await.unwrap();
+            assert_eq!(local_preview["preview"]["added"], preview["preview"]["added"]);
+            let provider_key = database::row_choice_key("service_provider_configs", provider_id);
+            let conflict = preview["preview"]["conflicts"].as_array().unwrap()
+                .iter().find(|item| item["key"] == provider_key).unwrap();
+            let backup_provider: Value =
+                serde_json::from_str(conflict["backupContent"].as_str().unwrap()).unwrap();
+            assert_eq!(backup_provider["name"], "备份服务商");
+            assert_eq!(backup_provider["base_url"], "https://local.example.test/v1");
+            assert!(quick_notes_store::detail(&paths, "restored-note").is_err());
+
+            let mut state = json!({});
+            super::pull_cloud_backup(&paths, &mut settings, &mut state, &mut cache, json!({
+                "restoreId": preview["restoreId"], "choices": {"*": "backup"}
+            })).await.unwrap();
+            super::restore_local_backup(&root, &paths, &mut settings, &mut state, &mut cache, json!({
+                "restoreId": local_preview["restoreId"], "choices": {"*": "backup"}
+            })).await.unwrap();
+            assert!(cache.drafts.is_empty());
+            assert_eq!(quick_notes_store::detail(&paths, "restored-note").unwrap()["title"], "备份便签");
+            let provider = store::config(&connection, provider_id).unwrap();
+            assert_eq!(provider["name"], "备份服务商");
+            assert_eq!(provider["baseUrl"], "https://local.example.test/v1");
+            assert_eq!(provider["upstreamProtocol"], "responses");
+            assert_eq!(store::credential(&connection, provider_id).unwrap()["secret"], "local-key");
+            assert_eq!(store::query(
+                &connection, "SELECT display_name, enabled FROM service_provider_models WHERE id=?1", &[&model],
+            ).unwrap()[0], json!({"display_name": "备份模型", "enabled": 1}));
+            assert!(store::query(&connection, "SELECT id FROM service_agent_model_routes", &[]).unwrap().is_empty());
+            for (file, content, token, source_token, before) in &clients {
+                assert!(service::authorize(&connection, source_token).is_err());
+                let auth = service::authorize(&connection, token).unwrap();
+                assert_eq!(auth["instanceId"], before["instanceId"]);
+                assert_eq!(auth["tokenId"], before["tokenId"]);
+                assert_eq!(auth["modelId"], model);
+                assert_eq!(&std::fs::read_to_string(file).unwrap(), content);
+            }
+            service_provider::sync_provider(&paths, provider_id).unwrap();
+            for (file, content, token, _, before) in clients {
+                let auth = service::authorize(&connection, &token).unwrap();
+                assert_eq!(auth["tokenId"], before["tokenId"]);
+                assert_eq!(std::fs::read_to_string(file).unwrap(), content);
+            }
+            assert!(store::query(&connection, "PRAGMA foreign_key_check", &[]).unwrap().is_empty());
+
+            let requests = server.await.unwrap();
+            assert_eq!(requests.len(), 2);
+            assert!(requests[0].starts_with("head "));
+            assert!(requests[1].starts_with("get "));
+            drop(source);
+            drop(connection);
+            let resolved = root.canonicalize().unwrap();
+            assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+            assert!(resolved.file_name().unwrap().to_string_lossy()
+                .starts_with("ai-manager-cloud-takeover-"));
+            std::fs::remove_dir_all(resolved).unwrap();
         });
     }
 

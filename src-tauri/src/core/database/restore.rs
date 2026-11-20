@@ -20,6 +20,7 @@ pub fn preview_rows(
 ) -> Result<Vec<RestoreRowDifference>, ManagerError> {
     with_restore_snapshot(paths, content, |snapshot_path| {
         let connection = open_restore_connection(paths, snapshot_path)?;
+        let takeovers = read_takeover_bindings(&connection)?;
         let mut differences = Vec::new();
         for table in read_restorable_tables(&connection)? {
             let columns = read_common_columns(&connection, &table)?;
@@ -35,8 +36,16 @@ pub fn preview_rows(
                     .cmp(&right.1.get("sort_order").and_then(Value::as_i64))
                     .then(left.0.cmp(&right.0))
             });
-            for (row_key, row) in backup {
+            for (row_key, mut row) in backup {
                 let existing = existing_row(&current, &table, &row_key, &row);
+                if !preserve_takeover_routing(
+                    &takeovers,
+                    &table,
+                    existing.map(|(_, row)| row),
+                    &mut row,
+                ) {
+                    continue;
+                }
                 let backup = comparable_row(&connection, &table, &row)?;
                 let current_value = existing
                     .map(|(_, row)| row)
@@ -60,6 +69,74 @@ pub fn preview_rows(
         });
         Ok(differences)
     })
+}
+
+pub(super) fn read_takeover_bindings(
+    connection: &Connection,
+) -> Result<Vec<(String, String)>, ManagerError> {
+    let mut statement = connection.prepare(
+        "SELECT DISTINCT provider_id, agent_type FROM service_agent_instances
+         WHERE status <> 'detached' AND provider_id IS NOT NULL",
+    )?;
+    let rows = statement
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(rows)
+}
+
+// 已接管的服务商沿用本机的连接参数、模型身份和授权路由，业务描述和计价仍可合并。
+fn preserve_takeover_routing(
+    takeovers: &[(String, String)],
+    table: &str,
+    current: Option<&Map<String, Value>>,
+    backup: &mut Map<String, Value>,
+) -> bool {
+    let (provider_column, match_agent, fields): (&str, bool, &[&str]) = match table {
+        "service_provider_configs" => (
+            "id",
+            false,
+            &[
+                "kind",
+                "upstream_protocol",
+                "base_url",
+                "proxy",
+                "headers_json",
+                "deleted_at",
+            ],
+        ),
+        "service_provider_models" => (
+            "provider_id",
+            false,
+            &[
+                "provider_id",
+                "upstream_model_id",
+                "enabled",
+                "catalog_json",
+                "catalog_schema_version",
+            ],
+        ),
+        "service_provider_agent_bindings" | "service_agent_model_routes" => ("provider_id", true, &[]),
+        _ => return true,
+    };
+    let row = current.unwrap_or(backup);
+    let is_taken_over = takeovers.iter().any(|(provider, agent)| {
+        row.get(provider_column).and_then(Value::as_str) == Some(provider.as_str())
+            && (!match_agent || row.get("agent_type").and_then(Value::as_str) == Some(agent.as_str()))
+    });
+    if !is_taken_over {
+        return true;
+    }
+    if match_agent {
+        return false;
+    }
+    if let Some(current) = current {
+        for &field in fields {
+            if let Some(value) = current.get(field) {
+                backup.insert(field.into(), value.clone());
+            }
+        }
+    }
+    true
 }
 
 fn existing_row<'a>(
@@ -222,6 +299,7 @@ fn comparable_row(
 pub(super) fn merge_table(
     transaction: &rusqlite::Transaction<'_>,
     table: &str,
+    takeovers: &[(String, String)],
 ) -> Result<(), ManagerError> {
     let columns = read_common_columns(transaction, table)?;
     let key_column = primary_key(transaction, table)?;
@@ -265,6 +343,9 @@ pub(super) fn merge_table(
             .map(|(key, _)| key.clone())
             .unwrap_or_else(|| row_key.clone());
         let existing = existing.map(|(_, row)| row);
+        if !preserve_takeover_routing(takeovers, table, existing, &mut row) {
+            continue;
+        }
         let selected = transaction.query_row(
             "SELECT EXISTS(SELECT 1 FROM restore_choices WHERE choice_key IN (?1, '*'))",
             [row_choice_key(table, &row_key)],
