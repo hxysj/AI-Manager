@@ -498,7 +498,8 @@ fn append_quick_switch_tray_items(
             }
             for provider in state_array(service,"providers").into_iter().filter(|p|p["enabled"]==1 && p["hasCredential"]==1
                 && state_array(service,"bindings").iter().any(|b|b["providerId"]==p["id"] && b["agentType"]==agent && b["enabled"]==1)) {
-                let usable=state_array(service,"models").iter().any(|m|m["providerId"]==provider["id"] && m["enabled"]==1);
+                let usable=provider["kind"]=="api" || state_array(service,"models").iter()
+                    .any(|m|m["providerId"]==provider["id"] && m["enabled"]==1);
                 cli_menu.append(&MenuItem::with_id(app,format!("tray:service:switch:{agent}:{}",string_value(provider.get("id"))),
                     format!("切换默认实例：{}",string_value(provider.get("name"))),usable,None::<&str>)?)?;
             }

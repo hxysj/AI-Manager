@@ -224,16 +224,26 @@ const invoke = async (action, payload) => {
     if (failState) throw new Error("状态读取失败")
     return state
   }
-  if (action === "detail")
+  if (action === "detail" || action === "key-editor-detail")
     return {
       baseUrl: state.providers[0].baseUrl,
       proxy: "",
       upstreamProtocol: "responses",
       headers: { "x-test": "yes" },
       revision: state.providers[0].revision,
+      ...(action === "key-editor-detail"
+        ? {
+            apiKeys: state.keys
+              .filter((key) => key.providerId === payload.id)
+              .map((key) => ({ ...key, apiKey: " saved-edit-test-value " }))
+          }
+        : {}),
       ...detailOverride
     }
   if (action === "fetch-models") {
+    const previousRevision = state.providers.find(
+      (item) => item.id === payload.providerId
+    )?.revision
     state = {
       ...state,
       providers: state.providers.map((item) =>
@@ -250,6 +260,13 @@ const invoke = async (action, payload) => {
           enabled: 1
         }
       ]
+    }
+    return {
+      previousRevision,
+      catalogRevision: previousRevision + 1,
+      models: state.models
+        .filter((item) => item.providerId === payload.providerId)
+        .map((item) => ({ slug: item.upstreamModelId }))
     }
   }
   if (action === "switch-backend" && payload.backend === "legacy") {
@@ -1162,9 +1179,10 @@ assert.equal(bindings.form.value.enabled, false)
 await bindings.editProvider(state.providers[0])
 assert.equal(bindings.form.value.revision, 7)
 assert.equal(bindings.form.value.bindings[0].defaultModelName, "upstream-model")
-assert.equal(bindings.form.value.keyLogicalId, "production")
-assert.equal(bindings.form.value.keyName, "生产 Key")
-assert.equal(bindings.form.value.apiKey, "")
+assert.equal(bindings.form.value.keys[0].logicalId, "production")
+assert.equal(bindings.form.value.keys[0].name, "生产 Key")
+assert.equal(bindings.form.value.keys[0].apiKey, " saved-edit-test-value ")
+assert.equal(bindings.editingActiveKey.value, false)
 assert.equal(bindings.showGatewayManager.value, false)
 const editHtml = await renderCenter(state, (value) => {
   value.form.value = bindings.form.value
@@ -1180,10 +1198,13 @@ assert.ok(
   !editHtml.includes("Haiku 默认模型") && !editHtml.includes("子 Agent 模型")
 )
 assert.ok(editHtml.includes("获取上游模型") && editHtml.includes("批量编辑"))
+assert.ok(editHtml.includes("添加 Key") && editHtml.includes("当前使用"))
+assert.ok(editHtml.includes('type="text"') && editHtml.includes('value=" saved-edit-test-value "'))
 bindings.agentConfig.value = cliTargets[0]
 bindings.agentProviderId.value = "p"
 await bindings.selectAgentProvider()
 assert.equal(bindings.editorSection.value, "agent")
+assert.deepEqual(bindings.form.value.keys, [])
 const codexAgentHtml = await renderCenter(state, (value) => {
   value.form.value = bindings.form.value
   value.editorSection.value = "agent"
@@ -1404,7 +1425,10 @@ const ruleProps = reactive({
     defaultModelName: "gpt-5.6-sol",
     options: { modelReasoningEffort: "ultra" }
   },
-  models: [{ upstreamModelId: "gpt-5.6-sol" }],
+  models: [
+    { upstreamModelId: "gpt-5.6-sol" },
+    { upstreamModelId: "ordinary-model", reasoning: { levels: ["low"] } }
+  ],
   schema: runtimeConfigSchemas.codex,
   desktopRoutes: [{ id: "claude-sonnet-4-6" }, { id: "claude-fable-5" }]
 })
@@ -1417,15 +1441,19 @@ const ruleFields = AgentFields.setup(ruleProps, {
 const effortField = runtimeConfigSchemas.codex.optionFields[3]
 assert.ok(ruleFields.optionValues(effortField).includes("ultra"))
 ruleFields.updateDefault("ordinary-model")
-assert.equal(ruleProps.modelValue.options.modelReasoningEffort, "low")
+assert.equal(ruleProps.modelValue.options.modelReasoningEffort, null)
 assert.ok(!ruleFields.optionValues(effortField).includes("ultra"))
 ruleFields.updateOption("modelReasoningEffort", "ultra")
 ruleFields.updateDefault("")
 assert.ok(ruleFields.optionValues(effortField).includes("ultra"))
 await nextTick()
-ruleProps.models = [{ upstreamModelId: "ordinary-model" }]
+ruleProps.models = [
+  { upstreamModelId: "ordinary-model", reasoning: { levels: ["low"] } }
+]
 await nextTick()
-assert.equal(ruleProps.modelValue.options.modelReasoningEffort, "low")
+assert.equal(ruleProps.modelValue.options.modelReasoningEffort, "ultra")
+ruleFields.updateDefault("ordinary-model")
+assert.equal(ruleProps.modelValue.options.modelReasoningEffort, null)
 assert.ok(!ruleFields.optionValues(effortField).includes("ultra"))
 ruleProps.modelValue = {
   agentType: "claude-desktop",
@@ -1438,45 +1466,50 @@ ruleProps.modelValue = {
 assert.equal(ruleFields.desktopSupports1m("claude-sonnet-4-6"), true)
 ruleFields.updateDesktop("claude-sonnet-4-6", "supports1m", false)
 assert.equal(ruleFields.desktopSupports1m("claude-sonnet-4-6"), false)
+await bindings.editProvider(state.providers[0])
 bindings.updateDraftModelNames("new-model")
 assert.equal(
   bindings.draftModels.value.find((item) => item.id === "m").enabled,
   false
 )
-assert.equal(bindings.form.value.bindings[0].defaultModelName, "")
+assert.equal(bindings.form.value.bindings[0].defaultModelName, "upstream-model")
 bindings.updateDraftModelNames("upstream-model\nnew-model")
 assert.equal(
   bindings.draftModels.value.find((item) => item.id === "m").catalog.custom,
   true
 )
-bindings.form.value.bindings[0].defaultModelName = "new-model"
 bindings.form.value.icon = customIcon
-bindings.form.value.apiKey = "replacement-key"
-bindings.form.value.bindings.find(
-  (item) => item.agentType === "claude"
-).enabled = true
+// 同一次保存新增两个备用 Key，继续保留当前 Key 的目录与模型价格。
+bindings.addProviderKey()
+bindings.addProviderKey()
+bindings.form.value.keys[1].apiKey = " spare-key-one "
+bindings.form.value.keys[2].apiKey = "spare-key-two"
+bindings.form.value.keys[2].logicalId = bindings.form.value.keys[1].logicalId
+calls.length = 0
+await bindings.saveProvider()
+assert.ok(!calls.some((item) => item.action === "save"))
+bindings.form.value.keys[2].logicalId = "key-3"
 await bindings.saveProvider()
 const saved = calls.find((item) => item.action === "save").payload
 assert.equal(saved.models[0].catalog.custom, true)
 assert.equal(saved.models[0].inputPriceMicros, 2000000)
-assert.equal(saved.bindings[0].defaultModelName, "new-model")
-assert.equal(saved.bindings[0].options.syncModelList, false)
-assert.equal(saved.bindings[0].options.modelList, undefined)
-assert.equal(saved.bindings[2].enabled, false)
-assert.equal(
-  saved.bindings[2].options.modelMappings["claude-fable-5"].labelOverride,
-  "自定义 Fable"
-)
-assert.equal(saved.keyLogicalId, "production")
-assert.equal(saved.apiKey, "replacement-key")
-assert.equal(
-  saved.bindings.find((item) => item.agentType === "claude").enabled,
-  true
-)
+assert.equal(saved.bindings, undefined)
+assert.deepEqual(saved.apiKeys, [
+  { logicalId: "key-2", name: "Key 2", apiKey: "spare-key-one" },
+  { logicalId: "key-3", name: "Key 3", apiKey: "spare-key-two" }
+])
 assert.equal(saved.routes[0].modelId, "m")
 assert.equal(saved.revision, 7)
 assert.equal(saved.icon, customIcon)
 assert.equal(bindings.form.value, null)
+await bindings.editProvider(state.providers[0])
+bindings.form.value.keys[0].apiKey = "replacement-key"
+await bindings.saveProvider()
+const rotated = calls.filter((item) => item.action === "save").at(-1).payload
+assert.deepEqual(rotated.apiKeys, [
+  { logicalId: "production", name: "生产 Key", apiKey: "replacement-key" }
+])
+assert.equal(rotated.models, undefined)
 // 单个 Agent 独立选择来源，取消不污染状态，失败保留草稿。
 const originalBindings = JSON.stringify(state.bindings)
 await bindings.openAgentConfig(cliTargets[0])
@@ -1594,9 +1627,8 @@ bindings.form.value.bindings[0].options.syncModelList = true
 calls.length = 0
 await bindings.saveProvider()
 assert.equal(
-  calls.find((item) => item.action === "save").payload.bindings[0].options
-    .syncModelList,
-  true
+  calls.find((item) => item.action === "save").payload.bindings,
+  undefined
 )
 await bindings.editProvider(state.providers[0])
 calls.length = 0
@@ -1615,7 +1647,7 @@ calls.length = 0
 await bindings.saveProvider()
 const created = calls.find((item) => item.action === "save").payload
 assert.equal(created.models[0].upstreamModelId, "brand-new-model")
-assert.ok(created.bindings.every((item) => !item.enabled))
+assert.equal(created.bindings, undefined)
 // 官方账号直接进入独立登录面板，开始授权前不创建记录。
 calls.length = 0
 await bindings.createSource(
@@ -1863,7 +1895,9 @@ await repeatedQuotaBatch
 await settle()
 assert.equal(calls.filter((item) => item.action === "refresh-quota").length, 4)
 pendingQuotas.clear()
-state.providers = state.providers.filter((item) => !item.id.endsWith("-secondary"))
+state.providers = state.providers.filter(
+  (item) => !item.id.endsWith("-secondary")
+)
 await liveBindings.refresh()
 quotaHandler = async ({ providerId }) => {
   if (providerId === official.id) throw new Error(expiredFailure)
@@ -2065,7 +2099,7 @@ const settingsApp = createSSRApp(
 const settingsHtml = await renderToString(settingsApp)
 assert.ok(
   settingsHtml.includes("共享服务商模式") &&
-    settingsHtml.includes("自动同步旧 Codex")
+    settingsHtml.includes("启用时同步旧 Codex")
 )
 const enabling = modeBindings.toggleProviderMode()
 assert.equal(modeBindings.providerModePending.value, true)

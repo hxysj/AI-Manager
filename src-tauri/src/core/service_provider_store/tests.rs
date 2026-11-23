@@ -94,7 +94,7 @@ fn service_schema_four_merges_official_accounts_without_changing_legacy_or_usage
     initialize(&f.paths).unwrap();
     assert!(!table_exists(&c, "service_provider_accounts").unwrap());
     assert!(!table_exists(&c, "service_google_accounts").unwrap());
-    assert_eq!(query(&c,"SELECT value FROM app_metadata WHERE key='service_provider:schema_version'",&[]).unwrap()[0]["value"],"6");
+    assert_eq!(query(&c,"SELECT value FROM app_metadata WHERE key='service_provider:schema_version'",&[]).unwrap()[0]["value"],"7");
     let account = account(&c, text(&codex,"id")).unwrap();
     assert_eq!(account["accessToken"], "old-access");
     assert_eq!(account["refreshToken"], "old-refresh");
@@ -219,7 +219,7 @@ fn service_schema_five_merges_operation_history_and_preserves_typed_recovery() {
     assert_eq!(query(&c,"SELECT * FROM service_provider_configs",&[]).unwrap(),configs);
     assert_eq!(query(&c,"SELECT * FROM service_gateway_requests",&[]).unwrap(),requests);
     assert!(query(&c,"PRAGMA foreign_key_check",&[]).unwrap().is_empty());
-    assert_eq!(query(&c,"SELECT value FROM app_metadata WHERE key='service_provider:schema_version'",&[]).unwrap()[0]["value"],"6");
+    assert_eq!(query(&c,"SELECT value FROM app_metadata WHERE key='service_provider:schema_version'",&[]).unwrap()[0]["value"],"7");
     let operations = query(&c,"SELECT * FROM service_operations ORDER BY id",&[]).unwrap();
     initialize(&f.paths).unwrap();
     assert_eq!(query(&c,"SELECT * FROM service_operations ORDER BY id",&[]).unwrap(),operations);
@@ -916,6 +916,73 @@ fn service_keys_restore_existing_version_for_a_b_a_and_never_expose_secret() {
     let public = state(&f.paths).unwrap().to_string();
     assert!(!public.contains("test-secret"));
     assert!(!public.contains("secret_ciphertext"));
+}
+
+#[test]
+fn service_keys_batch_preserves_selection_and_rolls_back_duplicate_ids() {
+    let f = Fixture::new();
+    let p = f.provider();
+    let c = database::open(&f.paths).unwrap();
+    let original = credential(&c, &p).unwrap();
+    let mut draft = config(&c, &p).unwrap();
+    draft["apiKeys"] = json!([
+        {"logicalId":"backup-one","name":"备用一","apiKey":"backup-secret-one"},
+        {"logicalId":"backup-two","name":"备用二","apiKey":"backup-secret-two"},
+        {"logicalId":"default","name":"生产 Key","apiKey":""}
+    ]);
+    assert_eq!(save(&f.paths, &draft).unwrap()["keyChanged"], false);
+    let current = credential(&c, &p).unwrap();
+    assert_eq!(current["id"], original["id"]);
+    assert_eq!(current["name"], "生产 Key");
+    assert_eq!(current["secret"], original["secret"]);
+    let public = state(&f.paths).unwrap();
+    assert_eq!(public["keys"].as_array().unwrap().len(), 3);
+    assert_eq!(public["models"].as_array().unwrap().len(), 1);
+    assert!(!public.to_string().contains("backup-secret-"));
+
+    let mut draft = config(&c, &p).unwrap();
+    draft["apiKeys"] = json!([
+        {"logicalId":"backup-one","name":"更新备用一","apiKey":"backup-secret-rotated"},
+        {"logicalId":"backup-one","name":"重复","apiKey":"duplicate"}
+    ]);
+    assert!(save(&f.paths, &draft).is_err());
+    assert_eq!(state(&f.paths).unwrap()["keys"], public["keys"]);
+
+    let mut draft = config(&c, &p).unwrap();
+    draft["apiKeys"] = json!([
+        {"logicalId":"default","name":"生产 Key","apiKey":"active-secret-rotated"}
+    ]);
+    assert_eq!(save(&f.paths, &draft).unwrap()["keyChanged"], true);
+    assert_eq!(credential(&c, &p).unwrap()["secret"], "active-secret-rotated");
+    assert!(state(&f.paths).unwrap()["models"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn service_key_editor_returns_exact_current_credentials_only_for_that_provider() {
+    let f = Fixture::new();
+    let provider = f.provider();
+    let other = f.provider();
+    let c = database::open(&f.paths).unwrap();
+    save_key_version(&c, &provider, "backup", "备用", "archived-value", false).unwrap();
+    save_key_version(&c, &provider, "backup", "备用", " backup-value ", false).unwrap();
+    save_key_version(&c, &provider, "revoked", "已撤销", "revoked-value", false).unwrap();
+    save_key_version(&c, &other, "other", "其他服务商", "other-value", false).unwrap();
+    c.execute("UPDATE service_provider_keys SET status='revoked',secret_ciphertext=''
+        WHERE provider_id=?1 AND logical_id='revoked'", [&provider]).unwrap();
+
+    tauri::async_runtime::block_on(async {
+        let value = json!({"id":provider});
+        let editor = service_provider::dispatch(&f.paths, &json!([]), "key-editor-detail", value.clone()).await.unwrap();
+        let mut keys = editor["apiKeys"].as_array().unwrap().iter().map(|key| {
+            assert!(key.get("ciphertext").is_none());
+            (text(key, "logicalId"), text(key, "apiKey"))
+        }).collect::<Vec<_>>();
+        keys.sort_unstable();
+        assert_eq!(keys, vec![("backup", " backup-value "), ("default", "test-secret"), ("revoked", "")]);
+        let detail = service_provider::dispatch(&f.paths, &json!([]), "detail", value).await.unwrap();
+        assert!(detail.get("apiKeys").is_none());
+        assert!(!state(&f.paths).unwrap().to_string().contains("backup-value"));
+    });
 }
 
 #[test]

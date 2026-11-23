@@ -39,6 +39,7 @@ CREATE TABLE IF NOT EXISTS service_provider_keys (
   is_current INTEGER NOT NULL DEFAULT 1 CHECK(is_current IN (0,1)),
   is_active INTEGER NOT NULL DEFAULT 0 CHECK(is_active IN (0,1)),
   status TEXT NOT NULL DEFAULT 'active' CHECK(status IN ('active','archived','unreadable','revoked')),
+  models_json TEXT CHECK(models_json IS NULL OR (json_valid(models_json) AND json_type(models_json)='object')),
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL,
   UNIQUE(provider_id,logical_id,fingerprint),

@@ -127,18 +127,18 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
             |r| r.get(0),
         )
         .optional()?;
-    if version.as_deref().is_some_and(|v| !matches!(v, "1" | "2" | "3" | "4" | "5" | "6")) {
+    if version.as_deref().is_some_and(|v| !matches!(v, "1" | "2" | "3" | "4" | "5" | "6" | "7")) {
         return Err(fail("服务商配置数据库版本高于当前程序支持的版本"));
     }
-    if !matches!(version.as_deref(), Some("5" | "6")) {
+    if !matches!(version.as_deref(), Some("5" | "6" | "7")) {
         connection.pragma_update(None, "foreign_keys", "OFF")?;
     }
     let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-    if !matches!(version.as_deref(), Some("4" | "5" | "6")) {
+    if !matches!(version.as_deref(), Some("4" | "5" | "6" | "7")) {
         migration::add_account_columns(&transaction)?;
     }
     transaction.execute_batch(SCHEMA)?;
-    if !matches!(version.as_deref(), Some("2" | "3" | "4" | "5" | "6")) {
+    if !matches!(version.as_deref(), Some("2" | "3" | "4" | "5" | "6" | "7")) {
         let columns = query(
             &transaction,
             "SELECT name FROM pragma_table_info('service_provider_configs')",
@@ -171,12 +171,13 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
             )?;
         }
     }
-    if !matches!(version.as_deref(), Some("3" | "4" | "5" | "6")) {
+    if !matches!(version.as_deref(), Some("3" | "4" | "5" | "6" | "7")) {
         let definition: String = transaction.query_row(
             "SELECT sql FROM sqlite_master WHERE type='table' AND name='service_provider_configs'",
             [], |row| row.get(0))?;
         if !definition.contains("google_account") {
             // 只重建新模式配置表的类型约束，原 Provider、Usage 和所有关联 ID 保持原值。
+            transaction.execute_batch("DROP VIEW IF EXISTS service_provider_model_catalog;")?;
             let ddl = SCHEMA.split("CREATE TABLE IF NOT EXISTS service_provider_keys").next().unwrap()
                 .replace("service_provider_configs", "service_provider_configs_v3");
             transaction.execute_batch(&ddl)?;
@@ -191,16 +192,16 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
             return Err(fail("服务商配置升级发现关联数据不完整，已回滚升级"));
         }
     }
-    if !matches!(version.as_deref(), Some("4" | "5" | "6")) {
+    if !matches!(version.as_deref(), Some("4" | "5" | "6" | "7")) {
         migration::merge_account_storage(&transaction)?;
     }
-    if !matches!(version.as_deref(), Some("5" | "6")) {
+    if !matches!(version.as_deref(), Some("5" | "6" | "7")) {
         migration::merge_operation_storage(&transaction)?;
         if !query(&transaction, "SELECT * FROM pragma_foreign_key_check WHERE \"table\" LIKE 'service_%'", &[])?.is_empty() {
             return Err(fail("服务商操作记录升级发现关联数据不完整，已回滚升级"));
         }
     }
-    if version.as_deref() != Some("6") {
+    if !matches!(version.as_deref(), Some("6" | "7")) {
         for (table, column, kind) in [
             ("service_gateway_tokens", "reasoning_effort_limit", "TEXT"),
             ("service_gateway_requests", "requested_reasoning_effort", "TEXT"),
@@ -215,9 +216,31 @@ pub fn initialize(paths: &AppPaths) -> Result<(), ManagerError> {
                 transaction.execute(&format!("ALTER TABLE {table} ADD COLUMN {column} {kind}"), [])?;
             }
         }
-        transaction.execute("INSERT INTO app_metadata(key,value) VALUES('service_provider:schema_version','6')
+    }
+    if version.as_deref() != Some("7") {
+        let exists: bool = transaction.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pragma_table_info('service_provider_keys') WHERE name='models_json')",
+            [], |row| row.get(0),
+        )?;
+        if !exists {
+            transaction.execute("ALTER TABLE service_provider_keys ADD COLUMN models_json TEXT
+                CHECK(models_json IS NULL OR (json_valid(models_json) AND json_type(models_json)='object'))", [])?;
+        }
+        transaction.execute("INSERT INTO app_metadata(key,value) VALUES('service_provider:schema_version','7')
             ON CONFLICT(key) DO UPDATE SET value=excluded.value", [])?;
     }
+    // 旧目录只在凭据归属明确时展示。每个 Key 曾拉取的空目录也独立保存。
+    transaction.execute_batch("CREATE VIEW IF NOT EXISTS service_provider_model_catalog AS
+        SELECT m.id,m.provider_id,m.upstream_model_id,m.display_name,m.context_window,m.catalog_json,
+            CASE WHEN k.models_json IS NULL THEN m.enabled ELSE CAST(entry.value AS INTEGER) END AS enabled,
+            m.input_price_micros,m.cached_input_price_micros,m.output_price_micros,m.currency,m.created_at
+        FROM service_provider_models m JOIN service_provider_configs p ON p.id=m.provider_id
+        LEFT JOIN service_provider_keys k ON k.provider_id=m.provider_id AND k.is_active=1
+            AND k.is_current=1 AND k.status='active' AND k.secret_ciphertext<>''
+        LEFT JOIN json_each(k.models_json) entry ON entry.key=m.upstream_model_id
+        WHERE p.kind<>'api' OR entry.key IS NOT NULL OR (k.models_json IS NULL AND NOT EXISTS(
+            SELECT 1 FROM service_provider_keys other WHERE other.provider_id=m.provider_id AND other.id IS NOT k.id
+        ));")?;
     transaction.commit()?;
     connection.pragma_update(None, "foreign_keys", "ON")?;
     backfill_usage_costs(&mut connection)?;
@@ -314,7 +337,7 @@ pub fn state(paths: &AppPaths) -> Result<Value, ManagerError> {
         FROM service_provider_configs p WHERE deleted_at IS NULL ORDER BY created_at,id", &[])?;
     let mut models = query(&c, "SELECT id,provider_id AS providerId,upstream_model_id AS upstreamModelId,display_name AS displayName,
         context_window AS contextWindow,catalog_json AS catalogJson,enabled,input_price_micros AS inputPriceMicros,
-        cached_input_price_micros AS cachedInputPriceMicros,output_price_micros AS outputPriceMicros,currency FROM service_provider_models", &[])?;
+        cached_input_price_micros AS cachedInputPriceMicros,output_price_micros AS outputPriceMicros,currency FROM service_provider_model_catalog", &[])?;
     let pricing = crate::core::usage_store::read_pricing_connection(&c)?;
     for model in &mut models {
         model["effectivePricing"] = model_pricing(model, &pricing);
@@ -324,7 +347,12 @@ pub fn state(paths: &AppPaths) -> Result<Value, ManagerError> {
         );
     }
     let bindings = query(&c, "SELECT provider_id AS providerId,agent_type AS agentType,enabled,default_model_id AS defaultModelId,options_json AS optionsJson,revision FROM service_provider_agent_bindings", &[])?;
-    let keys = query(&c, "SELECT id,provider_id AS providerId,logical_id AS logicalId,name,note,is_current AS isCurrent,is_active AS isActive,status,substr(fingerprint,1,12) AS fingerprint FROM service_provider_keys WHERE is_current=1", &[])?;
+    let keys = query(&c, "SELECT id,provider_id AS providerId,logical_id AS logicalId,name,note,is_current AS isCurrent,
+        is_active AS isActive,status,substr(fingerprint,1,12) AS fingerprint,
+        CASE WHEN models_json IS NOT NULL THEN (SELECT count(*) FROM json_each(models_json) WHERE value=1)
+            WHEN is_active=1 AND status='active' THEN (SELECT count(*) FROM service_provider_model_catalog m
+                WHERE m.provider_id=k.provider_id AND m.enabled=1) END AS modelCount
+        FROM service_provider_keys k WHERE is_current=1", &[])?;
     let instances = query(&c, "SELECT id,agent_type AS agentType,name,config_path AS configPath,agent_version AS agentVersion,
         client_protocol AS clientProtocol,provider_id AS providerId,model_id AS modelId,status,sync_status AS syncStatus,
         applied_revision AS appliedRevision,last_synced_at AS lastSyncedAt,last_error AS lastError,revision FROM service_agent_instances", &[])?;
@@ -512,7 +540,7 @@ pub fn public_catalog(paths: &AppPaths) -> Result<Value, ManagerError> {
         ELSE p.credentials_ciphertext<>'' END AS hasCredential
         FROM service_provider_configs p LEFT JOIN service_provider_agent_bindings b ON b.provider_id=p.id AND b.agent_type='codex'
         WHERE p.deleted_at IS NULL ORDER BY p.created_at,p.id", &[])?;
-    let models = query(&c, "SELECT id,provider_id AS providerId,upstream_model_id AS name FROM service_provider_models WHERE enabled=1", &[])?;
+    let models = query(&c, "SELECT id,provider_id AS providerId,upstream_model_id AS name FROM service_provider_model_catalog WHERE enabled=1", &[])?;
     let mut providers = Vec::new();
     let mut accounts = Vec::new();
     for row in rows {
@@ -638,21 +666,96 @@ pub fn save(paths: &AppPaths, value: &Value) -> Result<Value, ManagerError> {
         tx.execute("INSERT INTO service_provider_configs(id,name,kind,upstream_protocol,base_url,proxy,headers_json,note,enabled,created_at,updated_at,icon)
             VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?10,?11)",params![provider_id,name,kind,protocol,text(value,"baseUrl"),text(value,"proxy"),headers.to_string(),text(value,"note"),value["enabled"].as_bool().unwrap_or(true),now(),text(value,"icon")])?;
     }
-    if let Some(secret) = value["apiKey"].as_str().filter(|s| !s.is_empty()) {
+    let legacy_key = value["apiKey"].as_str().filter(|secret| !secret.is_empty()).map(|secret| {
+        json!({"logicalId":value["keyLogicalId"].as_str().unwrap_or("default"),
+            "name":value["keyName"].as_str().unwrap_or("默认 Key"),"apiKey":secret})
+    });
+    let batch = value.get("apiKeys");
+    let keys = if let Some(keys) = batch {
+        keys.as_array().ok_or_else(|| fail("API Keys 必须为数组"))?.as_slice()
+    } else {
+        legacy_key.as_slice()
+    };
+    let mut key_changed = false;
+    if !keys.is_empty() {
         if kind != "api" {
             return Err(fail("官方账号请导入 auth.json"));
         }
-        save_key(
-            &tx,
-            &provider_id,
-            value["keyLogicalId"].as_str().unwrap_or("default"),
-            value["keyName"].as_str().unwrap_or("默认 Key"),
-            secret,
-        )?;
+        let mut current = tx.query_row(
+            "SELECT logical_id,fingerprint FROM service_provider_keys WHERE provider_id=?1 AND is_active=1
+            AND is_current=1 AND status='active' AND secret_ciphertext<>''",
+            [&provider_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+        ).optional()?;
+        let mut seen = std::collections::HashSet::new();
+        for key in keys {
+            let logical_id = text(key, "logicalId");
+            let name = text(key, "name");
+            let secret = text(key, "apiKey");
+            if !key.is_object() || logical_id.trim().is_empty() || !seen.insert(logical_id) {
+                return Err(fail("API Key 标识不能为空或重复"));
+            }
+            if secret.is_empty() {
+                if tx.execute("UPDATE service_provider_keys SET name=?3,updated_at=?4
+                    WHERE provider_id=?1 AND logical_id=?2 AND is_current=1",
+                    params![provider_id, logical_id, name, now()])? != 1 {
+                    return Err(fail("新增 API Key 需要填写密钥"));
+                }
+                continue;
+            }
+            let fingerprint = hash(secret);
+            let activate = batch.is_none()
+                || current.as_ref().is_none_or(|(active, _)| active == logical_id);
+            let differs_from_active = current.as_ref().is_none_or(|(active, saved)| {
+                active != logical_id || saved != &fingerprint
+            });
+            if current.is_some() && differs_from_active {
+                // 新增备用 Key 或轮换前，保留原先只属于单 Key 的目录。
+                tx.execute("UPDATE service_provider_keys SET models_json=(
+                    SELECT json_group_object(upstream_model_id,enabled) FROM service_provider_models WHERE provider_id=?1
+                    ) WHERE provider_id=?1 AND is_active=1 AND models_json IS NULL
+                    AND (SELECT count(*) FROM service_provider_keys WHERE provider_id=?1)=1", [&provider_id])?;
+            }
+            if activate {
+                save_key(&tx, &provider_id, logical_id, name, secret)?;
+                key_changed |= differs_from_active;
+                current = Some((logical_id.to_owned(), fingerprint));
+            } else {
+                save_key_version(&tx, &provider_id, logical_id, name, secret, false)?;
+            }
+        }
     }
     if let Some(models) = value["models"].as_array() {
+        let mut scope = query(&tx, "SELECT id,models_json AS modelsJson FROM service_provider_keys
+            WHERE provider_id=?1 AND is_active=1 AND status='active'", &[&provider_id])?.pop();
+        if let Some(key) = &mut scope {
+            if key["models"].is_null() && tx.query_row(
+                "SELECT count(*)>1 FROM service_provider_keys WHERE provider_id=?1", [&provider_id], |row| row.get::<_, bool>(0),
+            )? {
+                key["models"] = json!({});
+            }
+        }
         for model in models {
-            save_model(&tx, &provider_id, model)?;
+            if let Some(entries) = scope.as_mut().and_then(|key| key["models"].as_object_mut()) {
+                let name = model.as_str().unwrap_or_else(|| text(model, "upstreamModelId")).trim();
+                let enabled = model["enabled"].as_bool()
+                    .map(|enabled| json!(i64::from(enabled)))
+                    .or_else(|| entries.get(name).cloned())
+                    .unwrap_or(json!(1));
+                let mut shared = model.clone();
+                if let Some(fields) = shared.as_object_mut() {
+                    let enabled = tx.query_row("SELECT enabled FROM service_provider_models WHERE provider_id=?1 AND upstream_model_id=?2",
+                        params![provider_id, name], |row| row.get::<_, bool>(0)).optional()?.unwrap_or(true);
+                    fields.insert("enabled".into(), json!(enabled));
+                }
+                save_model(&tx, &provider_id, &shared)?;
+                entries.insert(name.into(), enabled);
+            } else {
+                save_model(&tx, &provider_id, model)?;
+            }
+        }
+        if let Some(key) = scope.filter(|key| key["models"].is_object()) {
+            tx.execute("UPDATE service_provider_keys SET models_json=?2 WHERE id=?1",
+                params![text(&key, "id"), key["models"].to_string()])?;
         }
     }
     if let Some(bindings) = value["bindings"].as_array() {
@@ -720,10 +823,10 @@ pub fn save(paths: &AppPaths, value: &Value) -> Result<Value, ManagerError> {
             WHERE provider_id=?1 AND status<>'detached'", params![provider_id, now()])?;
     }
     tx.commit()?;
-    if previous.is_some() && value["enabled"] != false {
+    if previous.is_some() && value["enabled"] != false && (!key_changed || value["models"].is_array()) {
         crate::api::service_provider::sync_provider(paths, &provider_id)?;
     }
-    Ok(json!({"id":provider_id}))
+    Ok(json!({"id":provider_id,"keyChanged":key_changed}))
 }
 
 pub(crate) fn validate_credential(c: &Connection, provider: &str) -> Result<(), ManagerError> {
@@ -826,7 +929,8 @@ pub(crate) fn validate_agent_options(
     }
     for name in model_names {
         let exists: bool = c.query_row(
-            "SELECT EXISTS(SELECT 1 FROM service_provider_models WHERE provider_id=?1 AND upstream_model_id=?2 AND (?3=0 OR enabled=1))",
+            "SELECT EXISTS(SELECT 1 FROM service_provider_models m WHERE provider_id=?1 AND upstream_model_id=?2
+                AND (?3=0 OR EXISTS(SELECT 1 FROM service_provider_model_catalog a WHERE a.id=m.id AND a.enabled=1)))",
             params![provider, name, enabled],
             |row| row.get(0),
         )?;
@@ -991,11 +1095,16 @@ pub fn remove(paths: &AppPaths, provider: &str, revision: i64) -> Result<(), Man
 }
 
 pub fn credential(c: &Connection, provider: &str) -> Result<Value, ManagerError> {
+    credential_for(c, provider, None)
+}
+
+pub(crate) fn credential_for(c: &Connection, provider: &str, key: Option<&str>) -> Result<Value, ManagerError> {
     let mut key = query(
         c,
         "SELECT id,name,fingerprint,secret_ciphertext AS ciphertext FROM service_provider_keys
-        WHERE provider_id=?1 AND is_active=1 AND is_current=1 AND status='active'",
-        &[&provider],
+        WHERE provider_id=?1 AND is_current=1 AND status='active' AND secret_ciphertext<>''
+        AND (id=?2 OR (?2 IS NULL AND is_active=1))",
+        &[&provider,&key],
     )?
     .pop()
     .ok_or_else(|| fail("服务商缺少可用的 API Key"))?;

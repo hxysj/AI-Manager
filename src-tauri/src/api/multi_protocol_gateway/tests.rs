@@ -609,7 +609,7 @@ fn service_model_fetch_preserves_local_prices_and_rejects_stale_configuration() 
                             let data = match variant {
                                 1 => json!([{"id":"real-model"},{"id":" REAL-MODEL "}]),
                                 2 => json!([{"id":"real-model","supported_reasoning_levels":["low"],"default_reasoning_level":"high"}]),
-                                _ => json!([{"id":"real-model","context_window":32000}]),
+                                _ => json!([{"id":"real-model","context_window":32000},{"id":"client-model"}]),
                             };
                             Ok::<_,Infallible>(json_response(StatusCode::OK,json!({"data":data})))
                         }
@@ -672,6 +672,110 @@ fn service_model_fetch_preserves_local_prices_and_rejects_stale_configuration() 
             assert_eq!(store::config(&c, &provider).unwrap(), snapshot);
             assert_eq!(std::fs::read(&catalog).unwrap(), previous);
         }
+        server.abort();
+    });
+}
+
+#[test]
+fn service_start_refreshes_the_selected_key_and_keeps_catalogs_independent() {
+    run(async {
+        use crate::api::service_provider;
+        use crate::core::{database, service_provider_store as store};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let fixture = Fixture::new();
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/v1", listener.local_addr().unwrap());
+        let mode = Arc::new(AtomicUsize::new(0));
+        let response_mode = mode.clone();
+        let (sent, mut requests) = mpsc::unbounded_channel();
+        let server = tokio::spawn(async move {
+            loop {
+                let (socket, _) = listener.accept().await.unwrap();
+                let response_mode = response_mode.clone();
+                let sent = sent.clone();
+                tokio::spawn(async move {
+                    let _ = http1::Builder::new().serve_connection(TokioIo::new(socket), service_fn(move |request: Request<Incoming>| {
+                        let key = request.headers()["authorization"].to_str().unwrap().to_owned();
+                        let mode = response_mode.load(Ordering::Relaxed);
+                        let sent = sent.clone();
+                        async move {
+                            assert_eq!(request.uri().path(), "/v1/models");
+                            sent.send(key.clone()).unwrap();
+                            let (status, data) = match (key.as_str(), mode) {
+                                ("Bearer key-a", _) => (StatusCode::OK, json!(["a", "common"])),
+                                ("Bearer key-b", 1) => (StatusCode::UNAUTHORIZED, json!([])),
+                                ("Bearer key-b", 2) => (StatusCode::OK, json!(["b-new"])),
+                                ("Bearer key-b", 3) => (StatusCode::OK, json!([])),
+                                ("Bearer key-b", _) => (StatusCode::OK, json!(["b", "common"])),
+                                _ => panic!("请求使用了未选中的凭据"),
+                            };
+                            Ok::<_, Infallible>(json_response(status, json!({"data":data})))
+                        }
+                    })).await;
+                });
+            }
+        });
+        let saved = store::save(&fixture.paths, &json!({
+            "name":"服务商","baseUrl":url,"apiKey":"key-a","models":["old"],
+            "bindings":[{"agentType":"codex","enabled":true,"defaultModelName":"old"}]
+        })).unwrap();
+        let provider = store::text(&saved, "id");
+        let c = database::open(&fixture.paths).unwrap();
+        store::save_key_version(&c, provider, "second", "第二个 Key", "key-b", false).unwrap();
+        service_provider::switch_backend(&fixture.paths, "service").unwrap();
+        let targets = json!([{"id":"codex","installed":true,"configPath":fixture.root.join("model-key-client")}]);
+        let config_path = fixture.root.join("model-key-client/config.toml");
+        let start = json!({"agentType":"codex","providerId":provider});
+        let models = || store::query(&c, "SELECT upstream_model_id AS name FROM service_provider_model_catalog
+            WHERE provider_id=?1 AND enabled=1 ORDER BY name", &[&provider]).unwrap()
+            .into_iter().map(|model| model["name"].clone()).collect::<Vec<_>>();
+
+        let first = service_provider::start_provider(&fixture.paths, &targets, "quick-switch", start.clone()).await.unwrap();
+        assert_eq!(requests.try_recv().unwrap(), "Bearer key-a");
+        assert_eq!(models(), vec![json!("a"), json!("common")]);
+        let before = std::fs::read(&config_path).unwrap();
+        let key_b = store::query(&c, "SELECT id FROM service_provider_keys WHERE logical_id='second'", &[]).unwrap().remove(0);
+        let select = json!({"providerId":provider,"id":key_b["id"]});
+
+        mode.store(1, Ordering::Relaxed);
+        assert!(service_provider::dispatch(&fixture.paths, &targets, "key-select", select.clone()).await.is_err());
+        assert_eq!(requests.try_recv().unwrap(), "Bearer key-b");
+        assert_eq!(models(), vec![json!("a"), json!("common")]);
+        assert_eq!(std::fs::read(&config_path).unwrap(), before);
+
+        mode.store(0, Ordering::Relaxed);
+        service_provider::dispatch(&fixture.paths, &targets, "key-select", select).await.unwrap();
+        assert_eq!(requests.try_recv().unwrap(), "Bearer key-b");
+        assert_eq!(models(), vec![json!("b"), json!("common")]);
+        assert!(service::resolve(&fixture.paths, &json!({"providerId":provider,"agentType":"codex"}), "a").is_err());
+        let before = std::fs::read(&config_path).unwrap();
+        mode.store(1, Ordering::Relaxed);
+        assert!(service_provider::start_provider(&fixture.paths, &targets, "quick-switch", start.clone()).await.is_err());
+        assert_eq!(requests.try_recv().unwrap(), "Bearer key-b");
+        assert_eq!(std::fs::read(&config_path).unwrap(), before);
+        assert_eq!(models(), vec![json!("b"), json!("common")]);
+
+        mode.store(2, Ordering::Relaxed);
+        let selected = json!({"agentType":"codex","providerId":provider,
+            "revision":store::config(&c, provider).unwrap()["revision"],"defaultModelName":"b","options":{}});
+        assert!(service_provider::dispatch(&fixture.paths, &targets, "configure-agent", selected).await.is_err());
+        assert_eq!(requests.try_recv().unwrap(), "Bearer key-b");
+        assert_eq!(models(), vec![json!("b-new")]);
+        assert_eq!(std::fs::read(&config_path).unwrap(), before);
+
+        let next = service_provider::start_provider(&fixture.paths, &targets, "quick-switch", start.clone()).await.unwrap();
+        assert_eq!(requests.try_recv().unwrap(), "Bearer key-b");
+        assert_eq!(next["instanceId"], first["instanceId"]);
+        assert_eq!(models(), vec![json!("b-new")]);
+        assert!(std::fs::read_to_string(&config_path).unwrap().contains("model = \"b-new\""));
+        mode.store(3, Ordering::Relaxed);
+        assert!(service_provider::start_provider(&fixture.paths, &targets, "quick-switch", start).await.is_err());
+        assert_eq!(requests.try_recv().unwrap(), "Bearer key-b");
+        assert!(models().is_empty());
+        let snapshots = store::query(&c, "SELECT models_json AS modelsJson FROM service_provider_keys WHERE provider_id=?1 ORDER BY logical_id", &[&provider]).unwrap();
+        assert_eq!(snapshots[0]["models"], json!({"a":1,"common":1}));
+        assert_eq!(snapshots[1]["models"], json!({}));
         server.abort();
     });
 }

@@ -722,7 +722,7 @@ impl ManagerState {
                 return result.map(|_| self.state["serviceProviders"].clone());
             } else {
                 let result = service_provider::dispatch(&self.paths,&self.state["cliTargets"],action,payload).await;
-                if matches!(action,"state"|"detail"|"file-backup"|"period-usage") { return result; }
+                if matches!(action,"state"|"detail"|"key-editor-detail"|"file-backup"|"period-usage") { return result; }
                 self.refresh_state().await?;
                 self.emit_state_changed(&app)?;
                 return result;
@@ -2545,7 +2545,7 @@ impl ManagerState {
             let result=if let Some(instance)=action.strip_prefix("detach:"){
                 service_provider::detach(&self.paths,instance).map(|_|json!({}))
             }else if let Some((agent,provider))=action.strip_prefix("switch:").and_then(|v|v.split_once(':')){
-                service_provider::quick_switch(&self.paths,&self.state["cliTargets"],&json!({"agentType":agent,"providerId":provider}))
+                service_provider::start_provider(&self.paths,&self.state["cliTargets"],"quick-switch",json!({"agentType":agent,"providerId":provider})).await
             }else{return Err(ManagerError::UnknownChannel(item_id.into()));};
             self.refresh_state().await?;
             self.emit_state_changed(&app)?;

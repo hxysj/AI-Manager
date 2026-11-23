@@ -130,14 +130,15 @@
             >
           </h3>
           <span class="service-caption"
-            >已启用 {{ enabledModelCount }} 个 · 价格按每 100 万 Tokens
+            >{{ activeKey?.name || activeKey?.logicalId || "未选中 Key" }} ·
+            已启用 {{ enabledModelCount }} 个 · 价格按每 100 万 Tokens
             展示</span
           >
         </div>
         <button
           class="btn service-overview-button"
           type="button"
-          :disabled="busy"
+          :disabled="busy || !provider.hasCredential"
           :aria-busy="busy"
           @click="$emit('fetch')"
         >

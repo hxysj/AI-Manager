@@ -85,6 +85,18 @@ pub async fn dispatch(
                 if !failures.is_empty() {
                     return Err(store::fail(format!("服务商已禁用，部分客户端配置需要手动恢复：{}", failures.join("；"))));
                 }
+            } else if result["keyChanged"] == true && store::active(paths)? {
+                let provider = store::text(&result, "id");
+                let running = database::open(paths)?.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM service_agent_instances WHERE provider_id=?1 AND status='active')",
+                    [provider], |row| row.get::<_, bool>(0),
+                )?;
+                if running {
+                    multi_protocol_gateway::service::fetch_models_before_start(paths, &json!({
+                        "providerId":provider,"agentVersion":agent_version(targets, "codex")
+                    })).await.map_err(|error| store::fail(format!("Key 已保存，模型刷新失败：{error}")))?;
+                    sync_provider(paths, provider)?;
+                }
             }
             return Ok(result);
         }
@@ -95,10 +107,27 @@ pub async fn dispatch(
                 value["revision"].as_i64().unwrap_or(0),
             )?;
         }
-        "detail" => {
+        "detail" | "key-editor-detail" => {
             let c = database::open(paths)?;
             let provider = store::text(&value, "id");
             let mut detail = store::config(&c, provider)?;
+            if action == "key-editor-detail" && detail["kind"] == "api" {
+                let mut keys = store::query(&c, "SELECT id,logical_id AS logicalId,name,is_active AS isActive,status,
+                    CASE WHEN status='active' THEN secret_ciphertext ELSE '' END AS ciphertext
+                    FROM service_provider_keys WHERE provider_id=?1 AND is_current=1
+                    ORDER BY is_active DESC,created_at,id", &[&provider])?;
+                for key in &mut keys {
+                    let ciphertext = store::text(key, "ciphertext");
+                    let api_key = if ciphertext.is_empty() {
+                        String::new()
+                    } else {
+                        runtime_provider::decrypt_provider_key(ciphertext)?
+                    };
+                    key.as_object_mut().unwrap().remove("ciphertext");
+                    key["apiKey"] = json!(api_key);
+                }
+                detail["apiKeys"] = json!(keys);
+            }
             if value["agentType"] == "codex" {
                 if let Some(target) = targets.as_array().into_iter().flatten()
                     .find(|item| item["id"] == "codex" && item["installed"] == true)
@@ -125,15 +154,36 @@ pub async fn dispatch(
                 paths, provider, store::text(&value, "content"), value["proxy"].as_str());
         }
         "key-select" | "key-revoke" => {
-            let mut c = database::open(paths)?;
-            let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
             let provider = store::text(&value, "providerId");
             let key = store::text(&value, "id");
+            let refreshed = if action == "key-select" && store::active(paths)? {
+                let running = database::open(paths)?.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM service_agent_instances WHERE provider_id=?1 AND status='active')",
+                    [provider], |row| row.get::<_, bool>(0),
+                )?;
+                if running {
+                    Some(multi_protocol_gateway::service::fetch_models_before_start(paths, &json!({
+                        "providerId":provider,"keyId":key,"agentVersion":agent_version(targets, "codex")
+                    })).await?)
+                } else { None }
+            } else { None };
+            let mut c = database::open(paths)?;
+            let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
             if action == "key-select" {
                 let exists:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM service_provider_keys WHERE id=?1 AND provider_id=?2
                     AND is_current=1 AND status='active' AND secret_ciphertext<>'')",params![key,provider],|r|r.get(0))?;
                 if !exists {
                     return Err(store::fail("Key 不可用"));
+                }
+                if let Some(catalog) = refreshed {
+                    if store::config(&tx, provider)?["revision"] != catalog["catalogRevision"] {
+                        return Err(store::fail("服务商配置已变化，请重新选择 Key"));
+                    }
+                    let usable = tx.query_row("SELECT EXISTS(SELECT 1 FROM service_provider_keys k, json_each(k.models_json) m
+                        WHERE k.id=?1 AND m.value=1)", [key], |row| row.get::<_, bool>(0))?;
+                    if !usable {
+                        return Err(store::fail("此 API Key 没有可用模型，无法切换"));
+                    }
                 }
                 tx.execute(
                     "UPDATE service_provider_keys SET is_active=0 WHERE provider_id=?1",
@@ -154,9 +204,7 @@ pub async fn dispatch(
             tx.commit()?;
             sync_provider(paths, provider)?;
         }
-        "activate" => return activate(paths, targets, &value),
-        "quick-switch" => return quick_switch(paths, targets, &value),
-        "configure-agent" => return configure_agent(paths, targets, &value),
+        "activate" | "quick-switch" | "configure-agent" => return start_provider(paths, targets, action, value).await,
         "issue-token" => return issue_token(paths, &value),
         "detach" => {
             detach(paths, store::text(&value, "id"))?;
@@ -174,6 +222,38 @@ pub async fn dispatch(
     store::state(paths)
 }
 
+fn agent_version<'a>(targets: &'a Value, agent: &str) -> &'a str {
+    targets.as_array().into_iter().flatten()
+        .find(|target| target["id"] == agent)
+        .map(|target| store::text(target, "version")).unwrap_or("")
+}
+
+pub(crate) async fn start_provider(
+    paths: &AppPaths, targets: &Value, action: &str, mut value: Value,
+) -> Result<Value, ManagerError> {
+    if !store::active(paths)? {
+        return Err(store::fail("请先启用服务商配置中心"));
+    }
+    let provider = store::text(&value, "providerId");
+    let agent = store::text(&value, "agentType");
+    if !provider.is_empty() {
+        let config = store::config(&database::open(paths)?, provider)?;
+        if config["kind"] == "api" {
+            let catalog = multi_protocol_gateway::service::fetch_models_before_start(paths, &json!({
+                "providerId":provider,"revision":value["revision"].as_i64().or(config["revision"].as_i64()),
+                "agentVersion":agent_version(targets, agent)
+            })).await?;
+            value["revision"] = catalog["catalogRevision"].clone();
+        }
+    }
+    match action {
+        "activate" => activate(paths, targets, &value),
+        "quick-switch" => quick_switch(paths, targets, &value),
+        "configure-agent" => configure_agent(paths, targets, &value),
+        _ => Err(store::fail("无效的启动操作")),
+    }
+}
+
 // 同一客户端切换来源时保留令牌；迁移到新目录时恢复旧目录配置。
 pub(crate) fn quick_switch(
     paths: &AppPaths,
@@ -189,10 +269,13 @@ pub(crate) fn quick_switch(
     }
     let provider = store::text(value, "providerId");
     let c = database::open(paths)?;
+    if !value["revision"].is_null() && store::config(&c, provider)?["revision"] != value["revision"] {
+        return Err(store::fail("服务商配置已变化，请重新启动"));
+    }
     let model = store::query(
         &c,
         "SELECT m.id FROM service_provider_configs p JOIN service_provider_agent_bindings b
-        ON b.provider_id=p.id AND b.agent_type=?2 AND b.enabled=1 JOIN service_provider_models m
+        ON b.provider_id=p.id AND b.agent_type=?2 AND b.enabled=1 JOIN service_provider_model_catalog m
         ON m.provider_id=p.id AND m.enabled=1 WHERE p.id=?1 AND p.enabled=1 AND p.deleted_at IS NULL
         ORDER BY CASE WHEN m.id=b.default_model_id THEN 0 ELSE 1 END,m.created_at,m.id LIMIT 1",
         &[&provider, &agent],
@@ -226,7 +309,7 @@ pub(crate) fn quick_switch(
     apply(
         paths,
         targets,
-        &json!({"agentType":agent,"providerId":provider,"modelId":model["id"],"configPath":directory}),
+        &json!({"agentType":agent,"providerId":provider,"modelId":model["id"],"configPath":directory,"revision":value["revision"]}),
         current.as_ref(),
     )
 }
@@ -273,7 +356,7 @@ pub(crate) fn configure_agent(
         return Err(store::fail("配置已被修改，请重新打开 Agent 配置"));
     }
     let model = store::text(value, "defaultModelName");
-    if !c.query_row("SELECT EXISTS(SELECT 1 FROM service_provider_models
+    if !c.query_row("SELECT EXISTS(SELECT 1 FROM service_provider_model_catalog
         WHERE provider_id=?1 AND upstream_model_id=?2 AND enabled=1)",
         params![provider, model], |row| row.get::<_, bool>(0))? {
         return Err(store::fail("请选择服务商可用的模型"));
@@ -302,7 +385,7 @@ pub(crate) fn configure_agent(
         return Err(store::fail("配置已被修改，请重新打开 Agent 配置"));
     }
     tx.execute("INSERT INTO service_provider_agent_bindings(provider_id,agent_type,enabled,default_model_id,options_json,updated_at)
-        VALUES(?1,?2,1,(SELECT id FROM service_provider_models WHERE provider_id=?1 AND upstream_model_id=?3 AND enabled=1),?4,?5)
+        VALUES(?1,?2,1,(SELECT id FROM service_provider_model_catalog WHERE provider_id=?1 AND upstream_model_id=?3 AND enabled=1),?4,?5)
         ON CONFLICT(provider_id,agent_type) DO UPDATE SET enabled=1,default_model_id=excluded.default_model_id,
         options_json=excluded.options_json,revision=revision+1,updated_at=excluded.updated_at",
         params![provider, agent, model, options.to_string(), store::now()])?;
@@ -315,7 +398,7 @@ pub(crate) fn configure_agent(
     if agent == "gateway" {
         return store::state(paths);
     }
-    quick_switch(paths, targets, &json!({"agentType":agent,"providerId":provider}))
+    quick_switch(paths, targets, &json!({"agentType":agent,"providerId":provider,"revision":config["revision"].as_i64().unwrap_or(0)+1}))
 }
 
 pub(crate) fn codex_reasoning_profile(
@@ -341,7 +424,7 @@ pub(crate) fn issue_token(paths: &AppPaths, value: &Value) -> Result<Value, Mana
     let limit = multi_protocol_gateway::token_reasoning_limit(&value["reasoningEffortLimit"])?;
     let allowed:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM service_provider_configs p
         JOIN service_provider_agent_bindings b ON b.provider_id=p.id AND b.agent_type='gateway' AND b.enabled=1
-        JOIN service_provider_models m ON m.provider_id=p.id AND m.id=?2 AND m.enabled=1
+        JOIN service_provider_model_catalog m ON m.provider_id=p.id AND m.id=?2 AND m.enabled=1
         WHERE p.id=?1 AND p.enabled=1 AND p.deleted_at IS NULL)",params![provider,model],|r|r.get(0))?;
     if !allowed {
         return Err(store::fail("服务商或模型不可用，请先授权多协议工具"));
@@ -406,9 +489,9 @@ pub(crate) fn sync_provider(paths: &AppPaths, provider: &str) -> Result<(), Mana
     if !store::active(paths)? { return Ok(()); }
     let c = database::open(paths)?;
     let instances = store::query(&c,"SELECT i.id,i.agent_type,i.config_path,i.agent_version,b.enabled,
-        coalesce((SELECT id FROM service_provider_models WHERE provider_id=i.provider_id AND id=b.default_model_id AND enabled=1),
-        (SELECT id FROM service_provider_models WHERE provider_id=i.provider_id AND id=i.model_id AND enabled=1),
-        (SELECT id FROM service_provider_models WHERE provider_id=i.provider_id AND enabled=1 ORDER BY created_at,id LIMIT 1)) AS model_id
+        coalesce((SELECT id FROM service_provider_model_catalog WHERE provider_id=i.provider_id AND id=b.default_model_id AND enabled=1),
+        (SELECT id FROM service_provider_model_catalog WHERE provider_id=i.provider_id AND id=i.model_id AND enabled=1),
+        (SELECT id FROM service_provider_model_catalog WHERE provider_id=i.provider_id AND enabled=1 ORDER BY created_at,id LIMIT 1)) AS model_id
         FROM service_agent_instances i JOIN service_provider_agent_bindings b ON b.provider_id=i.provider_id AND b.agent_type=i.agent_type
         WHERE i.provider_id=?1 AND i.status='active' AND i.config_path NOT LIKE 'internal:%'
         AND i.config_path NOT LIKE 'test:%' AND i.config_path NOT LIKE 'external:%'",&[&provider])?;
@@ -486,6 +569,9 @@ fn apply(
     if config["enabled"] != 1 || !config["deletedAt"].is_null() {
         return Err(store::fail("服务商已禁用或删除"));
     }
+    if !value["revision"].is_null() && config["revision"] != value["revision"] {
+        return Err(store::fail("服务商配置已变化，请重新启动"));
+    }
     let mut binding = store::query(
         &c,
         "SELECT default_model_id AS defaultModelId,options_json AS optionsJson
@@ -495,7 +581,7 @@ fn apply(
     .pop()
     .ok_or_else(|| store::fail("该服务商尚未授权此 Agent"))?;
     let models=store::query(&c,"SELECT id,upstream_model_id AS upstreamModelId,catalog_json AS catalogJson,context_window AS contextWindow
-        FROM service_provider_models WHERE provider_id=?1 AND enabled=1",&[&provider])?;
+        FROM service_provider_model_catalog WHERE provider_id=?1 AND enabled=1",&[&provider])?;
     store::validate_credential(&c, provider)?;
     let default_path = targets
         .as_array()
@@ -1266,7 +1352,7 @@ pub(crate) fn internal_session(
     let mut c = database::open(paths)?;
     let tx = c.transaction_with_behavior(TransactionBehavior::Immediate)?;
     let source=store::query(&tx,"SELECT p.name,m.id AS modelId FROM service_provider_configs p
-        JOIN service_provider_models m ON m.provider_id=p.id AND m.upstream_model_id=?2 AND m.enabled=1
+        JOIN service_provider_model_catalog m ON m.provider_id=p.id AND m.upstream_model_id=?2 AND m.enabled=1
         JOIN service_provider_agent_bindings b ON b.provider_id=p.id AND b.agent_type='codex' AND b.enabled=1
         WHERE p.id=?1 AND p.enabled=1 AND p.deleted_at IS NULL",&[&provider,&model])?.pop()
         .ok_or_else(||store::fail("服务商、模型不可用或未授权 Codex；内置文本 Agent 复用 Codex 授权"))?;

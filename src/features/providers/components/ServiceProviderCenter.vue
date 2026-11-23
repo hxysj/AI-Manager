@@ -519,6 +519,7 @@
                     名称
                   </th>
                   <th class="detail-key-cell" scope="col">Key 指纹</th>
+                  <th class="detail-key-cell" scope="col">可用模型</th>
                   <th class="detail-key-cell detail-key-state" scope="col">
                     状态
                   </th>
@@ -554,6 +555,11 @@
                     <code class="detail-key-fingerprint">{{
                       key.fingerprint || "未记录"
                     }}</code>
+                  </td>
+                  <td class="detail-key-cell">
+                    {{
+                      key.modelCount == null ? "待获取" : `${key.modelCount} 个`
+                    }}
                   </td>
                   <td class="detail-key-cell detail-key-state">
                     <span
@@ -833,7 +839,7 @@
     <BaseModal
       v-if="form && editorSection === 'provider'"
       :title="form.id ? '编辑服务商' : '新增服务商'"
-      description="配置上游服务与公共模型目录。"
+      description="配置上游连接、API Key 和模型目录。"
       @close="form = null"
     >
       <form class="provider-form" @submit.prevent="saveProvider">
@@ -887,18 +893,6 @@
                 placeholder="https://example.com/v1"
                 required
             /></label>
-            <label class="form-field"
-              >API Key<ProviderApiKeyInput
-                v-model="form.apiKey"
-                :placeholder="
-                  form.hasCredential
-                    ? '留空保留当前 Key，填写则更新当前 Key'
-                    : '请输入 API Key'
-                "
-              /><span v-if="form.hasCredential" class="muted"
-                >当前 Key：{{ form.keyName }}，留空保留。</span
-              ></label
-            >
           </template>
           <label class="form-field"
             >代理地址<input
@@ -910,6 +904,85 @@
             >备注<input v-model="form.note" class="input"
           /></label>
         </div>
+        <section
+          v-if="form.kind === 'api'"
+          class="provider-key-editor"
+          aria-label="API Key"
+        >
+          <div class="key-editor-header">
+            <span>API Key</span>
+            <button
+              class="btn"
+              type="button"
+              :disabled="busy"
+              @click="addProviderKey"
+            >
+              <Plus :size="14" />添加 Key
+            </button>
+          </div>
+          <p class="muted">
+            {{
+              form.keys.length
+                ? "已有 Key 的密钥留空时保留原值。保存后可在 API Key 管理页切换。"
+                : "尚未添加 Key。添加后可用它获取模型。"
+            }}
+          </p>
+          <div
+            v-for="(key, index) in form.keys"
+            :key="key.id || key.draftId"
+            class="key-edit-entry"
+          >
+            <div class="key-editor-header">
+              <span>{{
+                key.isActive
+                  ? "当前使用"
+                  : keyStatusLabels[key.status] || "待添加"
+              }}</span>
+              <button
+                v-if="!key.id"
+                class="btn"
+                type="button"
+                :disabled="busy"
+                @click="form.keys.splice(index, 1)"
+              >
+                <Trash2 :size="14" />移除
+              </button>
+            </div>
+            <div class="form-grid key-edit-fields">
+              <label class="form-field">
+                Key 名称
+                <input
+                  v-model.trim="key.name"
+                  class="input"
+                  :disabled="busy"
+                  required
+                />
+              </label>
+              <label class="form-field">
+                Key 标识
+                <input
+                  v-model.trim="key.logicalId"
+                  class="input"
+                  :disabled="busy || Boolean(key.id)"
+                  required
+                />
+              </label>
+              <label class="form-field key-secret-field">
+                密钥
+                <input
+                  v-model="key.apiKey"
+                  type="text"
+                  class="input"
+                  autocomplete="off"
+                  autocapitalize="off"
+                  spellcheck="false"
+                  :disabled="busy"
+                  :placeholder="key.id ? '留空保留原密钥' : '请输入 API Key'"
+                />
+              </label>
+            </div>
+          </div>
+        </section>
         <label class="check-field"
           ><input v-model="form.enabled" type="checkbox" />服务商可用</label
         >
@@ -919,12 +992,16 @@
             title="服务商模型目录"
             :show-sync-control="false"
             :show-reset="false"
-            :disabled="busy"
+            :disabled="busy || editingActiveKey"
             @update:model-value="updateDraftModelNames"
             @fetch="fetchEditorModels"
           />
           <p class="muted">
-            移除模型会将其停用，原有价格、模型详情与历史用量继续保留。
+            {{
+              editingActiveKey
+                ? "新 Key 保存后独立获取模型。"
+                : "此目录对应当前 API Key。移除模型会将其在此 Key 下停用。"
+            }}
           </p>
         </template>
         <p v-else class="muted">使用官方模型列表</p>
@@ -939,26 +1016,13 @@
                 : "高级配置：请求头与模型别名"
             }}
           </summary>
-          <div v-if="form.kind === 'api'" class="form-grid">
-            <label class="form-field"
-              >Key 标识<input
-                v-model="form.keyLogicalId"
-                class="input"
-                placeholder="default"
-            /></label>
-            <label class="form-field"
-              >Key 名称<input
-                v-model="form.keyName"
-                class="input"
-                placeholder="默认 Key"
-            /></label>
-          </div>
           <template v-if="form.kind === 'api'">
             <label class="form-field"
               >模型详情 JSON<textarea
                 v-model="form.modelsJson"
                 class="input code-input"
                 rows="8"
+                :disabled="busy || editingActiveKey"
                 placeholder='["model-name"]'
               ></textarea>
             </label>
@@ -1030,7 +1094,7 @@
                     v-model="agentProviderId"
                     class="input"
                     :disabled="busy"
-                    @change="selectAgentProvider"
+                    @change="selectAgentProvider()"
                   >
                     <option value="">停止使用，恢复原有配置</option>
                     <optgroup
@@ -1076,9 +1140,11 @@
           <p class="agent-config-hint">
             <Info :size="16" />
             {{
-              agentProviderId
-                ? "保存后，配置将应用到当前 Agent。"
-                : "保存后，将停止接管并恢复原有配置。"
+              form?.kind === "api"
+                ? `保存时会先使用 ${form.keyName} 获取最新模型，再应用到当前 Agent。`
+                : agentProviderId
+                  ? "保存后，配置将应用到当前 Agent。"
+                  : "保存后，将停止接管并恢复原有配置。"
             }}
           </p>
           <div class="agent-config-actions">
@@ -1310,7 +1376,6 @@ import {
 } from "lucide-vue-next"
 import AiIcon from "@/components/AiIcon.vue"
 import BaseModal from "@/components/BaseModal.vue"
-import ProviderApiKeyInput from "./ProviderApiKeyInput.vue"
 import ProviderIconPicker from "./ProviderIconPicker.vue"
 import ProviderModelListEditor from "./ProviderModelListEditor.vue"
 import CodexAccountLoginModal from "./CodexAccountLoginModal.vue"
@@ -1440,6 +1505,17 @@ const detailTabs = computed(() => [
   { id: "instances", label: "关联 Agent" }
 ])
 const form = ref(null)
+let keyDraftSequence = 0
+// 模型草稿只允许保存给编辑前的当前 Key。
+const editingActiveKey = computed(() => {
+  if (!form.value?.id || form.value.kind !== "api") return false
+  const current = form.value.keys.find(
+    (key) => key.isActive && key.status === "active"
+  )
+  return current
+    ? Boolean(changedApiKey(current))
+    : form.value.keys.some(changedApiKey)
+})
 const editorSection = ref("provider")
 const agentConfig = ref(null)
 const agentProviderId = ref("")
@@ -2016,18 +2092,25 @@ async function editProvider(provider = {}, section = "provider") {
   if (section !== "provider" && !provider.enabled) return
   busy.value = true
   try {
-    const detail = provider.id
-      ? await serviceProviderApi.invoke("detail", {
-          id: provider.id,
-          agentType: section === "agent" ? agentConfig.value?.id : undefined
-        })
+    const { apiKeys = [], ...detail } = provider.id
+      ? await serviceProviderApi.invoke(
+          section === "provider" && provider.kind === "api"
+            ? "key-editor-detail"
+            : "detail",
+          {
+            id: provider.id,
+            agentType: section === "agent" ? agentConfig.value?.id : undefined
+          }
+        )
       : {}
-    const activeKey = data.value.keys.find(
-      (item) =>
-        item.providerId === provider.id &&
-        item.isActive &&
-        item.status === "active"
-    )
+    const activeKey =
+      apiKeys.find((key) => key.isActive && key.status === "active") ||
+      data.value.keys.find(
+        (key) =>
+          key.providerId === provider.id &&
+          key.isActive &&
+          key.status === "active"
+      )
     form.value = {
       name: "",
       icon: "",
@@ -2040,8 +2123,13 @@ async function editProvider(provider = {}, section = "provider") {
       ...provider,
       ...detail,
       enabled: Boolean(detail.enabled ?? provider.enabled ?? true),
-      apiKey: "",
-      keyLogicalId: activeKey?.logicalId || "default",
+      // 保留读取时的原值，用于识别是否真的更换密钥。
+      keys: apiKeys.map((key) => ({
+        ...key,
+        originalName: key.name || key.logicalId,
+        name: key.name || key.logicalId,
+        originalApiKey: key.apiKey
+      })),
       keyName: activeKey?.name || "默认 Key",
       modelsJson: JSON.stringify(
         providerModels(provider.id).map(({ effectivePricing, ...item }) => ({
@@ -2108,6 +2196,23 @@ async function editProvider(provider = {}, section = "provider") {
   }
 }
 
+function addProviderKey() {
+  const keys = form.value.keys
+  // 自动标识避开已保存和本次新增的 Key。
+  let number = keys.length + 1
+  let logicalId = number === 1 ? "default" : `key-${number}`
+  while (keys.some((key) => key.logicalId === logicalId)) {
+    number += 1
+    logicalId = `key-${number}`
+  }
+  keys.push({
+    draftId: ++keyDraftSequence,
+    logicalId,
+    name: number === 1 ? "默认 Key" : `Key ${number}`,
+    apiKey: ""
+  })
+}
+
 async function openAgentConfig(agent) {
   if (busy.value || !agent.installed) return
   agentConfig.value = agent
@@ -2143,14 +2248,14 @@ async function runAntigravity(apply) {
   }
 }
 
-async function selectAgentProvider() {
+async function selectAgentProvider(fetchIfEmpty = true) {
   form.value = null
   if (!agentProviderId.value) return
   const provider = data.value.providers.find(
     (item) => item.id === agentProviderId.value
   )
   if (!provider?.enabled || !provider.hasCredential) return
-  if (provider.kind !== "api" && !providerModels(provider.id).length) {
+  if (fetchIfEmpty && !providerModels(provider.id).length) {
     if (
       !(await perform(
         "fetch-models",
@@ -2193,6 +2298,13 @@ async function saveAgentConfig() {
     })
   ) {
     closeAgentConfig()
+  } else if (
+    form.value?.revision !==
+    data.value.providers.find((item) => item.id === agentProviderId.value)
+      ?.revision
+  ) {
+    // 启动前的刷新可能移除了原模型，重新填充可选项。
+    await selectAgentProvider(false)
   }
 }
 
@@ -2247,24 +2359,6 @@ function updateDraftModelNames(value) {
         next.push({ upstreamModelId: name, displayName: name, enabled: true })
     }
     form.value.modelsJson = JSON.stringify(next, null, 2)
-    for (const binding of form.value.bindings) {
-      if (!names.includes(binding.defaultModelName))
-        binding.defaultModelName = ""
-      if (binding.agentType === "claude") {
-        for (const key of [
-          "haikuModel",
-          "sonnetModel",
-          "opusModel",
-          "subagentModel"
-        ])
-          if (!names.includes(binding.options[key])) binding.options[key] = ""
-      } else if (binding.agentType === "claude-desktop") {
-        for (const mapping of Object.values(
-          binding.options.modelMappings || {}
-        ))
-          if (!names.includes(mapping.model)) mapping.model = ""
-      }
-    }
   } catch (error) {
     createMessage.error(`请先修正模型详情：${error?.message || error}`)
   }
@@ -2278,11 +2372,14 @@ async function fetchEditorModels() {
   busy.value = true
   try {
     const models = parseDraftModels()
+    const previous = new Set(
+      providerModels(editor.id).map((item) => item.upstreamModelId)
+    )
     const detail = await serviceProviderApi.invoke("detail", { id: editor.id })
     if (detail.revision !== editor.revision)
       throw new Error("配置已被修改，请重新打开编辑后获取模型")
     if (
-      editor.apiKey ||
+      editingActiveKey.value ||
       ["baseUrl", "proxy", "upstreamProtocol"].some(
         (key) => editor[key] !== detail[key]
       ) ||
@@ -2305,7 +2402,7 @@ async function fetchEditorModels() {
       throw new Error(
         "获取模型期间配置已变化，请重新打开编辑，避免覆盖其他修改"
       )
-    // 更新未自行改动的目录字段，保留草稿中的模型和价格设置。
+    // 从草稿移除上游已撤下的模型，保留未保存的手工新增项和定价。
     const refreshed = providerModels(editor.id)
     const discovered = new Set(result.models?.map((item) => item.slug) || [])
     const added = refreshed.filter(
@@ -2324,7 +2421,18 @@ async function fetchEditorModels() {
         model.id ??= snapshot.id
       }
     }
-    editor.modelsJson = JSON.stringify([...models, ...added], null, 2)
+    editor.modelsJson = JSON.stringify(
+      [
+        ...models.filter(
+          (item) =>
+            discovered.has(item.upstreamModelId) ||
+            !previous.has(item.upstreamModelId)
+        ),
+        ...added
+      ],
+      null,
+      2
+    )
     editor.revision = updated.revision
     createMessage.success("已获取模型，保存后应用当前编辑")
   } catch (error) {
@@ -2334,23 +2442,32 @@ async function fetchEditorModels() {
   }
 }
 
+// 原值直接显示，未编辑或清空的密钥沿用已有凭据。
+function changedApiKey(key) {
+  return key.apiKey === key.originalApiKey ? "" : key.apiKey.trim()
+}
+
 async function saveProvider() {
   try {
     const kind = form.value.kind
-    const models = parseDraftModels()
-    for (const binding of form.value.bindings) {
-      if (
-        binding.enabled &&
-        binding.defaultModelName &&
-        !models.some(
-          (item) =>
-            item.enabled && item.upstreamModelId === binding.defaultModelName
-        )
-      )
-        throw new Error(
-          `${agentLabel(binding.agentType)} 的默认模型已停用，请重新选择`
-        )
+    const apiKeys = []
+    if (kind === "api") {
+      const seen = new Set()
+      for (const key of form.value.keys) {
+        const { name, logicalId } = key
+        const apiKey = changedApiKey(key)
+        if (!logicalId || seen.has(logicalId))
+          throw new Error("API Key 标识不能为空或重复")
+        seen.add(logicalId)
+        if (!key.id && !apiKey) throw new Error(`请填写 ${name} 的密钥`)
+        if (!key.id || apiKey || name !== key.originalName) {
+          apiKeys.push({ logicalId, name, apiKey })
+        }
+      }
     }
+    // 更换凭据时，原 Key 的模型草稿不能写入新 Key。
+    const models =
+      kind === "api" && !editingActiveKey.value ? parseDraftModels() : undefined
     const value = {
       id: form.value.id,
       revision: form.value.revision,
@@ -2364,25 +2481,12 @@ async function saveProvider() {
       upstreamProtocol:
         form.value.kind !== "api" ? "responses" : form.value.upstreamProtocol,
       headers: JSON.parse(form.value.headersJson),
-      bindings: form.value.bindings.map((item) => ({
-        agentType: item.agentType,
-        enabled: item.enabled,
-        defaultModelName: item.defaultModelName || "",
-        options: JSON.parse(JSON.stringify(item.options))
-      }))
+      apiKeys,
+      models,
+      routes: JSON.parse(form.value.routesJson)
     }
-    // Agent 配置省略目录、别名与密钥字段，由后端保留原值。
-    if (editorSection.value === "provider") {
-      Object.assign(value, {
-        apiKey: form.value.kind === "api" ? form.value.apiKey : "",
-        keyLogicalId: form.value.keyLogicalId,
-        keyName: form.value.keyName,
-        models,
-        routes: JSON.parse(form.value.routesJson)
-      })
-      if (!Array.isArray(value.routes))
-        throw new Error("模型和别名必须为 JSON 数组")
-    }
+    if (!Array.isArray(value.routes))
+      throw new Error("模型和别名必须为 JSON 数组")
     if (await perform("save", value)) {
       form.value = null
       providerTab.value = kind === "api" ? "api" : "codex_account"
@@ -2429,11 +2533,13 @@ function updateTestAgent() {
       item.providerId === compatibilityForm.value.providerId &&
       item.agentType === compatibilityForm.value.agentType
   )
+  // 默认模型可能属于此前选中的 Key。
+  const models = providerModels(compatibilityForm.value.providerId).filter(
+    (item) => item.enabled
+  )
   compatibilityForm.value.modelId =
-    binding?.defaultModelId ||
-    providerModels(compatibilityForm.value.providerId).find(
-      (item) => item.enabled
-    )?.id ||
+    models.find((item) => item.id === binding?.defaultModelId)?.id ||
+    models[0]?.id ||
     ""
 }
 
@@ -3619,6 +3725,34 @@ async function showBackup(id) {
       align-items: center;
       gap: 8px;
       margin-right: 16px;
+    }
+    .provider-key-editor {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      .key-editor-header {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        gap: 8px;
+      }
+      .key-edit-entry {
+        display: flex;
+        flex-direction: column;
+        gap: 8px;
+        padding: 12px;
+        border: 1px solid var(--color-line);
+        border-radius: 8px;
+        .key-edit-fields {
+          gap: 10px;
+          .form-field {
+            flex: 1 1 120px;
+          }
+          .key-secret-field {
+            flex: 2 1 200px;
+          }
+        }
+      }
     }
     .advanced-fields {
       padding: 14px;

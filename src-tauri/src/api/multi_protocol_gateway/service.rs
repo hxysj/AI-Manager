@@ -132,7 +132,7 @@ pub(super) fn resolve(
             "SELECT options_json AS optionsJson FROM service_provider_agent_bindings WHERE provider_id=?1 AND agent_type=?2 AND enabled=1",
             &[&provider, &agent])?.pop().ok_or_else(|| store::fail("此服务商尚未授权 Desktop"))?;
         let fallback = store::query(&c,
-            "SELECT upstream_model_id AS name FROM service_provider_models WHERE id=?1 AND provider_id=?2 AND enabled=1",
+            "SELECT upstream_model_id AS name FROM service_provider_model_catalog WHERE id=?1 AND provider_id=?2 AND enabled=1",
             &[&store::text(identity,"modelId"),&provider])?.pop().unwrap_or(json!({}));
         store::desktop_model_mappings(&binding["options"], store::text(&fallback, "name"))
             .into_iter()
@@ -143,12 +143,12 @@ pub(super) fn resolve(
     };
     // 客户端显式选择的模型按原请求解析；实例模型只用于未指定模型的请求。
     // Desktop 档位和多协议工具仍保留用户主动配置的别名映射。
-    let models = store::query(&c, "SELECT id,upstream_model_id AS upstreamModelId,catalog_json AS catalogJson FROM service_provider_models
+    let models = store::query(&c, "SELECT id,upstream_model_id AS upstreamModelId,catalog_json AS catalogJson FROM service_provider_model_catalog
         WHERE provider_id=?1 AND enabled=1 AND id=coalesce(
         (SELECT model_id FROM service_agent_model_routes WHERE provider_id=?1 AND agent_type=?3 AND client_model_name=?2 AND enabled=1),
         CASE WHEN ?5 IS NOT NULL THEN
-            (SELECT id FROM service_provider_models WHERE provider_id=?1 AND upstream_model_id=?5)
-        ELSE (SELECT id FROM service_provider_models WHERE provider_id=?1 AND upstream_model_id=?2 AND enabled=1) END,
+            (SELECT id FROM service_provider_model_catalog WHERE provider_id=?1 AND upstream_model_id=?5)
+        ELSE (SELECT id FROM service_provider_model_catalog WHERE provider_id=?1 AND upstream_model_id=?2 AND enabled=1) END,
         CASE WHEN ?2='' THEN ?4 END)",
         &[&provider,&requested,&agent,&store::text(identity,"modelId"),&desktop_model])?;
     let model = models
@@ -179,12 +179,12 @@ pub(super) fn resolve(
 fn codex_tool_models(c: &rusqlite::Connection, provider: &str, overrides: &Value) -> Result<Vec<Value>, ManagerError> {
     let entries = store::query(c, "
         SELECT m.upstream_model_id AS name,m.upstream_model_id AS upstreamModelId,m.catalog_json AS catalogJson
-        FROM service_provider_models m WHERE m.provider_id=?1 AND m.enabled=1
+        FROM service_provider_model_catalog m WHERE m.provider_id=?1 AND m.enabled=1
         AND NOT EXISTS(SELECT 1 FROM service_agent_model_routes r WHERE r.provider_id=?1
             AND r.agent_type='codex' AND r.enabled=1 AND r.client_model_name=m.upstream_model_id)
         UNION ALL
         SELECT r.client_model_name,m.upstream_model_id,m.catalog_json
-        FROM service_agent_model_routes r JOIN service_provider_models m ON m.id=r.model_id AND m.provider_id=r.provider_id
+        FROM service_agent_model_routes r JOIN service_provider_model_catalog m ON m.id=r.model_id AND m.provider_id=r.provider_id
         WHERE r.provider_id=?1 AND r.agent_type='codex' AND r.enabled=1 AND m.enabled=1
         ORDER BY name", &[&provider])?;
     entries.into_iter().filter(|entry| entry["catalog"]["visibility"] != "hide").map(|mut entry| {
@@ -234,7 +234,7 @@ pub(super) async fn handle_request(
             let auth = authorize(&c, &secret)?;
             let models = store::query(
                 &c,
-                "SELECT upstream_model_id AS id,'model' AS object FROM service_provider_models
+                "SELECT upstream_model_id AS id,'model' AS object FROM service_provider_model_catalog
                 WHERE provider_id=?1 AND enabled=1",
                 &[&store::text(&auth, "providerId")],
             )?;
@@ -446,7 +446,7 @@ pub(super) fn start_attempt(
         return Err(store::fail("服务商配置或授权已变化，请重试请求"));
     }
     let model=store::query(&tx,"SELECT upstream_model_id AS upstreamModelId,input_price_micros AS inputPriceMicros,cached_input_price_micros AS cachedInputPriceMicros,
-        output_price_micros AS outputPriceMicros,currency FROM service_provider_models WHERE provider_id=?1 AND id=?2 AND enabled=1",
+        output_price_micros AS outputPriceMicros,currency FROM service_provider_model_catalog WHERE provider_id=?1 AND id=?2 AND enabled=1",
         &[&target.id,&store::text(record,"modelId")])?.pop().ok_or_else(||store::fail("模型已禁用"))?;
     let model = store::model_pricing(&model, &usage_store::read_pricing_connection(&tx)?);
     let (credential, name, fingerprint) = if target.kind == TargetKind::CodexAccount {
@@ -591,7 +591,7 @@ pub(super) fn configured_target(
 pub(super) fn target_models(paths: &AppPaths, target: &GatewayTarget) -> Result<Vec<String>, ManagerError> {
     let models = store::query(
         &database::open(paths)?,
-        "SELECT upstream_model_id AS name FROM service_provider_models WHERE provider_id=?1 AND enabled=1 ORDER BY created_at,id",
+        "SELECT upstream_model_id AS name FROM service_provider_model_catalog WHERE provider_id=?1 AND enabled=1 ORDER BY created_at,id",
         &[&target.id],
     )?;
     let mut names = models.iter().map(|model| store::text(model, "name").to_owned()).collect::<Vec<_>>();
@@ -602,7 +602,11 @@ pub(super) fn target_models(paths: &AppPaths, target: &GatewayTarget) -> Result<
 }
 
 pub async fn fetch_models(paths: &AppPaths, value: &Value) -> Result<Value, ManagerError> {
-    refresh_catalog(paths, value, true).await
+    refresh_catalog(paths, value, true, true).await
+}
+
+pub(crate) async fn fetch_models_before_start(paths: &AppPaths, value: &Value) -> Result<Value, ManagerError> {
+    refresh_catalog(paths, value, true, false).await
 }
 
 pub(super) async fn refresh_active_catalogs(paths: &AppPaths) {
@@ -630,7 +634,7 @@ pub(super) async fn refresh_active_catalogs(paths: &AppPaths) {
         match active {
             Ok(providers) => {
                 for provider in providers {
-                    if let Err(error) = refresh_catalog(paths, &provider, false).await {
+                    if let Err(error) = refresh_catalog(paths, &provider, false, true).await {
                         eprintln!("后台模型目录刷新失败：{error}");
                     }
                 }
@@ -640,19 +644,37 @@ pub(super) async fn refresh_active_catalogs(paths: &AppPaths) {
     }
 }
 
-async fn refresh_catalog(paths: &AppPaths, value: &Value, discover_models: bool) -> Result<Value, ManagerError> {
+async fn refresh_catalog(paths: &AppPaths, value: &Value, discover_models: bool, sync: bool) -> Result<Value, ManagerError> {
     use std::collections::HashMap;
     use std::sync::{LazyLock, Mutex as SyncMutex};
     use tokio::sync::watch;
 
-    type RefreshKey = (String, String, bool);
+    type RefreshKey = (String, String, Option<String>, i64, bool, bool);
     type RefreshResult = Result<Value, String>;
     static PENDING: LazyLock<SyncMutex<HashMap<RefreshKey, watch::Receiver<Option<RefreshResult>>>>> =
         LazyLock::new(|| SyncMutex::new(HashMap::new()));
+    let provider = store::text(value, "providerId");
+    let (api_key, revision) = {
+        let c = database::open(paths)?;
+        let config = store::config(&c, provider)?;
+        let revision = config["revision"].as_i64().unwrap_or(0);
+        if value["revision"].as_i64().is_some_and(|expected| expected != revision) {
+            return Err(store::fail("配置已被修改，请重新选择服务商"));
+        }
+        let key = if config["kind"] == "api" {
+            Some(store::credential_for(&c, provider, value["keyId"].as_str())?)
+        } else {
+            None
+        };
+        (key, revision)
+    };
     let key = (
         paths.storage_files.database.clone(),
-        store::text(value, "providerId").to_owned(),
+        provider.to_owned(),
+        api_key.as_ref().map(|key| store::text(key, "id").to_owned()),
+        revision,
         discover_models,
+        sync,
     );
     let mut receiver = {
         let mut pending = PENDING.lock().unwrap();
@@ -664,7 +686,7 @@ async fn refresh_catalog(paths: &AppPaths, value: &Value, discover_models: bool)
             let paths = paths.clone();
             let value = value.clone();
             tokio::spawn(async move {
-                let result = download_and_apply_catalog(&paths, &value, discover_models).await
+                let result = download_and_apply_catalog(&paths, &value, api_key, revision, discover_models, sync).await
                     .map_err(|error| error.to_string());
                 let mut pending = PENDING.lock().unwrap();
                 sender.send_replace(Some(result));
@@ -680,14 +702,27 @@ async fn refresh_catalog(paths: &AppPaths, value: &Value, discover_models: bool)
     result.map_err(store::fail)
 }
 
-async fn download_and_apply_catalog(paths: &AppPaths, value: &Value, discover_models: bool) -> Result<Value, ManagerError> {
-    let (target, revision) = configured_target(paths, store::text(value, "providerId"))?;
+async fn download_and_apply_catalog(
+    paths: &AppPaths, value: &Value, api_key: Option<Value>, revision: i64, discover_models: bool, sync: bool,
+) -> Result<Value, ManagerError> {
+    let (target, current_revision) = configured_target(paths, store::text(value, "providerId"))?;
+    if current_revision != revision {
+        return Err(store::fail("获取模型期间服务商已发生变化，请重新获取"));
+    }
     if target.kind == TargetKind::GoogleAccount {
         crate::api::google_account::refresh(paths, &target.id).await?;
         crate::api::service_provider::sync_provider(paths, &target.id)?;
         return store::state(paths);
     }
-    let auth = target_auth(paths, &target).await?;
+    let auth = if let Some(key) = &api_key {
+        TargetAuth {
+            token: store::text(key, "secret").into(),
+            key_id: store::text(key, "id").into(),
+            account_id: String::new(),
+        }
+    } else {
+        target_auth(paths, &target).await?
+    };
     let client = target_client(&target)?;
     let mut headers = HeaderMap::new();
     add_custom_headers(&mut headers, &target.headers)?;
@@ -738,7 +773,13 @@ async fn download_and_apply_catalog(paths: &AppPaths, value: &Value, discover_mo
     }
     let raw: Value = serde_json::from_slice(&raw)?;
     codex_models::validate_remote_reasoning(&raw)?;
-    let mut catalog = codex_models::normalize_catalog(&raw)?;
+    let items = raw.get("models").or_else(|| raw.get("data")).unwrap_or(&raw);
+    let mut catalog = if api_key.is_some() && items.as_array().is_some_and(Vec::is_empty)
+    {
+        json!({"models":[]})
+    } else {
+        codex_models::normalize_catalog(&raw)?
+    };
     catalog["previousRevision"] = json!(revision);
     // 先完整校验，再一次性写入；已有模型的价格和启用状态保持不变。
     let mut c = database::open(paths)?;
@@ -749,14 +790,37 @@ async fn download_and_apply_catalog(paths: &AppPaths, value: &Value, discover_mo
         return Err(store::fail("获取模型期间服务商已发生变化，请重新获取"));
     }
     let mut changed = false;
+    let key_scope = if api_key.is_some() {
+        store::query(&tx, "SELECT models_json AS modelsJson, (SELECT count(*) FROM service_provider_keys
+            WHERE provider_id=?2)=1 AS singleKey FROM service_provider_keys WHERE id=?1 AND provider_id=?2
+            AND is_current=1 AND status='active'", &[&auth.key_id, &target.id])?
+            .pop().ok_or_else(|| store::fail("获取模型期间 API Key 已发生变化，请重新获取"))?
+    } else {
+        Value::Null
+    };
+    let previous = &key_scope["models"];
+    let mut available = serde_json::Map::new();
     for item in catalog["models"].as_array().into_iter().flatten() {
+        let name = store::text(item, "slug");
         let existing = store::query(
             &tx,
-            "SELECT id,context_window AS contextWindow,catalog_json AS catalogJson FROM service_provider_models
+            "SELECT id,enabled,context_window AS contextWindow,catalog_json AS catalogJson FROM service_provider_models
              WHERE provider_id=?1 AND upstream_model_id=?2",
-            &[&target.id, &store::text(item, "slug")],
+            &[&target.id, &name],
         )?
         .pop();
+        if api_key.is_some() {
+            if !discover_models && previous.get(name).is_none()
+                && !(previous.is_null() && key_scope["singleKey"] == 1)
+            {
+                continue;
+            }
+            let enabled = previous.get(name).cloned().unwrap_or_else(|| {
+                existing.as_ref().filter(|_| previous.is_null() && key_scope["singleKey"] == 1)
+                    .map_or(json!(1), |model| model["enabled"].clone())
+            });
+            available.insert(name.into(), enabled);
+        }
         if let Some(existing) = existing {
             if existing["catalog"] == *item && existing["contextWindow"] == item["context_window"] {
                 continue;
@@ -780,6 +844,11 @@ async fn download_and_apply_catalog(paths: &AppPaths, value: &Value, discover_mo
             changed = true;
         }
     }
+    if api_key.is_some() && discover_models && *previous != json!(available) {
+        tx.execute("UPDATE service_provider_keys SET models_json=?2 WHERE id=?1",
+            params![auth.key_id, serde_json::Value::Object(available).to_string()])?;
+        changed = true;
+    }
     if !changed {
         let projection_pending = tx.query_row(
             "SELECT EXISTS(SELECT 1 FROM service_agent_instances WHERE provider_id=?1 AND status='active'
@@ -789,7 +858,7 @@ async fn download_and_apply_catalog(paths: &AppPaths, value: &Value, discover_mo
             |row| row.get::<_, bool>(0),
         )?;
         tx.commit()?;
-        if projection_pending {
+        if sync && projection_pending {
             crate::api::service_provider::sync_provider(paths, &target.id)?;
         }
         catalog["catalogRevision"] = json!(revision);
@@ -798,7 +867,7 @@ async fn download_and_apply_catalog(paths: &AppPaths, value: &Value, discover_mo
     if let Some(binding) = store::query(&tx, "SELECT enabled,options_json AS optionsJson FROM service_provider_agent_bindings
         WHERE provider_id=?1 AND agent_type='codex'", &[&target.id])?.pop()
     {
-        store::validate_agent_options(&tx, &target.id, "codex", binding["enabled"] == 1, &binding["options"])?;
+        store::validate_agent_options(&tx, &target.id, "codex", api_key.is_none() && binding["enabled"] == 1, &binding["options"])?;
     }
     for profile in store::query(&tx, "SELECT options_json AS optionsJson FROM service_codex_reasoning_profiles
         WHERE provider_id=?1", &[&target.id])? {
@@ -809,7 +878,9 @@ async fn download_and_apply_catalog(paths: &AppPaths, value: &Value, discover_mo
         params![target.id, store::now()],
     )?;
     tx.commit()?;
-    crate::api::service_provider::sync_provider(paths, &target.id)?;
+    if sync {
+        crate::api::service_provider::sync_provider(paths, &target.id)?;
+    }
     catalog["catalogRevision"] = json!(revision + 1);
     Ok(catalog)
 }
@@ -826,7 +897,7 @@ pub async fn test(paths: &AppPaths, value: &Value) -> Result<Value, ManagerError
     let (target, revision) = configured_target(paths, provider)?;
     let model = {
         let c = database::open(paths)?;
-        store::query(&c,"SELECT m.id,m.upstream_model_id AS name,p.revision FROM service_provider_models m
+        store::query(&c,"SELECT m.id,m.upstream_model_id AS name,p.revision FROM service_provider_model_catalog m
             JOIN service_provider_configs p ON p.id=m.provider_id JOIN service_provider_agent_bindings b ON b.provider_id=p.id
             AND b.agent_type=?3 AND b.enabled=1 WHERE m.provider_id=?1 AND m.id=?2 AND m.enabled=1",
             &[&provider,&store::text(value,"modelId"),&agent])?.pop().ok_or_else(||store::fail("模型或 Agent 授权无效"))?
