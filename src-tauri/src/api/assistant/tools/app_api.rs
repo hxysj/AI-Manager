@@ -71,5 +71,10 @@ mod tests {
         assert_eq!(rule["kind"],"work");
         assert_eq!(rule["weekdays"],json!([5]));
         assert_eq!(rule["dateParity"],"even");
+        let batch = items.iter().find(|item| item["channel"] == "quick-notes:calendar-rule-batch").unwrap();
+        let saved = crate::core::quick_notes_calendar_store::batch_in(&c, &batch["payload"]["operations"], "ai").unwrap();
+        assert_eq!(saved[0]["kind"], "leave");
+        assert_eq!(saved[0]["startTime"], "14:00");
+        assert_eq!(saved[0]["endDate"], "2026-11-27");
     }
 }

@@ -2,14 +2,14 @@
   <section class="calendar-rules" aria-label="休假规则设置">
     <aside class="rules-sidebar" aria-label="已有规则">
       <header class="rules-list-heading">
-        <span>我的规则</span><span class="rules-count">{{ rules.length }}</span>
+        <span>排班规则</span>
+        <button class="rules-add" type="button" :disabled="busy" @click="reset">
+          <Plus :size="14" />新建
+        </button>
       </header>
-      <button class="rules-add" type="button" :disabled="busy" @click="reset">
-        <Plus :size="15" />新建规则
-      </button>
       <div class="rules-list">
         <button
-          v-for="rule in rules"
+          v-for="rule in scheduleRules"
           :key="rule.id"
           class="rules-item"
           :class="{
@@ -30,24 +30,13 @@
           <span v-if="!rule.enabled" class="rules-disabled">停用</span
           ><ChevronRight v-else :size="14" class="rules-item-arrow" />
         </button>
-        <div v-if="!rules.length" class="rules-empty">
-          <CalendarDays :size="24" /><span>还没有休假规则</span
-          ><span class="rules-caption">新建规则，安排你的休息日。</span>
+        <div v-if="!scheduleRules.length" class="rules-empty">
+          <CalendarDays :size="20" /><span>还没有排班规则</span>
         </div>
       </div>
       <footer class="rules-sidebar-foot">
-        <span class="rules-caption">日历颜色</span>
-        <div class="rules-legend">
-          <span
-            v-for="kind in kinds"
-            :key="kind.value"
-            class="rules-legend-item"
-            ><i class="rules-swatch" :style="{ background: kind.value === 'work' ? 'var(--color-text)' : kind.color }"></i
-            >{{ kind.shortLabel }}</span
-          >
-        </div>
         <p class="rules-caption">
-          指定日期优先于周期排班，颜色可在规则中修改。
+          请假记录可在日历中右键编辑。
         </p>
       </footer>
     </aside>
@@ -387,18 +376,18 @@
             <div>
               <h3 class="rules-title">把排班交给 AI</h3>
               <p class="rules-caption">
-                描述休息规律，或上传放假通知、排班表。
+                描述排班规律、请假日期，或上传排班表。
               </p>
             </div>
             <Sparkles :size="21" class="rules-ai-symbol" />
           </header>
           <label class="rules-field"
-            ><span>你的休假安排</span
+            ><span>你的排班或请假安排</span
             ><textarea
               v-model="description"
               class="rules-input rules-description"
               :disabled="busy"
-              placeholder="例如：周日休息，周六单号上班、双号休息。&#10;也可以告诉我假期日期，以及哪天补班或补假。"
+              placeholder="例如：周日休息，周六单号上班、双号休息。&#10;也可以输入：下周一到周三请假三天。"
             />
           </label>
           <div class="rules-examples" aria-label="排班示例">
@@ -508,7 +497,7 @@
 </template>
 
 <script setup>
-import { nextTick, ref } from "vue"
+import { computed, nextTick, ref } from "vue"
 import {
   ArrowUpRight,
   CalendarDays,
@@ -531,16 +520,17 @@ import { readAssistantImages } from "@/features/assistant/attachments"
 import AssistantImages from "@/features/assistant/components/AssistantImages.vue"
 
 const props = defineProps({ rules: { type: Array, default: () => [] } })
+// 请假按实际日期编辑，规则列表管理周期排班和节假日。
+const scheduleRules = computed(() => props.rules.filter(rule => rule.kind !== "leave"))
 const weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 const kinds = [
-  { value: "work", label: "正常上班日", shortLabel: "上班", color: "#14213a" },
-  { value: "rest", label: "休息日", shortLabel: "休息", color: "#579b80" },
-  { value: "holiday", label: "节假日", shortLabel: "节假日", color: "#df6676" },
-  { value: "workday", label: "补班", shortLabel: "补班", color: "#cc893d" },
+  { value: "work", label: "正常上班日", color: "#14213a" },
+  { value: "rest", label: "休息日", color: "#579b80" },
+  { value: "holiday", label: "节假日", color: "#df6676" },
+  { value: "workday", label: "补班", color: "#cc893d" },
   {
     value: "makeup",
     label: "补假 / 调休",
-    shortLabel: "补假",
     color: "#8b74bc"
   }
 ]
@@ -603,7 +593,7 @@ function edit(rule) {
 }
 
 reset()
-if (props.rules.length) edit(props.rules[0])
+if (scheduleRules.value.length) edit(scheduleRules.value[0])
 
 function ruleSummary(rule) {
   if (rule.repeat === "once")
@@ -734,48 +724,37 @@ async function analyze() {
   }
   .rules-sidebar {
     display: flex;
-    flex: 0 0 232px;
+    flex: 0 0 clamp(148px, 27%, 212px);
     flex-direction: column;
     min-height: 0;
-    padding: 24px 16px;
+    padding: 12px;
     border-right: 1px solid var(--color-line);
     background: var(--color-panel-soft);
     .rules-list-heading {
       display: flex;
       align-items: center;
+      justify-content: space-between;
       gap: 8px;
-      padding: 0 4px;
-      margin-bottom: 16px;
-      .rules-count {
+      padding: 0 2px;
+      margin-bottom: 10px;
+      .rules-add {
         display: inline-flex;
         align-items: center;
-        justify-content: center;
-        min-width: 21px;
-        height: 20px;
-        padding: 0 5px;
+        gap: 4px;
+        min-height: 29px;
+        padding: 0 7px;
         border: 1px solid var(--color-line);
-        border-radius: 5px;
-        color: var(--color-text-muted);
-        font-size: 11px;
-      }
-    }
-    .rules-add {
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      flex: none;
-      gap: 8px;
-      width: 100%;
-      min-height: 40px;
-      margin-bottom: 16px;
-      border: 1px solid var(--color-line-strong);
-      border-radius: 8px;
-      background: var(--color-panel);
-      color: var(--color-primary);
-      font: inherit;
-      cursor: pointer;
-      &:hover {
-        border-color: var(--color-primary);
+        border-radius: 7px;
+        background: var(--color-panel);
+        color: var(--color-text);
+        font: inherit;
+        font-size: var(--font-size-xs);
+        white-space: nowrap;
+        cursor: pointer;
+        &:hover {
+          border-color: var(--color-primary);
+          color: var(--color-primary);
+        }
       }
     }
     .rules-list {
@@ -788,7 +767,7 @@ async function analyze() {
         gap: 10px;
         width: 100%;
         margin-bottom: 5px;
-        padding: 12px 10px;
+        padding: 8px;
         border: 1px solid transparent;
         border-radius: 8px;
         background: transparent;
@@ -800,16 +779,15 @@ async function analyze() {
           background: var(--color-panel);
         }
         &.rules-item-active {
-          border-color: var(--color-line-strong);
-          background: var(--color-panel);
-          box-shadow: 0 2px 5px rgba(34, 56, 83, 0.04);
+          color: var(--color-primary);
+          background: var(--color-primary-soft);
         }
         .rules-item-content {
           display: flex;
           flex: 1;
           flex-direction: column;
           min-width: 0;
-          gap: 5px;
+          gap: 3px;
           .rules-item-title {
             overflow-wrap: anywhere;
           }
@@ -841,22 +819,9 @@ async function analyze() {
     }
     .rules-sidebar-foot {
       flex: none;
-      margin-top: 20px;
-      padding: 15px 4px 0;
+      margin-top: 10px;
+      padding: 9px 2px 0;
       border-top: 1px solid var(--color-line);
-      .rules-legend {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 10px 16px;
-        margin: 10px 0 12px;
-        .rules-legend-item {
-          display: inline-flex;
-          align-items: center;
-          gap: 6px;
-          color: var(--color-text-muted);
-          font-size: 11px;
-        }
-      }
     }
   }
   .rules-workspace {
@@ -869,23 +834,27 @@ async function analyze() {
     .rules-tabs {
       display: flex;
       flex: none;
-      gap: 24px;
-      padding: 0 28px;
-      border-bottom: 1px solid var(--color-line);
+      align-self: flex-start;
+      gap: 2px;
+      margin: 12px 16px 0;
+      padding: 3px;
+      border: 1px solid var(--color-line);
+      border-radius: 9px;
+      background: var(--color-panel-soft);
       .rules-tab {
         display: inline-flex;
         align-items: center;
         gap: 8px;
-        min-height: 48px;
-        padding: 0 1px;
+        min-height: 30px;
+        padding: 0 9px;
         border: 0;
-        border-bottom: 2px solid transparent;
+        border-radius: 6px;
         background: transparent;
         color: var(--color-text-muted);
         font: inherit;
         cursor: pointer;
         &.rules-tab-active {
-          border-bottom-color: var(--color-primary);
+          background: var(--color-primary-soft);
           color: var(--color-primary);
         }
       }
@@ -900,18 +869,18 @@ async function analyze() {
         flex: 1;
         min-height: 0;
         overflow: auto;
-        padding: 20px 28px;
+        padding: 14px 16px;
         scrollbar-gutter: stable;
         .rules-editor-heading {
           display: flex;
           align-items: flex-start;
           justify-content: space-between;
           gap: 12px;
-          margin-bottom: 20px;
+          margin-bottom: 12px;
           .rules-title {
             margin: 0 0 5px;
             font: inherit;
-            font-size: 18px;
+            font-size: var(--font-size-lg);
           }
           .rules-preview {
             display: inline-flex;
@@ -936,9 +905,9 @@ async function analyze() {
           .rules-section {
             display: flex;
             flex-direction: column;
-            gap: 16px;
-            padding-bottom: 20px;
-            margin-bottom: 20px;
+            gap: 11px;
+            padding-bottom: 13px;
+            margin-bottom: 13px;
             border-bottom: 1px solid var(--color-line);
             .rules-section-title {
               margin: 0;
@@ -959,7 +928,7 @@ async function analyze() {
               }
               .rules-weekday-options {
                 display: flex;
-                gap: 8px;
+                gap: 5px;
                 .rules-weekday {
                   position: relative;
                   display: flex;
@@ -967,7 +936,7 @@ async function analyze() {
                   justify-content: center;
                   flex: 1;
                   min-width: 0;
-                  height: 40px;
+                  height: 32px;
                   border: 1px solid var(--color-line);
                   border-radius: 8px;
                   color: var(--color-text-muted);
@@ -1032,7 +1001,7 @@ async function analyze() {
                 display: flex;
                 align-items: center;
                 gap: 9px;
-                height: 42px;
+                height: 34px;
                 padding: 0 10px;
                 border: 1px solid var(--color-line);
                 border-radius: 8px;
@@ -1060,7 +1029,7 @@ async function analyze() {
         }
         .rules-field-row {
           display: flex;
-          gap: 16px;
+          gap: 12px;
           .rules-field {
             flex: 1;
           }
@@ -1072,7 +1041,7 @@ async function analyze() {
           display: flex;
           flex-direction: column;
           min-width: 0;
-          gap: 8px;
+          gap: 5px;
           color: var(--color-text-muted);
           font-size: var(--font-size-xs);
           .rules-required {
@@ -1083,8 +1052,8 @@ async function analyze() {
           box-sizing: border-box;
           width: 100%;
           min-width: 0;
-          height: 42px;
-          padding: 8px 12px;
+          height: 34px;
+          padding: 5px 9px;
           border: 1px solid var(--color-line-strong);
           border-radius: 8px;
           background: var(--color-panel);
@@ -1101,8 +1070,8 @@ async function analyze() {
             color: var(--color-text-soft);
           }
           &.rules-description {
-            min-height: 146px;
-            height: 146px;
+            min-height: 105px;
+            height: 105px;
             resize: vertical;
             line-height: 1.9;
             padding: 12px;
@@ -1113,7 +1082,7 @@ async function analyze() {
           align-items: center;
           flex-wrap: wrap;
           gap: 8px;
-          margin: 12px 0 24px;
+          margin: 10px 0 14px;
           .rules-example {
             display: inline-flex;
             align-items: center;
@@ -1140,7 +1109,7 @@ async function analyze() {
           align-items: center;
           gap: 13px;
           width: 100%;
-          padding: 20px 16px;
+          padding: 12px;
           border: 1px dashed var(--color-line-strong);
           border-radius: 9px;
           background: var(--color-panel-soft);
@@ -1201,7 +1170,7 @@ async function analyze() {
         gap: 8px;
         max-height: 100px;
         overflow: auto;
-        margin: 0 28px 12px;
+        margin: 0 16px 8px;
         padding: 10px 12px;
         border-radius: 8px;
         color: var(--color-success);
@@ -1224,16 +1193,16 @@ async function analyze() {
         justify-content: space-between;
         flex: none;
         gap: 12px;
-        min-height: 76px;
-        padding: 18px 28px;
+        min-height: 54px;
+        padding: 9px 16px;
         border-top: 1px solid var(--color-line);
         .rules-button {
           display: inline-flex;
           align-items: center;
           justify-content: center;
           gap: 8px;
-          min-height: 40px;
-          padding: 0 18px;
+          min-height: 34px;
+          padding: 0 12px;
           border: 1px solid var(--color-line);
           border-radius: 8px;
           background: var(--color-panel);

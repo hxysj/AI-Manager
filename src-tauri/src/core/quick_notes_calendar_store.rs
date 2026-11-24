@@ -1,5 +1,5 @@
 use crate::core::{error::ManagerError, paths::AppPaths, quick_notes_store::{self as notes, fail, now, text}, service_provider_store::query};
-use chrono::NaiveDate;
+use chrono::{NaiveDate, NaiveTime};
 use rusqlite::{params, Connection, OptionalExtension, TransactionBehavior};
 use serde_json::{json, Value};
 
@@ -32,19 +32,19 @@ pub fn save_in(c: &Connection,input: &Value,actor: &str) -> Result<Value,Manager
     let previous=previous.map(|old|serde_json::from_str::<Value>(&old.0)).transpose()?;
     if previous.as_ref().is_some_and(|old|old["revision"]!=input["revision"]){return Err(fail("日历规则已被其他窗口修改，请重新读取后再保存"));}
     let mut rule=previous.clone().unwrap_or(json!({"id":key,"title":"","kind":"label","calendar":"solar","repeat":"once","startDate":"","endDate":"","year":null,"month":1,"day":1,"weekdays":[],"monthDays":[],"dateParity":"all","anchorDate":"","cycleWeek":0,"leapMonth":"regular","missingDay":"skip","tags":[],"priority":0,"enabled":true,"createdAt":now(),"revision":0}));
-    for field in ["title","kind","calendar","repeat","startDate","endDate","year","month","day","weekdays","monthDays","dateParity","anchorDate","cycleWeek","leapMonth","missingDay","tags","priority","enabled","color","workStatus"] {
+    for field in ["title","kind","calendar","repeat","startDate","endDate","startTime","endTime","year","month","day","weekdays","monthDays","dateParity","anchorDate","cycleWeek","leapMonth","missingDay","tags","priority","enabled","color","workStatus"] {
         if let Some(value)=input.get(field){rule[field]=value.clone();}
     }
     let title=text(&rule,"title").trim().to_owned();
     if title.is_empty() || title.chars().count()>80{return Err(fail("日历标签名称须为 1 至 80 字"));}
     rule["title"]=json!(title);
     let kind=text(&rule,"kind").to_owned();
-    if !["label","work","rest","holiday","workday","makeup","birthday"].contains(&kind.as_str()){return Err(fail("日历规则类型无效"));}
+    if !["label","work","rest","holiday","workday","makeup","birthday","leave"].contains(&kind.as_str()){return Err(fail("日历规则类型无效"));}
     let status=match kind.as_str(){"rest"|"holiday"=>"rest","work"|"workday"=>"work","makeup"=>text(&rule,"workStatus"),_=>""}.to_owned();
     if kind=="makeup" && !["rest","work"].contains(&status.as_str()){return Err(fail("调休规则必须明确选择补班或补假休息"));}
     rule["workStatus"]=json!(status);
     if input.get("color").is_none() && previous.is_none() {
-        rule["color"]=json!(match kind.as_str(){"work"=>"#14213a","rest"=>"#579b80","holiday"=>"#df6676","workday"=>"#cc893d","makeup"=>if rule["workStatus"]=="rest"{"#8b74bc"}else{"#cc893d"},"birthday"=>"#ad72ae",_=>"#568bb6"});
+        rule["color"]=json!(match kind.as_str(){"work"=>"#14213a","rest"=>"#579b80","holiday"=>"#df6676","workday"=>"#cc893d","makeup"=>if rule["workStatus"]=="rest"{"#8b74bc"}else{"#cc893d"},"birthday"=>"#ad72ae","leave"=>"#467da8",_=>"#568bb6"});
     }
     let color=text(&rule,"color");
     if color.len()!=7 || !color.starts_with('#') || !color.as_bytes()[1..].iter().all(u8::is_ascii_hexdigit){return Err(fail("规则颜色必须为 #RRGGBB"));}
@@ -73,6 +73,32 @@ pub fn save_in(c: &Connection,input: &Value,actor: &str) -> Result<Value,Manager
         if repeat=="once" && rule["year"].as_i64().is_none_or(|n|!(1900..=2100).contains(&n)){return Err(fail("指定农历日期需填写 1900 至 2100 年"));}
     }
     if repeat=="monthly" && !rule["monthDays"].as_array().is_some_and(|a|!a.is_empty() && a.len()<=31 && a.iter().all(|v|v.as_u64().is_some_and(|d|d>=1 && d<=if calendar=="lunar"{30}else{31}))){return Err(fail("每月休息日期须为有效日期数组"));}
+    if kind == "leave" {
+        if calendar != "solar" || repeat != "once" || rule["dateParity"] != "all" {
+            return Err(fail("请假须使用指定的公历日期或日期范围"));
+        }
+        let parse_time = |field| -> Result<Option<NaiveTime>, ManagerError> {
+            match rule.get(field) {
+                None => Ok(None),
+                Some(Value::String(value)) if value.is_empty() => Ok(None),
+                Some(Value::String(value)) => NaiveTime::parse_from_str(value, "%H:%M")
+                    .ok()
+                    .filter(|time| time.format("%H:%M").to_string() == *value)
+                    .map(Some)
+                    .ok_or_else(|| fail("请假时间必须为有效的 HH:mm")),
+                _ => Err(fail("请假时间必须为有效的 HH:mm")),
+            }
+        };
+        let (from, to) = (parse_time("startTime")?, parse_time("endTime")?);
+        match (from, to) {
+            (None, None) => rule["workStatus"] = json!("rest"),
+            (Some(from), Some(to)) if end.is_some_and(|end| Some(end) > start) || from < to => {}
+            _ => return Err(fail("请填写开始和结束时间，且结束时间须晚于开始时间")),
+        }
+    } else if let Some(fields) = rule.as_object_mut() {
+        fields.remove("startTime");
+        fields.remove("endTime");
+    }
     rule["revision"]=json!(previous.as_ref().and_then(|p|p["revision"].as_i64()).unwrap_or(0)+1);
     rule["updatedAt"]=json!(now());
     c.execute("INSERT INTO quick_note_calendar_rules(id,revision,payload_json,created_at,updated_at) VALUES(?1,?2,?3,?4,?5)

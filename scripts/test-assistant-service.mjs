@@ -559,6 +559,48 @@ try {
       "周六那天日期的单双数"
     )
   )
+  // 多天请假保留日期和首末时刻，沿用排班的读取、批量写入和回读链路。
+  const leaveStart = tools.length
+  const leaveRule = {
+    title: "请假",
+    kind: "leave",
+    repeat: "once",
+    startDate: "2026-11-25",
+    endDate: "2026-11-27",
+    startTime: "14:00",
+    endTime: "10:00"
+  }
+  plans.push(
+    { type: "tool", name: "read_app_api", args: { module: "calendar" } },
+    {
+      type: "tool",
+      name: "call_app_api",
+      args: { channel: "quick-notes:calendar-rule-list" }
+    },
+    {
+      type: "tool",
+      name: "call_app_api",
+      args: {
+        channel: "quick-notes:calendar-rule-batch",
+        payload: { operations: [{ operation: "save", rule: leaveRule }] }
+      }
+    },
+    {
+      type: "tool",
+      name: "call_app_api",
+      args: { channel: "quick-notes:calendar-rule-list" }
+    },
+    { text: "已记录 11 月 25 日 14:00 到 11 月 27 日 10:00 的请假。" }
+  )
+  await rpc("run", turn(calendarThread.id, "在便签日历记下 2026 年 11 月 25 日 14:00 到 27 日 10:00 的请假"))
+  assert.deepEqual(
+    tools.slice(leaveStart).map(tool => tool.args.channel || tool.args.module),
+    ["calendar", "quick-notes:calendar-rule-list", "quick-notes:calendar-rule-batch", "quick-notes:calendar-rule-list"]
+  )
+  assert.deepEqual(tools.at(-2).args.payload.operations[0].rule, leaveRule)
+  const leaveRequest = JSON.stringify(requests.at(-1).payload)
+  assert.match(leaveRequest, /本地日期为 \d{4}-\d{2}-\d{2}/)
+  assert.match(leaveRequest, /连续多天使用一条规则/)
   await rpc("delete-thread", { threadId: calendarThread.id })
 
   for (const api of ["responses", "chat", "messages"]) {

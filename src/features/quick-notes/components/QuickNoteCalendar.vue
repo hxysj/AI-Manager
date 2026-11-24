@@ -126,6 +126,7 @@
           :class="{
             'calendar-outside': day.outside,
             'calendar-weekend': day.schedule?.workStatus === 'rest',
+            'calendar-day-leave': day.leaves.length > 0,
             'calendar-today': day.key === today,
             'calendar-selected': day.key === selectedDate
           }"
@@ -136,10 +137,12 @@
               ? { color: day.schedule.color }
               : {}
           "
-          :aria-label="`${day.key}，农历${day.lunar}${day.scheduleLabel ? `，${day.scheduleLabel}` : ''}，${day.entries.length} 项事项`"
+          :aria-label="`${day.key}，农历${day.lunar}${day.scheduleLabel ? `，${day.scheduleLabel}` : ''}${day.leaves.length ? `，${leaveSummary(day)}` : ''}，${day.entries.length} 项事项`"
           :aria-current="day.key === today ? 'date' : undefined"
           :aria-pressed="day.key === selectedDate"
           @click="selectDate(day.key)"
+          @contextmenu.prevent="openDayMenu($event, day)"
+          @keydown.shift.f10.prevent="openDayMenu($event, day)"
         >
           <span class="calendar-day-head">
             <span class="calendar-number">{{ day.number }}</span>
@@ -149,9 +152,16 @@
           </span>
           <span class="calendar-lunar">{{ day.lunar }}</span>
           <span
-            v-if="day.scheduleLabel || day.entries.length"
+            v-if="day.leaves.length || day.scheduleLabel || day.entries.length"
             class="calendar-corner"
           >
+            <span
+              v-if="day.leaves.length"
+              class="calendar-leave-mark"
+              :title="leaveSummary(day)"
+            >
+              请假
+            </span>
             <span
               v-if="day.scheduleLabel"
               class="calendar-schedule-label"
@@ -187,9 +197,7 @@
       </div>
       <div v-else class="calendar-list" aria-label="本月事项列表">
         <section
-          v-for="day in days.filter(
-            (day) => !day.outside && day.entries.length
-          )"
+          v-for="day in listDays"
           :key="day.key"
           class="calendar-list-day"
         >
@@ -197,8 +205,20 @@
             class="calendar-list-date"
             type="button"
             @click="selectDate(day.key)"
+            @contextmenu.prevent="openDayMenu($event, day)"
+            @keydown.shift.f10.prevent="openDayMenu($event, day)"
           >
             {{ day.key.slice(5) }}<span>农历 {{ day.lunar }}</span>
+          </button>
+          <button
+            v-for="rule in day.leaves"
+            :key="rule.id"
+            class="calendar-list-entry calendar-leave-entry"
+            type="button"
+            @click="openLeave(day.key, rule, $event.currentTarget)"
+          >
+            <CalendarClock :size="14" /><span>请假</span
+            ><span>{{ leaveDayLabel(rule, day.key) }}</span>
           </button>
           <button
             v-for="entry in day.entries"
@@ -222,10 +242,7 @@
             }}</span>
           </button>
         </section>
-        <p
-          v-if="!Object.values(monthCounts).some(Boolean)"
-          class="calendar-list-empty"
-        >
+        <p v-if="!listDays.length" class="calendar-list-empty">
           本月还没有安排，选一天写下新的记录。
         </p>
       </div>
@@ -242,6 +259,10 @@
           ><i class="calendar-dot calendar-dot-reminder"></i>提醒
           {{ monthCounts.reminder }}</span
         >
+        <span class="calendar-legend-item">
+          <i class="calendar-dot calendar-dot-leave"></i>请假
+          {{ leaveDayCount }} 天
+        </span>
         <span class="calendar-caption"
           >本月事项 · 共
           {{
@@ -285,7 +306,24 @@
           >
             <Plus :size="13" />新建便签
           </button>
+          <button
+            class="calendar-button"
+            type="button"
+            @click="openLeave(selectedDate, null, $event.currentTarget)"
+          >
+            <CalendarClock :size="13" />请假
+          </button>
         </div>
+        <button
+          v-for="rule in selectedDay?.leaves"
+          :key="rule.id"
+          class="calendar-agenda-leave"
+          type="button"
+          @click="openLeave(selectedDate, rule, $event.currentTarget)"
+        >
+          <CalendarClock :size="14" />请假 ·
+          {{ leaveDayLabel(rule, selectedDate) }}
+        </button>
       </header>
       <div v-if="selectedEntries.length" class="calendar-agenda-list">
         <button
@@ -341,13 +379,60 @@
         <span class="calendar-caption">写下想法，或安排一件要做的事。</span>
       </div>
     </aside>
+    <span
+      ref="dayMenuAnchor"
+      class="calendar-menu-anchor"
+      :style="dayMenuPosition"
+      aria-hidden="true"
+    ></span>
+    <el-dropdown
+      ref="dayMenu"
+      virtual-triggering
+      :virtual-ref="dayMenuAnchor"
+      :trigger-keys="[]"
+      trigger="contextmenu"
+      placement="bottom-start"
+      :show-arrow="false"
+      @command="selectLeaveAction"
+    >
+      <template #dropdown>
+        <el-dropdown-menu>
+          <el-dropdown-item :icon="CalendarClock" command="new"
+            >设置请假</el-dropdown-item
+          >
+          <el-dropdown-item
+            v-for="rule in dayMenuDate?.leaves"
+            :key="rule.id"
+            :command="rule"
+          >
+            编辑请假 · {{ leaveDayLabel(rule, dayMenuDate.key) }}
+          </el-dropdown-item>
+        </el-dropdown-menu>
+      </template>
+    </el-dropdown>
+    <Teleport to="body">
+      <CalendarLeaveDialog
+        v-if="leaveEditor"
+        :date="leaveEditor.date"
+        :rule="leaveEditor.rule"
+        @close="closeLeave"
+      />
+    </Teleport>
   </section>
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from "vue"
+import {
+  computed,
+  nextTick,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  shallowRef
+} from "vue"
 import {
   Bell,
+  CalendarClock,
   CalendarDays,
   ChevronLeft,
   ChevronRight,
@@ -360,12 +445,14 @@ import {
   PanelRightClose,
   PanelRightOpen
 } from "lucide-vue-next"
+import { ElDropdown, ElDropdownItem, ElDropdownMenu } from "element-plus"
 import { localInput } from "@/features/quick-notes/constant"
 import { formatDateTime } from "@/utils/formatters"
 
 import BaseModal from "@/components/BaseModal.vue"
 import CalendarRuleSettings from "./CalendarRuleSettings.vue"
-import { calendarDay } from "../calendar-rules"
+import CalendarLeaveDialog from "./CalendarLeaveDialog.vue"
+import { calendarDay, leaveDayLabel } from "../calendar-rules"
 const rulesVisible = ref(false)
 const agendaVisible = ref(true)
 const props = defineProps({
@@ -384,6 +471,12 @@ const modes = [
 ]
 const year = ref(Number(today.value.slice(0, 4)))
 const month = ref(Number(today.value.slice(5, 7)) - 1)
+const dayMenu = ref(null)
+const dayMenuAnchor = ref(null)
+const dayMenuKey = ref("")
+const dayMenuPosition = ref({})
+const leaveEditor = shallowRef(null)
+let leaveTrigger
 const weekdays = ["一", "二", "三", "四", "五", "六", "日"]
 const lunarDays =
   "初一 初二 初三 初四 初五 初六 初七 初八 初九 初十 十一 十二 十三 十四 十五 十六 十七 十八 十九 二十 廿一 廿二 廿三 廿四 廿五 廿六 廿七 廿八 廿九 三十".split(
@@ -448,10 +541,11 @@ const days = computed(() => {
     const key = localInput(date.getTime()).slice(0, 10)
     const lunar = lunarFormatter.formatToParts(date)
     const lunarDay = Number(lunar.find((part) => part.type === "day").value)
-    const schedule = calendarDay(date, props.rules)
+    const { schedule, leaves } = calendarDay(date, props.rules)
     return {
       key,
       schedule,
+      leaves,
       // 日期格只展示简短状态，规则名称保留在标签悬浮提示和规则设置中。
       scheduleLabel:
         schedule && schedule.kind !== "work"
@@ -473,6 +567,20 @@ const days = computed(() => {
     }
   })
 })
+const listDays = computed(() =>
+  days.value.filter(
+    (day) => !day.outside && (day.entries.length || day.leaves.length)
+  )
+)
+const leaveDayCount = computed(
+  () => days.value.filter((day) => !day.outside && day.leaves.length).length
+)
+const selectedDay = computed(() =>
+  days.value.find((day) => day.key === selectedDate.value)
+)
+const dayMenuDate = computed(() =>
+  days.value.find((day) => day.key === dayMenuKey.value)
+)
 const monthCounts = computed(() => {
   const result = { note: 0, task: 0, reminder: 0 }
   for (const day of days.value) {
@@ -509,6 +617,45 @@ function selectDate(date) {
   year.value = Number(date.slice(0, 4))
   month.value = Number(date.slice(5, 7)) - 1
 }
+
+function leaveSummary(day) {
+  return day.leaves
+    .map((rule) => `请假 · ${leaveDayLabel(rule, day.key)}`)
+    .join("；")
+}
+
+// 共用一个下拉菜单，定位到鼠标或键盘当前操作的日期。
+async function openDayMenu(event, day) {
+  const target = event.currentTarget
+  const { left, bottom } = target.getBoundingClientRect()
+  const pointer =
+    event.type === "contextmenu" && (event.clientX || event.clientY)
+  dayMenuPosition.value = {
+    left: `${pointer ? event.clientX : left}px`,
+    top: `${pointer ? event.clientY : bottom}px`
+  }
+  leaveTrigger = target
+  dayMenuKey.value = day.key
+  await nextTick()
+  dayMenu.value?.handleOpen()
+  dayMenu.value?.popperRef?.updatePopper()
+}
+
+function selectLeaveAction(rule) {
+  if (dayMenuDate.value)
+    openLeave(dayMenuDate.value.key, rule === "new" ? null : rule, leaveTrigger)
+}
+
+function openLeave(date, rule, trigger) {
+  leaveTrigger = trigger
+  leaveEditor.value = { date, rule }
+}
+
+function closeLeave() {
+  leaveEditor.value = null
+  leaveTrigger?.focus({ preventScroll: true })
+}
+
 let clock
 onMounted(() => {
   clock = window.setInterval(() => {
@@ -521,18 +668,18 @@ onBeforeUnmount(() => clearInterval(clock))
 <style scoped lang="less">
 .calendar-rules-modal {
   :deep(.base-modal__panel) {
-    width: min(1020px, calc(100vw - 48px));
-    height: min(780px, calc(100vh - 48px));
-    border-radius: 16px;
+    width: min(800px, 100%);
+    height: min(590px, calc(100vh - 48px));
+    border-radius: 12px;
   }
   :deep(.base-modal__header) {
     align-items: center;
-    padding: 12px 24px;
+    padding: 12px 18px;
     border-bottom: 1px solid var(--color-line);
   }
   :deep(.base-modal__header h2) {
     font: inherit;
-    font-size: var(--font-size-base);
+    font-size: var(--font-size-lg);
   }
   :deep(.base-modal__close) {
     width: 28px;
@@ -545,12 +692,34 @@ onBeforeUnmount(() => clearInterval(clock))
 }
 
 .note-calendar {
+  --calendar-leave-color: #467da8;
+  --calendar-leave-text: color-mix(
+    in srgb,
+    var(--calendar-leave-color) 60%,
+    var(--color-text)
+  );
+  --calendar-leave-tint: color-mix(
+    in srgb,
+    var(--calendar-leave-color) 15%,
+    var(--color-panel)
+  );
+  --calendar-leave-chip: color-mix(
+    in srgb,
+    var(--calendar-leave-color) 28%,
+    var(--color-panel)
+  );
   display: flex;
   flex: 1;
   align-items: stretch;
   gap: 20px;
   min-width: 0;
   min-height: 0;
+  .calendar-menu-anchor {
+    position: fixed;
+    width: 1px;
+    height: 1px;
+    pointer-events: none;
+  }
   .calendar-button,
   .calendar-icon,
   .calendar-select {
@@ -597,6 +766,9 @@ onBeforeUnmount(() => clearInterval(clock))
     }
     &.calendar-dot-reminder {
       background: #7399c0;
+    }
+    &.calendar-dot-leave {
+      background: var(--calendar-leave-color);
     }
   }
   .calendar-month {
@@ -733,6 +905,18 @@ onBeforeUnmount(() => clearInterval(clock))
           color: var(--color-primary);
           opacity: 1;
         }
+        &.calendar-day-leave {
+          align-items: flex-start;
+          padding-inline: 6px;
+          background: var(--calendar-leave-tint);
+          &:hover {
+            background: color-mix(
+              in srgb,
+              var(--calendar-leave-color) 22%,
+              var(--color-panel)
+            );
+          }
+        }
         .calendar-day-head {
           display: flex;
           align-items: center;
@@ -782,6 +966,15 @@ onBeforeUnmount(() => clearInterval(clock))
           flex-direction: column;
           align-items: flex-end;
           gap: 2px;
+          .calendar-leave-mark {
+            padding: 0 4px;
+            border-radius: 3px;
+            color: var(--calendar-leave-text);
+            background: var(--calendar-leave-chip);
+            font-size: 9px;
+            line-height: 13px;
+            white-space: nowrap;
+          }
           .calendar-schedule-label {
             padding: 0 3px;
             border-radius: 3px;
@@ -851,6 +1044,9 @@ onBeforeUnmount(() => clearInterval(clock))
           &:hover {
             background: var(--color-panel-soft);
           }
+          &.calendar-leave-entry {
+            color: var(--calendar-leave-text);
+          }
         }
       }
       .calendar-list-empty {
@@ -863,6 +1059,7 @@ onBeforeUnmount(() => clearInterval(clock))
       display: flex;
       flex: none;
       align-items: center;
+      flex-wrap: wrap;
       gap: 17px;
       margin-top: 16px;
       padding: 12px 14px;
@@ -912,6 +1109,20 @@ onBeforeUnmount(() => clearInterval(clock))
           font-size: 11px;
           white-space: nowrap;
         }
+      }
+      .calendar-agenda-leave {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        align-self: flex-start;
+        padding: 5px 8px;
+        border: 1px solid var(--color-line);
+        border-radius: 7px;
+        background: var(--calendar-leave-tint);
+        color: var(--calendar-leave-text);
+        font: inherit;
+        font-size: var(--font-size-xs);
+        cursor: pointer;
       }
     }
     .calendar-agenda-list {

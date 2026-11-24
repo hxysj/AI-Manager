@@ -5,7 +5,7 @@ export default [
   {
     id: "read_app_api",
     description:
-      "查询软件可直接调用的内部接口及参数示例。省略 module 返回模块目录；指定模块返回接口详情。默认通过这些接口静默执行，不打开、切换或聚焦窗口。",
+      "查询软件可直接调用的内部接口及参数示例。便签日历的请假、休息日、排班及调休查询 calendar 模块。省略 module 返回模块目录，指定 module 返回接口详情。",
     inputSchema: z.object({ module: z.string().max(80).optional() })
   },
   {

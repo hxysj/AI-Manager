@@ -33,11 +33,25 @@ const historyByNote=new Map()
 export const state={notes:[
  {id:'work',title:'完成速记模块的存储设计',content:'整理了便签、待办和提醒的数据关系，下一步验证重启恢复。',type:'worklog',groupId:'project',categoryId:'development',tags:['AI-Manager','本地存储'],color:'mint',pinned:true,occurredOn:'2026-11-18',createdAt:time,updatedAt:time,revision:1,lifecycle:'active',tasks:[{id:'t',title:'验证重启后的提醒恢复',status:'pending',dueDate:'2026-11-19'}],worklog:{result:'完成存储设计'}},
  {id:'idea',title:'周五的发布检查',content:'检查 Claude 和 Codex 的切换，再整理这周的工作记录。',type:'todo',groupId:'inbox',categoryId:'debugging',tags:['发布'],color:'sand',createdAt:time,updatedAt:time,revision:1,lifecycle:'active',tasks:[{id:'t2',title:'检查发布包',status:'pending'}],worklog:{}}
-],folders:[{id:'inbox',kind:'group',name:'收件箱',aliases:[]},{id:'project',kind:'group',name:'AI-Manager',aliases:['桌宠']},{id:'uncategorized',kind:'category',name:'未分类',aliases:[]},{id:'development',kind:'category',name:'开发实现',aliases:[]},{id:'debugging',kind:'category',name:'问题排查',aliases:[]}],events:[],reminders:[],captures:[],hasMore:false}
+],folders:[{id:'inbox',kind:'group',name:'收件箱',aliases:[]},{id:'project',kind:'group',name:'AI-Manager',aliases:['桌宠']},{id:'uncategorized',kind:'category',name:'未分类',aliases:[]},{id:'development',kind:'category',name:'开发实现',aliases:[]},{id:'debugging',kind:'category',name:'问题排查',aliases:[]}],events:[],reminders:[],captures:[],hasMore:false,
+calendarRules:[{id:'weekend',revision:1,title:'周末双休',kind:'rest',calendar:'solar',repeat:'weekly',weekdays:[5,6],monthDays:[],workStatus:'rest',color:'#579b80',dateParity:'all',enabled:true,priority:0}]}
 export const changed=()=>{for(const handle of handlers)handle({})}
 export const quickNotesApi={onChanged:async fn=>{handlers.add(fn);return()=>handlers.delete(fn)},onOpen:async fn=>{openHandlers.add(fn);return()=>openHandlers.delete(fn)},invoke:async(action,p={})=>{
  p=JSON.parse(JSON.stringify(p))
  calls.push({action,p:JSON.parse(JSON.stringify(p))})
+ if(action==='calendar-rule-save'){
+  const old=state.calendarRules.find(rule=>rule.id===p.id)
+  if(old&&p.revision!==old.revision)throw Error('测试日历修订号不匹配')
+  const saved={calendar:'solar',repeat:'once',enabled:true,priority:0,...old,...p,id:old?.id||crypto.randomUUID(),revision:(old?.revision||0)+1,updatedAt:Date.now()}
+  if(old)Object.assign(old,saved);else state.calendarRules.push(saved)
+  changed()
+  return structuredClone(saved)
+ }
+ if(action==='calendar-rule-delete'){
+  state.calendarRules=state.calendarRules.filter(rule=>rule.id!==p.id||rule.revision!==p.revision)
+  changed()
+  return {id:p.id,deleted:true}
+ }
  if(action==='options')return {model:{targetId:'local',model:'qwen3.5-0.8b',protocol:'chat'}}
  if(action==='list'){
   const offset=p.offset||0
@@ -124,6 +138,59 @@ async function test(){
  button('列表').click();await settle();assert(document.querySelector('.calendar-list'),'没有切换到日程列表')
  button('月视图').click();await settle();period(2026,11);await settle();day('2026-11-18').click();await settle()
  assert(day('2026-11-18').querySelector('.calendar-lunar').textContent==='初十','农历日期错误')
+ const rightClick=async date=>{
+  const cell=day(date),rect=cell.getBoundingClientRect()
+  cell.dispatchEvent(new MouseEvent('contextmenu',{bubbles:true,cancelable:true,button:2,clientX:rect.left+8,clientY:rect.top+8}))
+  await settle()
+ }
+ const contextItem=label=>[...document.querySelectorAll('[role=menuitem]')].find(node=>node.getClientRects().length&&node.textContent.includes(label))
+ const leaveDialog=()=>document.querySelector('.calendar-leave-modal')
+ await rightClick('2026-11-20')
+ assert(contextItem('设置请假'),'右键日期没有显示请假菜单')
+ contextItem('设置请假').click();await settle()
+ let leave=leaveDialog()
+ const drawer=leave.querySelector('.base-modal__panel').getBoundingClientRect()
+ const footer=leave.querySelector('.leave-actions').getBoundingClientRect()
+ assert(Math.abs(drawer.right-innerWidth)<2&&drawer.top===0&&drawer.left>0,'请假编辑器没有沿窗口右侧贴边')
+ assert(Math.abs(footer.bottom-drawer.bottom)<2,'请假操作栏没有固定在抽屉底部')
+ assert(document.activeElement.id==='calendar-leave-title','打开请假后焦点没有进入抽屉标题栏')
+ const dates=()=>leave.querySelectorAll('input[type=date]')
+ assert([...dates()].every(input=>input.value==='2026-11-20'),'请假未带入右键日期')
+ set(dates()[1],'2026-11-22')
+ button('时间范围',leave).click();await settle()
+ const [from,to]=leave.querySelectorAll('input[type=time]')
+ assert(dates()[0].closest('.leave-row').contains(from)&&dates()[1].closest('.leave-row').contains(to),'跨天时段没有与各自的日期配对')
+ set(from,'14:00');set(to,'10:00');button('保存请假',leave).click();await settle()
+ assert(!leaveDialog()&&day('2026-11-20').getAttribute('aria-label').includes('14:00 起'),'首日请假没更新')
+ assert(day('2026-11-21').getAttribute('aria-label').includes('休息，请假 · 全天'),'中间日请假覆盖了原排班')
+ assert(day('2026-11-22').getAttribute('aria-label').includes('至 10:00'),'末日请假没更新')
+ const leaveCell=day('2026-11-21')
+ const leaveMark=leaveCell.querySelector('.calendar-leave-mark')
+ const cellRect=leaveCell.getBoundingClientRect(), markRect=leaveMark.getBoundingClientRect()
+ assert(markRect.top-cellRect.top<8&&cellRect.right-markRect.right<8,'请假标签没有紧贴右上角')
+ assert(getComputedStyle(leaveCell).backgroundColor!==getComputedStyle(day('2026-11-28')).backgroundColor,'请假日期没有独立底色')
+ assert(leaveCell.querySelector('.calendar-schedule-label').getBoundingClientRect().top>=markRect.bottom,'原排班标签覆盖了请假')
+ assert(!day('2026-11-23').querySelector('.calendar-leave-mark'),'日期范围多标了一天')
+ await rightClick('2026-11-21')
+ contextItem('编辑请假').click();await settle()
+ leave=leaveDialog()
+ assert(dates()[0].value==='2026-11-20'&&dates()[1].value==='2026-11-22','多天请假未打开同一记录')
+ button('全天',leave).click();await settle();button('保存请假',leave).click();await settle()
+ const update=calls.findLast(call=>call.action==='calendar-rule-save').p
+ assert(update.id&&update.revision===1&&update.startTime===''&&update.endTime==='','改为全天未清空时间或未用当前修订号')
+ button('列表').click();await settle()
+ assert(document.querySelectorAll('.calendar-leave-entry').length===3,'列表没有显示只含请假的日期')
+ document.querySelector('.calendar-leave-entry').click();await settle()
+ button('删除请假',leaveDialog()).click();await settle()
+ assert(!document.querySelector('.calendar-leave-entry'),'删除后请假残留')
+ button('月视图').click();await settle()
+ await quickNotesMockAi()
+ button('休假规则').click();await settle()
+ const rules=document.querySelector('.calendar-rules-modal')
+ assert(rules.querySelectorAll('.rules-item').length===1,'排班设置未保留原规则')
+ button('AI 设置',rules).click();await settle()
+ assert(rules.querySelector('.rules-description').getClientRects().length,'AI 设置未显示输入区')
+ rules.querySelector('.base-modal__close').click();await settle()
  day('2026-11-19').click();await settle();assert(document.querySelector('.calendar-agenda').textContent.includes('验证重启后的提醒恢复'),'截止日没有关联待办')
  document.querySelector('[aria-label=在这天新建便签]').click();await settle()
  let form=document.querySelector('.note-form')
@@ -276,7 +343,9 @@ async function test(){
  const modal=[...document.querySelectorAll('.smart-record-modal')].find(n=>n.getClientRects().length)
  let source=modal.querySelector('.smart-input');set(source,'修复登录页与预约页分值不同步的问题，补充回归测试。');await settle()
  // 提醒精度从模型预览到确认、再编辑均须保持原始触发点。
- const preciseTime=new Date(Date.now()+120000);preciseTime.setMilliseconds(456);globalThis.aiReminderAt=preciseTime.getTime()
+ const preciseTime=new Date(Date.now()+120000)
+ preciseTime.setSeconds(34,456)
+ globalThis.aiReminderAt=preciseTime.getTime()
  const count=state.notes.length
  button('分析并预览',modal).click();await settle();await settle()
  assert(globalThis.lastCapture.preview===true,'智能记录没有请求预览')
@@ -332,8 +401,17 @@ async function test(){
  if(scene==='detail'){document.querySelector('.calendar-entry').click();await settle()}
  if(scene==='drawer'){document.querySelector('[aria-label=在这天新建便签]').click();await settle()}
  if(scene==='smart'){button('智能记录').click();await settle();set(modal.querySelector('.smart-input'),'修复登录页与预约页分值不同步的问题，补充回归验证。');await settle();button('分析并预览',modal).click();await settle();await settle()}
+ if(scene==='rules'){button('休假规则').click();await settle()}
+ if(scene==='leave'){day('2026-11-18').click();button('请假').click();await settle();button('时间范围',leaveDialog()).click();await settle()}
+ if(scene==='leave-edit'){period(2026,11);await settle();await rightClick('2026-11-25');contextItem('编辑请假').click();await settle()}
+ if(scene==='leave-dates'){period(2026,11);await settle();day('2026-11-26').click();await settle()}
  assert(document.querySelector('.quick-notes').scrollWidth<=document.querySelector('.quick-notes').clientWidth,'便签工作区横向溢出')
  document.getElementById('result').textContent='PASS: 便签布局重构，侧栏分组、全高日历、月周列表、农历、抽屉新建、正文工具栏、草稿恢复、双栏详情、提醒校验、AI 预览确认与原文保存'
+}
+async function quickNotesMockAi(){
+ state.calendarRules.push({id:'assistant-leave',title:'助手请假',kind:'leave',calendar:'solar',repeat:'once',startDate:'2026-11-25',endDate:'2026-11-27',enabled:true,revision:1})
+ changed();await settle()
+ assert(day('2026-11-27').querySelector('.calendar-leave-mark'),'外部写入没有刷新已打开的日历')
 }
 test().catch(error=>{document.getElementById('result').textContent='FAIL: '+error.stack})
 `

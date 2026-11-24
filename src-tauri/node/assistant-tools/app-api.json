@@ -2,20 +2,44 @@
   {
     "module": "calendar",
     "channel": "quick-notes:calendar-rule-list",
-    "description": "读取实际休假排班、节假日和调休规则，返回 id、revision、启用状态和优先级。修改前先读取，复用已有相关规则，不重复创建。",
+    "description": "读取便签日历的排班、节假日、调休和个人请假，返回 id、revision、启用状态和优先级。修改前先读取，复用已有相关规则。",
     "payload": {}
   },
   {
     "module": "calendar",
     "channel": "quick-notes:calendar-rule-save",
     "description": "新建或修改日历规则；修改必须携带读取到的 id 和 revision。kind 为 work正常上班/rest休息/holiday节假日/workday补班/makeup调休；makeup 需 workStatus=rest或work。repeat 为 once/weekly/alternating/monthly/yearly，calendar 使用 solar。weekdays 为周一0至周日6；dateParity=all/odd/even 按每月当天日期的单双号，不能用来表达周序号。alternating 需 anchorDate 和 cycleWeek=0或1；monthly 需 monthDays；yearly 需 month和day；once 需 startDate，可填 endDate，均为 YYYY-MM-DD。priority 为0至100，数值越大越优先；指定日期优先于周期规则。正常上班不显示标签。",
-    "payload": { "title": "双号周六上班", "kind": "work", "repeat": "weekly", "weekdays": [5], "dateParity": "even", "priority": 20, "enabled": true }
+    "payload": {
+      "title": "双号周六上班",
+      "kind": "work",
+      "repeat": "weekly",
+      "weekdays": [5],
+      "dateParity": "even",
+      "priority": 20,
+      "enabled": true
+    }
   },
   {
     "module": "calendar",
     "channel": "quick-notes:calendar-rule-batch",
-    "description": "原子保存一组排班变更。operations 每项 operation 为 save或delete，rule 使用 calendar-rule-save 的字段；编辑或删除保留实际 id/revision，新增不传 id。先读取现有规则，仅调整用户要求的规则，保留无关节假日；利用优先级覆盖默认双休。单号周六休息、双号周六上班、周日休息可在已有周末休息之上添加双号周六 work 规则。保存后必须回读规则确认结果。",
-    "payload": { "operations": [{ "operation": "save", "rule": { "title": "双号周六上班", "kind": "work", "repeat": "weekly", "weekdays": [5], "dateParity": "even", "priority": 20, "enabled": true } }] }
+    "description": "原子保存便签日历排班或请假。operations 每项为 {operation:save或delete,rule:{…}}。排班字段参照 calendar-rule-save。个人请假使用 title=请假、kind=leave、repeat=once、calendar=solar、startDate=YYYY-MM-DD，连续多天填写 endDate（包含首尾）。全天省略 startTime/endTime，编辑时两者传空串清除时段；按时段请假两者都用 HH:mm，跨天分别为首日开始和末日结束。编辑或删除携带实际 id/revision。写入后回读 calendar-rule-list 确认。",
+    "payload": {
+      "operations": [
+        {
+          "operation": "save",
+          "rule": {
+            "title": "请假",
+            "kind": "leave",
+            "repeat": "once",
+            "calendar": "solar",
+            "startDate": "2026-11-25",
+            "endDate": "2026-11-27",
+            "startTime": "14:00",
+            "endTime": "10:00"
+          }
+        }
+      ]
+    }
   },
   {
     "module": "calendar",
