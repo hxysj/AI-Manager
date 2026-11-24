@@ -35,6 +35,7 @@
     "fuse.js": "^7.1.0",
     "langchain": "^1.5.10",
     "lucide-vue-next": "^1.0.0",
+    "lunar-javascript": "1.7.8",
     "micromark": "4.0.3",
     "micromark-extension-gfm": "3.0.0",
     "monaco-editor": "^0.52.2",

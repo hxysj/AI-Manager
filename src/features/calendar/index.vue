@@ -9,8 +9,9 @@
       :usage-error="usageError"
       :entries-loading="entriesLoading"
       :entries-error="entriesError"
+      :public-holidays="publicHolidays"
       @range-change="changeRange"
-      @refresh="refresh"
+      @refresh="refresh(true)"
       @open="$emit('open-notes', { id: $event.id })"
       @create="$emit('open-notes', { date: $event })"
       @smart-record="$emit('open-notes', { smart: true })"
@@ -19,10 +20,11 @@
 </template>
 
 <script setup>
-import { onBeforeUnmount, onMounted, ref, shallowRef } from "vue"
+import { computed, onBeforeUnmount, onMounted, ref, shallowReactive, shallowRef } from "vue"
 import { quickNotesApi } from "@/api/modules/quick-notes"
 import { usageApi } from "@/api"
 import QuickNoteCalendar from "@/features/quick-notes/components/QuickNoteCalendar.vue"
+import { bundledPublicHolidayYear, loadPublicHolidayYear } from "./public-holidays"
 
 defineEmits(["open-notes"])
 const entries = shallowRef({ notes: [], reminders: [], calendarRules: [] })
@@ -31,9 +33,17 @@ const entriesLoading = ref(false)
 const usageLoading = ref(false)
 const entriesError = ref("")
 const usageError = ref("")
+const visibleYears = shallowRef([])
+const holidayYears = shallowReactive(new Map())
+const publicHolidays = computed(() => new Map(
+  visibleYears.value
+    .flatMap((year) => holidayYears.get(year) ?? bundledPublicHolidayYear(year))
+    .map((day) => [day.date, day])
+))
 let range
 let entriesRequest = 0
 let usageRequest = 0
+let holidayRequest = 0
 let disposed = false
 let unsubscribe
 
@@ -84,13 +94,21 @@ async function loadUsage() {
   }
 }
 
-function refresh() {
+function refresh(reloadHolidays = false) {
   loadEntries()
   loadUsage()
+  // 每个年份独立更新，跨年时不会因为次年尚未发布而影响已知安排。
+  const request = ++holidayRequest
+  for (const year of visibleYears.value) {
+    loadPublicHolidayYear(year, reloadHolidays).then((days) => {
+      if (days && request === holidayRequest) holidayYears.set(year, days)
+    })
+  }
 }
 
-function changeRange(next) {
+function changeRange({ year, ...next }) {
   range = next
+  visibleYears.value = [...new Set([Number(next.from.slice(0, 4)), year, year + 1])]
   usageByDate.value = new Map()
   entries.value = {
     notes: [],
@@ -113,6 +131,7 @@ onBeforeUnmount(() => {
   disposed = true
   entriesRequest++
   usageRequest++
+  holidayRequest++
   unsubscribe?.()
 })
 </script>

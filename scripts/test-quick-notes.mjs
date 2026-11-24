@@ -34,7 +34,7 @@ export const state={notes:[
  {id:'work',title:'完成速记模块的存储设计',content:'整理了便签、待办和提醒的数据关系，下一步验证重启恢复。',type:'worklog',groupId:'project',categoryId:'development',tags:['AI-Manager','本地存储'],color:'mint',pinned:true,occurredOn:'2026-11-18',createdAt:time,updatedAt:time,revision:1,lifecycle:'active',tasks:[{id:'t',title:'验证重启后的提醒恢复',status:'pending',dueDate:'2026-11-19'}],worklog:{result:'完成存储设计'}},
  {id:'idea',title:'周五的发布检查',content:'检查 Claude 和 Codex 的切换，再整理这周的工作记录。',type:'todo',groupId:'inbox',categoryId:'debugging',tags:['发布'],color:'sand',createdAt:time,updatedAt:time,revision:1,lifecycle:'active',tasks:[{id:'t2',title:'检查发布包',status:'pending'}],worklog:{}}
 ],folders:[{id:'inbox',kind:'group',name:'收件箱',aliases:[]},{id:'project',kind:'group',name:'AI-Manager',aliases:['桌宠']},{id:'uncategorized',kind:'category',name:'未分类',aliases:[]},{id:'development',kind:'category',name:'开发实现',aliases:[]},{id:'debugging',kind:'category',name:'问题排查',aliases:[]}],events:[],reminders:[],captures:[],hasMore:false,
-calendarRules:[{id:'weekend',revision:1,title:'周末双休',kind:'rest',calendar:'solar',repeat:'weekly',weekdays:[5,6],monthDays:[],workStatus:'rest',color:'#579b80',dateParity:'all',enabled:true,priority:0}]}
+calendarRules:[{id:'default-weekend',revision:1,title:'周末双休',kind:'rest',calendar:'solar',repeat:'weekly',weekdays:[5,6],monthDays:[],workStatus:'rest',color:'#579b80',dateParity:'all',enabled:true,priority:0}]}
 export const changed=()=>{for(const handle of handlers)handle({})}
 export const quickNotesApi={onChanged:async fn=>{handlers.add(fn);return()=>handlers.delete(fn)},onOpen:async fn=>{openHandlers.add(fn);return()=>openHandlers.delete(fn)},invoke:async(action,p={})=>{
  p=JSON.parse(JSON.stringify(p))
@@ -151,6 +151,23 @@ const workspace={
 }
 const toCalendar=()=>{route.value='calendar'}
 const toNotes=(payload=null)=>{request.value=payload;route.value='notes'}
+// 公共数据使用固定快照，2025 年模拟断网以验证本地数据。
+const holidayDays={
+ 2026:[
+  {date:'2026-10-01',name:'国庆节',isOffDay:true},
+  {date:'2026-10-10',name:'国庆节',isOffDay:false}
+ ],
+ 2027:[{date:'2027-01-01',name:'元旦',isOffDay:true}]
+}
+const fetchOriginal=globalThis.fetch
+globalThis.fetch=async (url, options)=>{
+ if(!url.startsWith('https://raw.githubusercontent.com/NateScarlet/holiday-cn/master/'))return fetchOriginal(url,options)
+ assert(options.credentials==='omit'&&!options.headers,'公共节假日请求应直接匿名读取')
+ const year=Number(url.slice(-9,-5))
+ return holidayDays[year]
+  ?{ok:true,json:async()=>({year,days:holidayDays[year]})}
+  :{ok:false}
+}
 createApp({
  setup:()=>()=>route.value==='calendar'
   ?h(Calendar,{onOpenNotes:toNotes})
@@ -164,7 +181,42 @@ async function test(){
  assert(Math.abs(calendar.bottom-document.querySelector('#app').getBoundingClientRect().bottom)<20,'日历未填满可用高度')
  button('周视图').click();await settle();assert(document.querySelectorAll('.calendar-day').length===7,'周视图没有显示七天')
  button('列表').click();await settle();assert(document.querySelector('.calendar-list'),'没有切换到日程列表')
- button('月视图').click();await settle();period(2026,11);await settle();day('2026-11-18').click();await settle()
+ button('月视图').click();await settle()
+ period(2025,1);await settle()
+ assert(day('2025-01-01').getAttribute('aria-label').includes('放假'),'公开接口不可用时未显示随应用发布的节假日')
+ period(2026,10);await settle()
+ assert(day('2026-10-01').getAttribute('aria-label').includes('放假，国庆节'),'公休日未显示')
+ assert(day('2026-10-10').getAttribute('aria-label').includes('补班，国庆节'),'出厂的双休规则覆盖了公共补班')
+ day('2026-10-10').click();await settle()
+ assert(document.querySelector('.calendar-almanac').textContent.includes('调休补班'),'日期详情没有标明公共调休补班')
+ button('列表').click();await settle()
+ assert([...document.querySelectorAll('.calendar-list-schedule')].some(row=>row.textContent.includes('调休补班')),'列表遗漏公共调休补班')
+ button('月视图').click();await settle()
+ const ruleCount=state.calendarRules.length
+ state.calendarRules.push(
+  {id:'test-week',title:'周四上班',kind:'work',calendar:'solar',repeat:'weekly',weekdays:[3],enabled:true,priority:100},
+  {id:'test-cycle',title:'大小周休息',kind:'rest',calendar:'solar',repeat:'alternating',weekdays:[5],anchorDate:'2026-10-10',cycleWeek:0,enabled:true,priority:100}
+ )
+ changed();await settle()
+ assert(day('2026-10-01').querySelector('.calendar-schedule-label').textContent==='放假','自定义双休覆盖了公共放假')
+ assert(day('2026-10-10').querySelector('.calendar-schedule-label').textContent==='补班','自定义大小周覆盖了公共补班')
+ state.calendarRules.push(
+  {id:'test-private-shift',title:'自定义调休',kind:'makeup',workStatus:'rest',calendar:'solar',repeat:'once',startDate:'2026-10-10',enabled:true,priority:0},
+  {id:'test-private-workday',title:'自定义补班',kind:'workday',workStatus:'work',calendar:'solar',repeat:'once',startDate:'2026-10-01',enabled:true,priority:0}
+ )
+ changed();await settle()
+ assert(day('2026-10-10').querySelector('.calendar-schedule-label').textContent==='补假','自定义调休没有覆盖公共补班')
+ assert(day('2026-10-01').querySelector('.calendar-schedule-label').textContent==='补班','自定义补班没有覆盖公共放假')
+ state.calendarRules.splice(ruleCount)
+ changed()
+ period(2026,11);await settle();day('2026-11-24').click();await settle()
+ const almanac=document.querySelector('.calendar-almanac')
+ assert(almanac.textContent.includes('十月十六')&&almanac.textContent.includes('丙午年')&&almanac.textContent.includes('出行')&&almanac.textContent.includes('安葬'),'日期卡没有显示所选日期的农历和宜忌')
+ assert(almanac.textContent.includes('2027 年元旦还有 38 天'),'跨年节日倒计时不正确')
+ almanac.querySelector('.almanac-toggle').click();await settle()
+ assert(almanac.querySelector('.almanac-expanded'),'宜忌展开按钮没有显示完整条目')
+ almanac.querySelector('.almanac-toggle').click();await settle()
+ day('2026-11-18').click();await settle()
  assert(day('2026-11-18').querySelector('.calendar-lunar').textContent==='初十','农历日期错误')
  const rightClick=async date=>{
   const cell=day(date),rect=cell.getBoundingClientRect()
@@ -440,6 +492,8 @@ async function test(){
  if(scene==='rules'){button('休假规则').click();await settle()}
  if(scene==='leave'){day('2026-11-18').click();button('请假').click();await settle();button('时间范围',leaveDialog()).click();await settle()}
  if(scene==='usage'){day('2026-11-19').click();await settle()}
+ if(scene==='almanac'){day('2026-11-24').click();await settle()}
+ if(scene==='public-makeup'){period(2026,10);await settle();day('2026-10-10').click();await settle()}
  if(scene==='leave-edit'){period(2026,11);await settle();await rightClick('2026-11-25');contextItem('编辑请假').click();await settle()}
  if(scene==='leave-dates'){period(2026,11);await settle();day('2026-11-26').click();await settle()}
  const visibleWorkspace=document.querySelector('.quick-notes,.calendar-view')

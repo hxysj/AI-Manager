@@ -20,7 +20,13 @@
           type="button"
           @click="edit(rule)"
         >
-          <span class="rules-swatch" :style="{ background: rule.kind === 'work' ? 'var(--color-text)' : rule.color }"></span>
+          <span
+            class="rules-swatch"
+            :style="{
+              background:
+                rule.kind === 'work' ? 'var(--color-text)' : rule.color
+            }"
+          ></span>
           <span class="rules-item-content"
             ><span class="rules-item-title">{{ rule.title }}</span
             ><span class="rules-item-summary">{{
@@ -35,9 +41,7 @@
         </div>
       </div>
       <footer class="rules-sidebar-foot">
-        <p class="rules-caption">
-          请假记录可在日历中右键编辑。
-        </p>
+        <p class="rules-caption">请假记录可在日历中右键编辑。</p>
       </footer>
     </aside>
 
@@ -92,8 +96,18 @@
                 {{ draft.id ? "编辑规则" : "新建休假规则" }}
               </h3>
             </div>
-            <span class="rules-preview" :style="{ color: draft.kind === 'work' ? 'var(--color-text)' : draft.color }"
-              ><i class="rules-swatch" :style="{ background: draft.kind === 'work' ? 'var(--color-text)' : draft.color }"></i
+            <span
+              class="rules-preview"
+              :style="{
+                color: draft.kind === 'work' ? 'var(--color-text)' : draft.color
+              }"
+              ><i
+                class="rules-swatch"
+                :style="{
+                  background:
+                    draft.kind === 'work' ? 'var(--color-text)' : draft.color
+                }"
+              ></i
               >{{
                 kinds.find((kind) => kind.value === draft.kind)?.label ||
                 "日历标签"
@@ -317,7 +331,7 @@
                   /></label>
                 </div>
                 <p class="rules-caption">
-                  周期规则冲突时，数值越大越优先；指定日期始终优先于周期规则。
+                  自定义节假日、补班和调休优先于公共放假和补班，公共安排优先于大小周和双休。同一档内先比较是否指定日期，再比较优先级数值。
                 </p>
                 <label class="rules-enabled"
                   ><input
@@ -521,7 +535,9 @@ import AssistantImages from "@/features/assistant/components/AssistantImages.vue
 
 const props = defineProps({ rules: { type: Array, default: () => [] } })
 // 请假按实际日期编辑，规则列表管理周期排班和节假日。
-const scheduleRules = computed(() => props.rules.filter(rule => rule.kind !== "leave"))
+const scheduleRules = computed(() =>
+  props.rules.filter((rule) => rule.kind !== "leave")
+)
 const weekdays = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
 const kinds = [
   { value: "work", label: "正常上班日", color: "#14213a" },
