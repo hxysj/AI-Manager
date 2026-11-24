@@ -514,7 +514,13 @@
         @close="rulesVisible = false"
         @keydown.esc.stop="rulesVisible = false"
       >
-        <CalendarRuleSettings :rules="rules" />
+        <CalendarRuleSettings
+          :rules="rules"
+          :assistant-settings="assistantSettings"
+          :providers="providers"
+          :codex-accounts="codexAccounts"
+          :runtime-models="runtimeModels"
+        />
       </BaseModal>
       <CalendarLeaveDialog
         v-if="leaveEditor"
@@ -576,7 +582,11 @@ const props = defineProps({
   usageError: { type: String, default: "" },
   entriesLoading: { type: Boolean, default: false },
   entriesError: { type: String, default: "" },
-  publicHolidays: { type: Map, default: () => new Map() }
+  publicHolidays: { type: Map, default: () => new Map() },
+  assistantSettings: { type: Object, default: () => ({}) },
+  providers: { type: Array, default: () => [] },
+  codexAccounts: { type: Array, default: () => [] },
+  runtimeModels: { type: Array, default: () => [] }
 })
 const emit = defineEmits([
   "open",

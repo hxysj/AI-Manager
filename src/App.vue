@@ -113,6 +113,10 @@
 
         <CalendarView
           v-else-if="activeView === 'calendar'"
+          :assistant-settings="state.appSettings?.agents?.assistant"
+          :providers="state.providers"
+          :codex-accounts="state.codexAccounts"
+          :runtime-models="state.runtimeModels"
           @open-notes="openNotesFromCalendar"
         />
 

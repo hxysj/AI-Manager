@@ -22,7 +22,27 @@ pub struct QuickNotesService {
 impl QuickNotesService {
     pub async fn dispatch(&self,app: AppHandle,mut context: AssistantContext,action: &str,mut input: Value) -> Result<Value,ManagerError> {
         if !input.is_object(){return Err(store::fail("速记参数必须为对象"));}
-        if action=="calendar-analyze" {let result=calendar::analyze(&context,&input).await?; if result["question"].is_null(){app.emit("quick-notes:changed",json!({})).ok();} return Ok(result);}
+        let is_capture = ["capture", "summary", "classify"].contains(&action);
+        if is_capture || action == "calendar-analyze" {
+            // 模型覆盖仅用于当前请求，缺省时继续使用助手配置。
+            if let Some(settings) = input["model"].as_object() {
+                for (field, value) in settings {
+                    match field.as_str() {
+                        "targetId" => context.settings.target_id = value.as_str().unwrap_or("").into(),
+                        "model" => context.settings.model = value.as_str().unwrap_or("").into(),
+                        "protocol" => context.settings.protocol = value.as_str().unwrap_or("auto").into(),
+                        _ => {}
+                    }
+                }
+            }
+        }
+        if action == "calendar-analyze" {
+            let result = calendar::analyze(&context, &input).await?;
+            if result["question"].is_null() {
+                app.emit("quick-notes:changed", json!({})).ok();
+            }
+            return Ok(result);
+        }
         if action=="assistant-state" {return Ok(self.feedback.lock().await.clone());}
         if action=="capture-state" {
             let mut capture=store::capture_state(&context.paths,store::text(&input,"requestId"))?;
@@ -58,12 +78,7 @@ impl QuickNotesService {
             app.emit("quick-notes:changed",json!({"captureId":state["id"]})).ok();
             return store::capture_state(&context.paths,store::text(&input,"requestId"));
         }
-        if ["capture","summary","classify"].contains(&action) {
-            if let Some(settings)=input["model"].as_object() {
-                for (field,value) in settings {
-                    match field.as_str(){"targetId"=>context.settings.target_id=value.as_str().unwrap_or("").into(),"model"=>context.settings.model=value.as_str().unwrap_or("").into(),"protocol"=>context.settings.protocol=value.as_str().unwrap_or("auto").into(),_=>{}}
-                }
-            }
+        if is_capture {
             if action=="classify" {
                 let note=store::detail(&context.paths,store::text(&input,"noteId"))?;
                 input["text"]=json!(format!("{}\n{}",store::text(&note,"title"),store::text(&note,"content")));

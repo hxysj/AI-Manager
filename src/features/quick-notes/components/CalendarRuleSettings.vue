@@ -395,6 +395,41 @@
             </div>
             <Sparkles :size="21" class="rules-ai-symbol" />
           </header>
+          <div class="rules-model">
+            <span>识别模型</span>
+            <AssistantModelSelect
+              v-if="mode === 'ai'"
+              :settings="modelSettings"
+              :providers="providers"
+              :codex-accounts="codexAccounts"
+              :runtime-models="runtimeModels"
+              :persist="false"
+              :disabled="busy"
+              @change="modelOverride = $event"
+              @error="modelError = $event"
+            />
+            <button
+              v-if="modelOverride"
+              class="rules-model-reset"
+              type="button"
+              :disabled="busy"
+              @click="resetModel"
+            >
+              恢复跟随助手
+            </button>
+            <span v-else class="rules-caption">跟随助手</span>
+          </div>
+          <p
+            v-if="modelError || needsVisionModel"
+            class="rules-model-hint"
+            role="alert"
+          >
+            {{
+              needsVisionModel
+                ? "请切换到支持图片的模型，或移除图片。"
+                : modelError
+            }}
+          </p>
           <label class="rules-field"
             ><span>你的排班或请假安排</span
             ><textarea
@@ -493,7 +528,7 @@
           ><button
             class="rules-button rules-primary"
             type="button"
-            :disabled="busy || (!description.trim() && !images.length)"
+            :disabled="!canAnalyze"
             @click="analyze"
           >
             <LoaderCircle
@@ -532,8 +567,15 @@ import {
 import { quickNotesApi } from "@/api/modules/quick-notes"
 import { readAssistantImages } from "@/features/assistant/attachments"
 import AssistantImages from "@/features/assistant/components/AssistantImages.vue"
+import AssistantModelSelect from "@/features/assistant/components/AssistantModelSelect.vue"
 
-const props = defineProps({ rules: { type: Array, default: () => [] } })
+const props = defineProps({
+  rules: { type: Array, default: () => [] },
+  assistantSettings: { type: Object, default: () => ({}) },
+  providers: { type: Array, default: () => [] },
+  codexAccounts: { type: Array, default: () => [] },
+  runtimeModels: { type: Array, default: () => [] }
+})
 // 请假按实际日期编辑，规则列表管理周期排班和节假日。
 const scheduleRules = computed(() =>
   props.rules.filter((rule) => rule.kind !== "leave")
@@ -575,6 +617,29 @@ const fileInput = ref(null)
 const dragging = ref(false)
 const message = ref("")
 const messageType = ref("success")
+const modelOverride = ref(null)
+const modelError = ref("")
+const modelSettings = computed(
+  () => modelOverride.value || props.assistantSettings
+)
+const needsVisionModel = computed(
+  () => images.value.length > 0 && modelSettings.value.targetId === "local"
+)
+const canAnalyze = computed(
+  () =>
+    !busy.value &&
+    !needsVisionModel.value &&
+    Boolean(
+      modelSettings.value.targetId &&
+        modelSettings.value.model &&
+        (description.value.trim() || images.value.length)
+    )
+)
+
+function resetModel() {
+  modelOverride.value = null
+  modelError.value = ""
+}
 
 function reset() {
   draft.value = {
@@ -711,9 +776,12 @@ async function pasteImages(event) {
 }
 
 async function analyze() {
+  if (!canAnalyze.value) return
+  const { targetId, model, protocol } = modelSettings.value
   await run("calendar-analyze", {
     text: description.value,
-    images: images.value
+    images: images.value,
+    model: modelOverride.value ? { targetId, model, protocol } : undefined
   })
 }
 </script>
@@ -912,6 +980,36 @@ async function analyze() {
             flex: none;
             color: var(--color-primary);
           }
+        }
+        .rules-model {
+          display: flex;
+          align-items: center;
+          flex-wrap: wrap;
+          gap: 8px 10px;
+          margin-bottom: 12px;
+          font-size: var(--font-size-sm);
+          :deep(.assistant-model-control) {
+            flex: 1 1 160px;
+            max-width: 280px;
+          }
+          .rules-model-reset {
+            border: 0;
+            padding: 0;
+            color: var(--color-primary);
+            background: transparent;
+            font: inherit;
+            font-size: var(--font-size-xs);
+            cursor: pointer;
+            &:disabled {
+              color: var(--color-text-muted);
+              cursor: default;
+            }
+          }
+        }
+        .rules-model-hint {
+          margin: -4px 0 12px;
+          color: var(--color-danger);
+          font-size: var(--font-size-xs);
         }
         .rules-fields {
           min-width: 0;

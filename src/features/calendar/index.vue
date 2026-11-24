@@ -10,6 +10,10 @@
       :entries-loading="entriesLoading"
       :entries-error="entriesError"
       :public-holidays="publicHolidays"
+      :assistant-settings="assistantSettings"
+      :providers="providers"
+      :codex-accounts="codexAccounts"
+      :runtime-models="runtimeModels"
       @range-change="changeRange"
       @refresh="refresh(true)"
       @open="$emit('open-notes', { id: $event.id })"
@@ -26,6 +30,12 @@ import { usageApi } from "@/api"
 import QuickNoteCalendar from "@/features/quick-notes/components/QuickNoteCalendar.vue"
 import { bundledPublicHolidayYear, loadPublicHolidayYear } from "./public-holidays"
 
+defineProps({
+  assistantSettings: { type: Object, default: () => ({}) },
+  providers: { type: Array, default: () => [] },
+  codexAccounts: { type: Array, default: () => [] },
+  runtimeModels: { type: Array, default: () => [] }
+})
 defineEmits(["open-notes"])
 const entries = shallowRef({ notes: [], reminders: [], calendarRules: [] })
 const usageByDate = shallowRef(new Map())

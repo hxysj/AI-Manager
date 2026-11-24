@@ -44,6 +44,7 @@ export const quickNotesApi={onChanged:async fn=>{handlers.add(fn);return()=>hand
   reminders:state.reminders,
   calendarRules:state.calendarRules
  })
+ if(action==='calendar-analyze')return {question:'请补充起算日期。'}
  if(action==='calendar-rule-save'){
   const old=state.calendarRules.find(rule=>rule.id===p.id)
   if(old&&p.revision!==old.revision)throw Error('测试日历修订号不匹配')
@@ -115,7 +116,7 @@ export const quickNotesApi={onChanged:async fn=>{handlers.add(fn);return()=>hand
  if(action==='organize'){state.folders.push({...p,id:crypto.randomUUID()});changed();return {id:'folder'}}
  return {ok:true}
 }}
-export const settingsApi={saveSettings:async()=>{throw Error('速记模型选择不应改写助手配置')}}
+export const settingsApi={saveSettings:async()=>{calls.push({action:'settings:save'});throw Error('任务模型选择不应改写助手配置')}}
 export const request=async(channel,p)=>{
  if(channel==='usage:stats'){
   calls.push({action:channel,p})
@@ -143,6 +144,9 @@ const period=(year,month)=>{set(document.querySelector('[aria-label=日历年份
 const route=ref('calendar')
 const request=ref(null)
 const notes=ref(null)
+const assistantSettings={targetId:'local',model:'qwen3.5-0.8b',protocol:'chat'}
+const providers=[{id:'calendar-provider',name:'排班识别服务商',cli:'codex',enabled:true}]
+const runtimeModels=[{providerId:'calendar-provider',name:'calendar-vision'}]
 const workspace={
  refresh:()=>notes.value.refresh(),
  focusSearch:()=>notes.value.focusSearch(),
@@ -170,7 +174,7 @@ globalThis.fetch=async (url, options)=>{
 }
 createApp({
  setup:()=>()=>route.value==='calendar'
-  ?h(Calendar,{onOpenNotes:toNotes})
+  ?h(Calendar,{assistantSettings,providers,runtimeModels,onOpenNotes:toNotes})
   :h(Notes,{ref:notes,noteRequest:request.value,providers:[],codexAccounts:[],runtimeModels:[]})
 }).mount('#app')
 async function test(){
@@ -270,6 +274,35 @@ async function test(){
  assert(rules.querySelectorAll('.rules-item').length===1,'排班设置未保留原规则')
  button('AI 设置',rules).click();await settle()
  assert(rules.querySelector('.rules-description').getClientRects().length,'AI 设置未显示输入区')
+ const modelPicker=rules.querySelector('.rules-model')
+ assert(modelPicker.textContent.includes(assistantSettings.model)&&modelPicker.textContent.includes('跟随助手'),'休假规则没有默认显示助手模型')
+ set(rules.querySelector('.rules-description'),'周末双休')
+ await settle()
+ button('识别并应用',rules).click();await settle()
+ const calendarAnalyze=()=>calls.findLast(c=>c.action==='calendar-analyze')?.p
+ assert(calendarAnalyze()?.text==='周末双休'&&!calendarAnalyze().model,'默认识别应由后台使用当前助手模型')
+ const files=new DataTransfer()
+ files.items.add(new File([Uint8Array.of(137,80,78,71)],'排班表.png',{type:'image/png'}))
+ const fileInput=rules.querySelector('.rules-file-input')
+ fileInput.files=files.files
+ fileInput.dispatchEvent(new Event('change',{bubbles:true}))
+ for(let i=0;i<10&&!rules.querySelector('.rules-attachments');i++)await settle()
+ assert(rules.querySelector('.rules-model-hint')?.textContent.includes('支持图片的模型')&&button('识别并应用',rules).disabled,'本地文本模型不应提交排班图片')
+ modelPicker.querySelector('.el-select__wrapper').click();await settle()
+ const option=[...document.querySelectorAll('.el-select-dropdown__item')].find(item=>item.textContent.trim()==='calendar-vision'&&item.getClientRects().length)
+ assert(option,'休假规则缺少服务商模型')
+ option.click();await settle()
+ assert(!button('识别并应用',rules).disabled,'切换模型后应允许重新提交图片')
+ button('识别并应用',rules).click();await settle()
+ const calendarModel=calendarAnalyze().model
+ assert(calendarModel?.targetId==='calendar-provider'&&calendarModel.model==='calendar-vision'&&calendarModel.protocol==='auto','识别请求没有使用选中的来源、模型和协议')
+ assert(calendarAnalyze().images.length===1,'切换模型后未保留排班图片')
+ assert(rules.querySelector('.rules-message-question')?.textContent.includes('请补充起算日期'),'切换模型后未显示补充信息提示')
+ assert(!calls.some(c=>c.action==='settings:save'),'休假规则识别改写了助手模型配置')
+ button('恢复跟随助手',rules).click();await settle()
+ button('清空',rules).click();await settle()
+ button('识别并应用',rules).click();await settle()
+ assert(!calendarAnalyze().model&&!calendarAnalyze().images.length,'恢复跟随失败')
  rules.querySelector('.base-modal__close').click();await settle()
  day('2026-11-19').click();await settle();assert(document.querySelector('.calendar-agenda').textContent.includes('验证重启后的提醒恢复'),'截止日没有关联待办')
  assert(day('2026-11-19').querySelector('.calendar-dot-usage'),'有模型请求的日期没有用量标记')
@@ -490,6 +523,7 @@ async function test(){
  if(scene==='drawer'){document.querySelector('[aria-label=在这天新建便签]').click();await settle()}
  if(scene==='smart'){button('智能记录').click();await settle();const smart=document.querySelector('.smart-record-modal');set(smart.querySelector('.smart-input'),'修复登录页与预约页分值不同步的问题，补充回归验证。');await settle();button('分析并预览',smart).click();await settle();await settle()}
  if(scene==='rules'){button('休假规则').click();await settle()}
+ if(scene==='rules-ai'){button('休假规则').click();await settle();button('AI 设置',document.querySelector('.calendar-rules-modal')).click();await settle()}
  if(scene==='leave'){day('2026-11-18').click();button('请假').click();await settle();button('时间范围',leaveDialog()).click();await settle()}
  if(scene==='usage'){day('2026-11-19').click();await settle()}
  if(scene==='almanac'){day('2026-11-24').click();await settle()}
