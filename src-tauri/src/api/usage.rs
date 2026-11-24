@@ -97,6 +97,10 @@ pub async fn sync_pending_usage(
 }
 
 pub async fn get_stats(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
+    stats_response(paths, payload)
+}
+
+pub(crate) fn stats_response(paths: &AppPaths, payload: Value) -> Result<Value, ManagerError> {
     Ok(json!({
       "status": "ok",
       "data": get_stats_data(paths, payload)?,
@@ -468,9 +472,13 @@ fn get_stats_data(paths: &AppPaths, input: Value) -> Result<Value, ManagerError>
         if start == 0 || !(1..=45 * 86_400_000).contains(&end.saturating_sub(start)) {
             return Err(ManagerError::System("日历用量日期范围无效".into()));
         }
-        let logs = query_usage_logs(paths, &filters)?
-            .iter()
-            .map(|log| enrich_usage_log(log, &pricing_config, &pricing_index))
+        // 日期在数据库筛选，服务商归属等筛选仍在合并去重之后进行。
+        let query = create_usage_log_query(&json!({"startAt": start, "endAt": end}));
+        let legacy = usage_store::query_logs(paths, &query)?;
+        let logs = service::merge_calendar_logs(paths, legacy, query.start_at, query.end_at)?
+            .into_iter()
+            .filter(|log| in_range(log, &filters))
+            .map(|log| enrich_usage_log(&log, &pricing_config, &pricing_index))
             .collect::<Vec<_>>();
         return Ok(json!({"trends": create_usage_trend_stats(&logs, "day", &filters)}));
     }

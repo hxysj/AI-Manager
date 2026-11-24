@@ -106,6 +106,24 @@ impl AppState {
         channel: &str,
         payload: Option<Value>,
     ) -> Result<Value, ManagerError> {
+        let calendar_usage = channel == "usage:stats"
+            && payload.as_ref().is_some_and(|value| value["statsScope"] == "calendar");
+        if calendar_usage || channel == "quick-notes:calendar-entries" {
+            // 日历查询只读取本地数据库，获取路径后释放应用状态锁。
+            let paths = self.manager.lock().await.paths.clone();
+            let input = payload.unwrap_or_else(|| json!({}));
+            return tauri::async_runtime::spawn_blocking(move || {
+                if calendar_usage {
+                    usage::stats_response(&paths, input)
+                } else if input.is_object() {
+                    crate::core::quick_notes_store::dispatch(&paths, "calendar-entries", &input)
+                } else {
+                    Err(crate::core::quick_notes_store::fail("速记参数必须为对象"))
+                }
+            })
+            .await
+            .map_err(|error| ManagerError::System(error.to_string()))?;
+        }
         if let Some(action)=channel.strip_prefix("quick-notes:") {
             let context=self.assistant_context().await;
             return self.quick_notes.dispatch(app,context,action,payload.unwrap_or_else(||json!({}))).await;

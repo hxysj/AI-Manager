@@ -205,6 +205,7 @@ CREATE TABLE IF NOT EXISTS service_gateway_requests (
   finished_at INTEGER
 ) STRICT;
 CREATE INDEX IF NOT EXISTS service_requests_created ON service_gateway_requests(created_at);
+CREATE INDEX IF NOT EXISTS service_requests_session_id ON service_gateway_requests(replace(id,'-',''));
 -- 仅保存可观测的 Skill 事件及请求关联，不保存提示词、工具参数或会话正文。
 -- Skill 事件独立于账号存储升级，旧 Usage 历史继续保留。
 CREATE TABLE IF NOT EXISTS service_gateway_skill_events (
@@ -259,6 +260,7 @@ CREATE TABLE IF NOT EXISTS service_gateway_attempts (
   UNIQUE(request_id,attempt_no),
   FOREIGN KEY(provider_id,model_id) REFERENCES service_provider_models(provider_id,id) ON DELETE RESTRICT
 ) STRICT;
+CREATE INDEX IF NOT EXISTS service_attempts_response_id ON service_gateway_attempts(upstream_response_id) WHERE upstream_response_id<>'';
 CREATE TABLE IF NOT EXISTS service_provider_migration_items (
   id TEXT PRIMARY KEY NOT NULL,
   migration_id TEXT NOT NULL,

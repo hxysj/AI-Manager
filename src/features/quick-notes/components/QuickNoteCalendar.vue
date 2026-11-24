@@ -684,7 +684,8 @@ const entriesByDate = computed(() => {
   for (const entries of result.values()) entries.sort((a, b) => a.at - b.at)
   return result
 })
-const days = computed(() => {
+// 同一个月的农历只换算一次，规则和事项回包不触发重新换算。
+const calendarDates = computed(() => {
   const first = firstGridDay.value
   return Array.from({ length: 42 }, (_, index) => {
     const date = new Date(
@@ -699,15 +700,30 @@ const days = computed(() => {
       date.getMonth() + 1,
       date.getDate()
     ).getLunar()
+    return {
+      date,
+      key,
+      number: date.getDate(),
+      outside: date.getMonth() !== month.value,
+      weekend: index % 7 > 4,
+      lunarDate,
+      lunar:
+        lunarDate.getDay() === 1
+          ? `${lunarDate.getMonthInChinese()}月`
+          : lunarDate.getDayInChinese()
+    }
+  })
+})
+const scheduledDays = computed(() =>
+  calendarDates.value.map(({ date, ...day }) => {
     const { schedule, leaves } = calendarDay(
       date,
       props.rules,
-      lunarDate,
-      props.publicHolidays.get(key)
+      day.lunarDate,
+      props.publicHolidays.get(day.key)
     )
     return {
-      key,
-      usage: props.usageByDate.get(key),
+      ...day,
       schedule,
       leaves,
       // 日期格只展示简短状态，规则名称保留在标签悬浮提示和规则设置中。
@@ -719,19 +735,17 @@ const days = computed(() => {
               workday: "补班",
               makeup: schedule.workStatus === "work" ? "补班" : "补假"
             }[schedule.kind] || "标记"
-          : "",
-      number: date.getDate(),
-      outside: date.getMonth() !== month.value,
-      weekend: index % 7 > 4,
-      lunarDate,
-      lunar:
-        lunarDate.getDay() === 1
-          ? `${lunarDate.getMonthInChinese()}月`
-          : lunarDate.getDayInChinese(),
-      entries: entriesByDate.value.get(key) || []
+          : ""
     }
   })
-})
+)
+const days = computed(() =>
+  scheduledDays.value.map((day) => ({
+    ...day,
+    entries: entriesByDate.value.get(day.key) || [],
+    usage: props.usageByDate.get(day.key)
+  }))
+)
 const listDays = computed(() =>
   days.value.filter(
     (day) =>

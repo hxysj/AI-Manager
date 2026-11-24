@@ -15,7 +15,7 @@
       :codex-accounts="codexAccounts"
       :runtime-models="runtimeModels"
       @range-change="changeRange"
-      @refresh="refresh(true)"
+      @refresh="refresh"
       @open="$emit('open-notes', { id: $event.id })"
       @create="$emit('open-notes', { date: $event })"
       @smart-record="$emit('open-notes', { smart: true })"
@@ -24,11 +24,21 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref, shallowReactive, shallowRef } from "vue"
+import {
+  computed,
+  onBeforeUnmount,
+  onMounted,
+  ref,
+  shallowReactive,
+  shallowRef
+} from "vue"
 import { quickNotesApi } from "@/api/modules/quick-notes"
 import { usageApi } from "@/api"
 import QuickNoteCalendar from "@/features/quick-notes/components/QuickNoteCalendar.vue"
-import { bundledPublicHolidayYear, loadPublicHolidayYear } from "./public-holidays"
+import {
+  bundledPublicHolidayYear,
+  loadPublicHolidayYear
+} from "./public-holidays"
 
 defineProps({
   assistantSettings: { type: Object, default: () => ({}) },
@@ -37,6 +47,8 @@ defineProps({
   runtimeModels: { type: Array, default: () => [] }
 })
 defineEmits(["open-notes"])
+const cacheLifetime = 30_000
+const rangeCache = new Map()
 const entries = shallowRef({ notes: [], reminders: [], calendarRules: [] })
 const usageByDate = shallowRef(new Map())
 const entriesLoading = ref(false)
@@ -45,12 +57,18 @@ const entriesError = ref("")
 const usageError = ref("")
 const visibleYears = shallowRef([])
 const holidayYears = shallowReactive(new Map())
-const publicHolidays = computed(() => new Map(
-  visibleYears.value
-    .flatMap((year) => holidayYears.get(year) ?? bundledPublicHolidayYear(year))
-    .map((day) => [day.date, day])
-))
+const publicHolidays = computed(
+  () =>
+    new Map(
+      visibleYears.value
+        .flatMap(
+          (year) => holidayYears.get(year) ?? bundledPublicHolidayYear(year)
+        )
+        .map((day) => [day.date, day])
+    )
+)
 let range
+let currentCache
 let entriesRequest = 0
 let usageRequest = 0
 let holidayRequest = 0
@@ -61,11 +79,15 @@ let unsubscribe
 async function loadEntries() {
   if (!range) return
   const request = ++entriesRequest
-  entriesLoading.value = true
+  entriesLoading.value = !currentCache.entries
   entriesError.value = ""
   try {
     const result = await quickNotesApi.invoke("calendar-entries", range)
-    if (request === entriesRequest) entries.value = result
+    if (request === entriesRequest) {
+      currentCache.entries = result
+      currentCache.entriesAt = Date.now()
+      entries.value = result
+    }
   } catch (error) {
     if (request === entriesRequest)
       entriesError.value = error.message || String(error)
@@ -76,7 +98,7 @@ async function loadEntries() {
 
 async function loadUsage() {
   const request = ++usageRequest
-  usageLoading.value = true
+  usageLoading.value = !currentCache.usage
   usageError.value = ""
   try {
     const result = await usageApi.getUsageStats({
@@ -87,7 +109,7 @@ async function loadUsage() {
     if (result.status !== "ok")
       throw new Error(result.message || "读取用量失败")
     if (request === usageRequest) {
-      usageByDate.value = new Map(
+      const usage = new Map(
         result.data.trends.map((item) => {
           const date = item.date
             .split("/")
@@ -96,6 +118,9 @@ async function loadUsage() {
           return [date, item]
         })
       )
+      currentCache.usage = usage
+      currentCache.usageAt = Date.now()
+      usageByDate.value = usage
     }
   } catch {
     if (request === usageRequest) usageError.value = "用量读取失败，可刷新重试"
@@ -104,33 +129,68 @@ async function loadUsage() {
   }
 }
 
-function refresh(reloadHolidays = false) {
-  loadEntries()
-  loadUsage()
+function loadHolidays(reload = false) {
   // 每个年份独立更新，跨年时不会因为次年尚未发布而影响已知安排。
   const request = ++holidayRequest
   for (const year of visibleYears.value) {
-    loadPublicHolidayYear(year, reloadHolidays).then((days) => {
-      if (days && request === holidayRequest) holidayYears.set(year, days)
+    loadPublicHolidayYear(year, reload).then((days) => {
+      if (days && request === holidayRequest && holidayYears.get(year) !== days)
+        holidayYears.set(year, days)
     })
   }
 }
 
+function refresh() {
+  if (!range) return
+  loadEntries()
+  loadUsage()
+  loadHolidays(true)
+}
+
 function changeRange({ year, ...next }) {
+  if (range?.startAt === next.startAt && range.endAt === next.endAt) return
   range = next
-  visibleYears.value = [...new Set([Number(next.from.slice(0, 4)), year, year + 1])]
-  usageByDate.value = new Map()
-  entries.value = {
+  entriesRequest++
+  usageRequest++
+  entriesLoading.value = false
+  usageLoading.value = false
+  entriesError.value = ""
+  usageError.value = ""
+
+  // 按所见日期范围保留最近八份快照，翻回时先显示已有数据。
+  const key = `${next.startAt}:${next.endAt}`
+  currentCache = rangeCache.get(key) || {}
+  rangeCache.delete(key)
+  rangeCache.set(key, currentCache)
+  if (rangeCache.size > 8) rangeCache.delete(rangeCache.keys().next().value)
+  usageByDate.value = currentCache.usage || new Map()
+  entries.value = currentCache.entries || {
     notes: [],
     reminders: [],
     calendarRules: entries.value.calendarRules
   }
-  refresh()
+  const now = Date.now()
+  if (!currentCache.entries || now - currentCache.entriesAt >= cacheLifetime)
+    loadEntries()
+  if (!currentCache.usage || now - currentCache.usageAt >= cacheLifetime)
+    loadUsage()
+
+  const years = [...new Set([Number(next.from.slice(0, 4)), year, year + 1])]
+  if (years.join(",") !== visibleYears.value.join(",")) {
+    visibleYears.value = years
+    loadHolidays()
+  }
+}
+
+function invalidateEntries() {
+  // 写入后所有月份的便签快照失效，当前月份立即重新读取。
+  for (const item of rangeCache.values()) delete item.entries
+  loadEntries()
 }
 
 onMounted(async () => {
   try {
-    const stop = await quickNotesApi.onChanged(loadEntries)
+    const stop = await quickNotesApi.onChanged(invalidateEntries)
     if (disposed) stop()
     else unsubscribe = stop
   } catch (error) {

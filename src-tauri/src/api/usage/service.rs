@@ -9,6 +9,26 @@ pub(super) struct Snapshot {
 }
 
 pub(super) fn read(paths: &AppPaths) -> Result<Snapshot, ManagerError> {
+    read_snapshot(paths, None, &mut Vec::new())
+}
+
+pub(super) fn merge_calendar_logs(
+    paths: &AppPaths,
+    mut legacy: Vec<Value>,
+    start: u64,
+    end: u64,
+) -> Result<Vec<Value>, ManagerError> {
+    let start = i64::try_from(start).map_err(|error| store::fail(error.to_string()))?;
+    let end = i64::try_from(end).map_err(|error| store::fail(error.to_string()))?;
+    let snapshot = read_snapshot(paths, Some((start, end)), &mut legacy)?;
+    Ok(snapshot.merge(legacy))
+}
+
+fn read_snapshot(
+    paths: &AppPaths,
+    range: Option<(i64, i64)>,
+    legacy: &mut Vec<Value>,
+) -> Result<Snapshot, ManagerError> {
     let c = database::open(paths)?;
     let exists: bool = c.query_row(
         "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type='table' AND name='service_gateway_requests')",
@@ -19,7 +39,14 @@ pub(super) fn read(paths: &AppPaths) -> Result<Snapshot, ManagerError> {
     }
     // 在同一快照内读取请求与接管时段，避免流结束或回滚时读到一半状态。
     c.execute_batch("BEGIN DEFERRED")?;
-    let logs = store::query(&c, "SELECT r.id,r.agent_type AS appType,r.created_at AS createdAt,
+    let date_condition = if range.is_some() {
+        "AND r.created_at BETWEEN ?1 AND ?2"
+    } else {
+        ""
+    };
+    let (start, end) = range.unwrap_or_default();
+    let parameters: &[&dyn rusqlite::ToSql] = if range.is_some() { &[&start, &end] } else { &[] };
+    let logs = store::query(&c, &format!("SELECT r.id,r.agent_type AS appType,r.created_at AS createdAt,
         r.finished_at AS finishedAt,r.state,r.status_code AS statusCode,r.error_message AS errorMessage,
         r.requested_model AS requestModel,r.client_request_id AS clientRequestId,
         coalesce(a.provider_id,i.provider_id,'') AS providerId,
@@ -34,14 +61,47 @@ pub(super) fn read(paths: &AppPaths) -> Result<Snapshot, ManagerError> {
             SELECT max(x.attempt_no) FROM service_gateway_attempts x WHERE x.request_id=r.id)
         LEFT JOIN service_agent_instances i ON i.id=r.instance_id
         LEFT JOIN service_provider_configs p ON p.id=coalesce(a.provider_id,i.provider_id)
-        WHERE r.finished_at IS NOT NULL ORDER BY r.created_at DESC,r.id", &[])?;
+        WHERE r.finished_at IS NOT NULL {date_condition} ORDER BY r.created_at DESC,r.id"), parameters)?;
+    if range.is_some() {
+        // 会话和网关的记账时间可能跨过日期边界，按身份索引查找区间外的重复项。
+        let mut duplicate = c.prepare("SELECT EXISTS(
+            SELECT 1 FROM service_gateway_requests r
+            WHERE replace(r.id,'-','')=?1 AND r.agent_type=?3
+            AND r.finished_at IS NOT NULL AND r.created_at NOT BETWEEN ?4 AND ?5
+            UNION ALL
+            SELECT 1 FROM service_gateway_attempts a
+            JOIN service_gateway_requests r ON r.id=a.request_id
+            WHERE a.upstream_response_id=?2 AND a.upstream_response_id<>''
+            AND r.agent_type=?3 AND r.finished_at IS NOT NULL AND r.created_at NOT BETWEEN ?4 AND ?5
+            AND a.attempt_no=(SELECT max(x.attempt_no) FROM service_gateway_attempts x WHERE x.request_id=r.id)
+        )")?;
+        let mut retained = Vec::with_capacity(legacy.len());
+        for log in std::mem::take(legacy) {
+            if let Some(response) = store::text(&log, "requestId").strip_prefix("session:") {
+                let synthetic_id = response.strip_prefix("msg_aim_");
+                let found = duplicate.query_row(
+                    rusqlite::params![synthetic_id, response, store::text(&log, "appType"), start, end],
+                    |row| row.get::<_, bool>(0),
+                )?;
+                if found {
+                    continue;
+                }
+            }
+            retained.push(log);
+        }
+        *legacy = retained;
+    }
     let managed_periods = store::query(&c, "SELECT i.agent_type AS appType,i.config_path AS configPath,
         f.created_at AS startAt,CASE WHEN f.restore_status='restored' THEN f.updated_at END AS endAt
         FROM service_managed_files f JOIN service_agent_instances i ON i.id=f.instance_id
         WHERE f.write_status='written' AND i.agent_type IN ('codex','claude')
         AND (f.file_path LIKE '%config.toml' OR f.file_path LIKE '%settings.json')", &[])?;
     c.execute_batch("COMMIT")?;
-    let revision = store::hash(&json!([logs, managed_periods]).to_string());
+    let revision = if range.is_some() {
+        String::new()
+    } else {
+        store::hash(&json!([logs, managed_periods]).to_string())
+    };
     Ok(Snapshot { revision, logs, managed_periods })
 }
 
@@ -406,6 +466,34 @@ mod tests {
         let claude = merged.iter().find(|log| log["requestId"] == "service:claude-request").unwrap();
         assert_eq!(claude["inputTokens"],90);
         assert_eq!(claude["actualTokens"],120);
+    }
+
+    #[test]
+    fn calendar_usage_deduplicates_gateway_responses_across_range_boundaries() {
+        let f = Fixture::new();
+        f.request("inside", "claude", 150, Some(100), Some(20));
+        f.request("before-range", "claude", 99, Some(100), Some(20));
+        f.request("after-range", "claude", 201, Some(100), Some(20));
+        let c = database::open(&f.paths).unwrap();
+        c.execute("UPDATE service_gateway_attempts SET upstream_response_id='msg_upstream'
+            WHERE id='after-range'", []).unwrap();
+        let logs = [
+            "session:msg_aim_beforerange",
+            "session:msg_upstream",
+            "session:msg_independent",
+        ].into_iter().map(|id| json!({
+            "requestId": id, "createdAt": 150, "appType": "claude",
+            "inputTokens": 10, "outputTokens": 2, "cacheReadTokens": 0,
+        })).collect();
+        usage_store::replace_sessions(&f.paths, &[UsageSessionUpdate {
+            raw_path: "calendar.jsonl".into(), app_type: "claude".into(),
+            updated_at: 200, logs, records: vec![],
+        }]).unwrap();
+        let ordinary = f.stats(json!({"startAt": 100, "endAt": 200}));
+        let calendar = f.stats(json!({"startAt": 100, "endAt": 200, "statsScope": "calendar"}));
+        assert_eq!(calendar["trends"], ordinary["trends"]);
+        assert_eq!(calendar["trends"][0]["requestCount"], 2);
+        assert_eq!(calendar["trends"][0]["actualTokens"], 132);
     }
 
     #[test]
