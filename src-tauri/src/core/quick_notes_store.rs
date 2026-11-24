@@ -82,6 +82,42 @@ pub fn list(paths: &AppPaths, filters: &Value) -> Result<Value,ManagerError> {
     Ok(json!({"notes":notes,"folders":folders,"reminders":plans,"events":events,"captures":captures,"calendarRules":crate::core::quick_notes_calendar_store::list_in(&c)?,"hasMore":notes.len()==limit as usize,"offset":offset,"limit":limit}))
 }
 
+fn calendar_entries(paths: &AppPaths, input: &Value) -> Result<Value, ManagerError> {
+    let from = text(input, "from");
+    let until = text(input, "until");
+    let start_at = input["startAt"].as_i64().unwrap_or(0);
+    let end_at = input["endAt"].as_i64().unwrap_or(0);
+    valid_date(&input["from"], "开始")?;
+    valid_date(&input["until"], "结束")?;
+    if from.is_empty() || until <= from || start_at <= 0 || !(1..=45 * 86_400_000).contains(&(end_at.saturating_sub(start_at))) {
+        return Err(fail("日历日期范围无效"));
+    }
+    let c = open(paths)?;
+    // 发生日、待办截止日和提醒分别匹配，便签的创建日期不限制后两者。
+    let notes = query(&c, "SELECT payload_json AS payloadJson FROM quick_notes n
+        WHERE n.lifecycle = 'active' AND (
+          (json_extract(n.payload_json,'$.occurredOn') >= ?1 AND json_extract(n.payload_json,'$.occurredOn') < ?2)
+          OR (nullif(json_extract(n.payload_json,'$.occurredOn'),'') IS NULL AND n.created_at >= ?3 AND n.created_at < ?4)
+          OR EXISTS (SELECT 1 FROM json_each(n.payload_json,'$.tasks') t
+            WHERE json_extract(t.value,'$.status') <> 'cancelled' AND (
+              (json_extract(t.value,'$.dueAt') >= ?3 AND json_extract(t.value,'$.dueAt') < ?4)
+              OR (coalesce(json_extract(t.value,'$.dueAt'),0) = 0
+                AND json_extract(t.value,'$.dueDate') >= ?1 AND json_extract(t.value,'$.dueDate') < ?2)
+            ))
+          OR EXISTS (SELECT 1 FROM quick_note_reminders r WHERE r.note_id = n.id
+            AND r.enabled = 1 AND r.next_fire_at >= ?3 AND r.next_fire_at < ?4)
+        )", &[&from, &until, &start_at, &end_at])?;
+    let reminders = query(&c, "SELECT r.id,r.note_id AS noteId,r.enabled,r.next_fire_at AS nextFireAt
+        FROM quick_note_reminders r JOIN quick_notes n ON n.id = r.note_id
+        WHERE n.lifecycle = 'active' AND r.enabled = 1 AND r.next_fire_at >= ?1 AND r.next_fire_at < ?2",
+        &[&start_at, &end_at])?;
+    Ok(json!({
+        "notes": notes.into_iter().map(|row| row["payload"].clone()).collect::<Vec<_>>(),
+        "reminders": reminders,
+        "calendarRules": crate::core::quick_notes_calendar_store::list_in(&c)?
+    }))
+}
+
 fn valid_date(value: &Value,field: &str) -> Result<(),ManagerError> {
     if value.is_null() || value.as_str()==Some("") { return Ok(()); }
     let valid=value.as_str().and_then(|s|NaiveDate::parse_from_str(s,"%Y-%m-%d").ok().filter(|date|date.format("%Y-%m-%d").to_string()==s));
@@ -470,6 +506,7 @@ pub fn due_events(paths: &AppPaths,at: i64) -> Result<Vec<Value>,ManagerError> {
 pub fn dispatch(paths: &AppPaths,action: &str,input: &Value) -> Result<Value,ManagerError> {
     if action.starts_with("calendar-rule-"){return crate::core::quick_notes_calendar_store::dispatch(paths,action,input);}
     match action {
+        "calendar-entries" => calendar_entries(paths, input),
         "list"=>list(paths,input), "detail"=>detail(paths,text(input,"id")),
         "folders"=>Ok(json!({"folders":query(&open(paths)?,"SELECT id,kind,name,aliases_json AS aliasesJson,sort_order AS sortOrder,archived FROM quick_note_folders WHERE (?1='' OR kind=?1) ORDER BY sort_order,name",&[&text(input,"kind")])?})),
         "save"=>save(paths,input,"user"), "organize"=>organize(paths,input),

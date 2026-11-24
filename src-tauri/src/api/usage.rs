@@ -462,6 +462,18 @@ fn get_stats_data(paths: &AppPaths, input: Value) -> Result<Value, ManagerError>
     if input.get("statsScope").and_then(Value::as_str) == Some("provider") {
         return get_provider_stats_data(paths, &pricing_config, &pricing_index, &filters);
     }
+    if input.get("statsScope").and_then(Value::as_str) == Some("calendar") {
+        let start = number_value(filters.get("startAt"), 0);
+        let end = number_value(filters.get("endAt"), 0);
+        if start == 0 || !(1..=45 * 86_400_000).contains(&end.saturating_sub(start)) {
+            return Err(ManagerError::System("日历用量日期范围无效".into()));
+        }
+        let logs = query_usage_logs(paths, &filters)?
+            .iter()
+            .map(|log| enrich_usage_log(log, &pricing_config, &pricing_index))
+            .collect::<Vec<_>>();
+        return Ok(json!({"trends": create_usage_trend_stats(&logs, "day", &filters)}));
+    }
 
     let log_page = number_value(input.get("logPage"), 1).max(1) as usize;
     let log_page_size = number_value(input.get("logPageSize"), 20).max(1) as usize;
@@ -4345,6 +4357,66 @@ mod tests {
         assert_eq!(usage_store::revision(&paths).unwrap(), revision);
         let resolved = root.canonicalize().unwrap();
         assert!(resolved.starts_with(std::env::temp_dir().canonicalize().unwrap()));
+        std::fs::remove_dir_all(resolved).unwrap();
+    }
+
+    #[test]
+    fn calendar_usage_matches_daily_stats_within_the_requested_range() {
+        use chrono::{Local, TimeZone};
+
+        let root = std::env::temp_dir().join(format!(
+            "ai-manager-calendar-usage-{}",
+            uuid::Uuid::new_v4()
+        ));
+        let paths = resolve_app_paths(&root);
+        let midnight = |day| {
+            Local.with_ymd_and_hms(2026, 11, day, 0, 0, 0)
+                .earliest()
+                .unwrap()
+                .timestamp_millis() as u64
+        };
+        let start_at = midnight(18);
+        let second_day = midnight(19);
+        let end_at = midnight(20) - 1;
+        let logs = [start_at - 1, start_at, second_day - 1, second_day, end_at + 1]
+            .into_iter()
+            .enumerate()
+            .map(|(index, timestamp)| {
+                json!({
+                    "requestId": format!("calendar-{index}"), "rawPath": "calendar",
+                    "appType": "codex", "model": "test-model", "createdAt": timestamp,
+                    "inputTokens": 100, "outputTokens": 20, "cacheReadTokens": 40
+                })
+            })
+            .collect();
+        usage_store::replace_sessions(
+            &paths,
+            &[usage_store::UsageSessionUpdate {
+                raw_path: "calendar".into(),
+                app_type: "codex".into(),
+                updated_at: end_at,
+                logs,
+                records: Vec::new(),
+            }],
+        )
+        .unwrap();
+
+        let mut input = json!({"startAt":start_at,"endAt":end_at});
+        let standard = super::get_stats_data(&paths, input.clone()).unwrap();
+        input["statsScope"] = json!("calendar");
+        let calendar = super::get_stats_data(&paths, input).unwrap();
+        assert_eq!(calendar["trends"], standard["trends"]);
+        let days = calendar["trends"].as_array().unwrap();
+        assert_eq!(days.len(), 2);
+        assert_eq!(days[0]["date"], "2026/11/18");
+        assert_eq!(days[0]["requestCount"], 2);
+        assert_eq!(days[0]["actualTokens"], 240);
+        assert_eq!(days[1]["date"], "2026/11/19");
+        assert_eq!(days[1]["outputTokens"], 20);
+
+        let resolved = root.canonicalize().unwrap();
+        let temp_dir = std::env::temp_dir().canonicalize().unwrap();
+        assert_eq!(resolved.parent(), Some(temp_dir.as_path()));
         std::fs::remove_dir_all(resolved).unwrap();
     }
 

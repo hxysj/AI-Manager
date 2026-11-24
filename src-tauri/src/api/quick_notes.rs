@@ -122,7 +122,7 @@ impl QuickNotesService {
             return Ok(capture);
         }
         let result=store::dispatch(&context.paths,action,&input)?;
-        if !["list","detail","folders","capture-state","export","calendar-rule-list","calendar-rule-history"].contains(&action){app.emit("quick-notes:changed",json!({"id":result["id"]})).ok();}
+        if !["list","detail","folders","capture-state","export","calendar-entries","calendar-rule-list","calendar-rule-history"].contains(&action){app.emit("quick-notes:changed",json!({"id":result["id"]})).ok();}
         Ok(result)
     }
 }

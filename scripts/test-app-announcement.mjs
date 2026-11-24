@@ -251,6 +251,11 @@ const findUpdate = (className) =>
 // 首次进入显示公告，展示本身不会标记已读；未确认退出后仍会提示。
 let unmount = mount()
 await tick()
+assert.equal(mountedState.activeView, "calendar")
+assert.deepEqual(
+  mountedState.navItems.slice(0, 2).map((item) => item.id),
+  ["calendar", "providers"]
+)
 assert.equal(find("app-announcement-modal").length, 1)
 assert.equal(find("announcement-section-title").length, 2)
 assert.ok(find("announcement-item").some((node) => node.text.includes("截图")))
@@ -446,6 +451,21 @@ await tick()
 assert.equal(mountedState.showLogsTab, false)
 assert.equal(mountedState.activeView, "settings")
 assert.equal(mountedState.sidebarTitleClickCount, 0)
+unmount()
+
+// 主窗口按指定工具打开，日历也可进入同一个便签编辑入口。
+unmount = mount("?view=tools&tool=quick-notes")
+await tick()
+assert.equal(mountedState.activeView, "tools")
+assert.equal(mountedState.toolRequest.toolId, "quick-notes")
+mountedState.activeView = "calendar"
+mountedState.openNotesFromCalendar({ date: "2026-11-19" })
+await tick()
+assert.equal(mountedState.activeView, "tools")
+assert.deepEqual(mountedState.toolRequest, {
+  toolId: "quick-notes",
+  noteRequest: { date: "2026-11-19" }
+})
 unmount()
 
 for (const { filename, style } of styles) {

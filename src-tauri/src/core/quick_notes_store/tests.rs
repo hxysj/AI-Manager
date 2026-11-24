@@ -4,6 +4,47 @@ impl Fixture {fn new()->Self{let root=std::env::temp_dir().join(format!("quick-n
 impl Drop for Fixture {fn drop(&mut self){assert_eq!(self.root.parent(),Some(std::env::temp_dir().as_path()));std::fs::remove_dir_all(&self.root).ok();}}
 
 #[test]
+fn calendar_entries_find_old_notes_by_task_and_reminder_with_exclusive_end() {
+    let fixture = Fixture::new();
+    let date = Local::now().date_naive().succ_opt().unwrap();
+    let until = date.succ_opt().unwrap();
+    let midnight = |day: NaiveDate| {
+        day.and_hms_opt(0, 0, 0).unwrap().and_local_timezone(Local)
+            .earliest().unwrap().timestamp_millis()
+    };
+    let start_at = midnight(date);
+    let end_at = midnight(until);
+    let old = date.pred_opt().unwrap().to_string();
+    let payload = json!({
+        "from": date.to_string(), "until": until.to_string(),
+        "startAt": start_at, "endAt": end_at
+    });
+    for note in [
+        json!({"content":"当天记录","occurredOn":payload["from"]}),
+        json!({"content":"创建日兜底","capturedAt":start_at}),
+        json!({"content":"旧便签的待办","occurredOn":old,
+            "tasks":[{"title":"按日期截止","dueDate":payload["from"]}]}),
+        json!({"content":"旧便签的提醒","occurredOn":old,
+            "reminders":[{"nextFireAt":end_at - 1,"schedule":{"repeat":"once"}}]}),
+        json!({"content":"已归档","occurredOn":payload["from"],"lifecycle":"archived"}),
+        json!({"content":"右边界记录","occurredOn":payload["until"]}),
+        json!({"content":"右边界待办","occurredOn":old,
+            "tasks":[{"title":"次日零点截止","dueAt":end_at}]}),
+        json!({"content":"右边界提醒","occurredOn":old,
+            "reminders":[{"nextFireAt":end_at,"schedule":{"repeat":"once"}}]}),
+    ] {
+        save(&fixture.paths, &note, "ai").unwrap();
+    }
+    let entries = dispatch(&fixture.paths, "calendar-entries", &payload).unwrap();
+    let mut titles = entries["notes"].as_array().unwrap().iter()
+        .map(|note| text(note, "title")).collect::<Vec<_>>();
+    titles.sort_unstable();
+    assert_eq!(titles, ["创建日兜底", "当天记录", "旧便签的待办", "旧便签的提醒"]);
+    assert_eq!(entries["reminders"].as_array().unwrap().len(), 1);
+    assert_eq!(entries["reminders"][0]["nextFireAt"], end_at - 1);
+}
+
+#[test]
 fn date_fields_require_real_canonical_dates_and_report_the_invalid_field() {
     let f=Fixture::new();
     for field in ["occurredOn","dueDate"] {

@@ -111,6 +111,11 @@
           @refresh="refreshSessions"
         />
 
+        <CalendarView
+          v-else-if="activeView === 'calendar'"
+          @open-notes="openNotesFromCalendar"
+        />
+
         <ServiceProviderCenter
           v-else-if="
             activeView === 'providers' &&
@@ -480,6 +485,7 @@ import {
 } from "vue"
 import {
   BarChart3,
+  CalendarDays,
   Compass,
   Gauge,
   Info,
@@ -532,6 +538,9 @@ const ServiceProviderCenter = defineAsyncComponent(
 const ToolsView = defineAsyncComponent(
   () => import("@/features/tools/index.vue")
 )
+const CalendarView = defineAsyncComponent(
+  () => import("@/features/calendar/index.vue")
+)
 const AssistantView = defineAsyncComponent(
   () => import("@/features/assistant/index.vue")
 )
@@ -568,6 +577,7 @@ const SkillDrawer = defineAsyncComponent(
 )
 
 const baseNavItems = [
+  { id: "calendar", label: "日历", icon: CalendarDays },
   { id: "providers", label: "服务商", icon: Network },
   { id: "usage", label: "用量统计", icon: BarChart3 },
   { id: "skills", label: "技能", icon: ShieldCheck },
@@ -718,12 +728,17 @@ const state = reactive({
 })
 
 const activeView = ref(
-  baseNavItems.some((item) => item.id === queryView) ? queryView : "providers"
+  baseNavItems.some((item) => item.id === queryView) ? queryView : "calendar"
 )
 const showLogsTab = ref(false)
 // 主窗口重建时从 URL 恢复入口，已有窗口通过事件接收工具请求。
 const queryTool = new URLSearchParams(window.location.search).get("tool")
 const toolRequest = ref(queryTool ? { toolId: queryTool } : null)
+// 日历只传日期或便签 ID，由原有工具工作区打开编辑器。
+function openNotesFromCalendar(noteRequest) {
+  toolRequest.value = { toolId: "quick-notes", noteRequest }
+  activeView.value = "tools"
+}
 const assistantSettingsRequest = ref(queryTool === "assistant-settings" ? 1 : 0)
 if (assistantSettingsRequest.value) {
   activeView.value = "settings"

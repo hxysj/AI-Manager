@@ -267,6 +267,7 @@
         :providers="providers"
         :codex-accounts="codexAccounts"
         :runtime-models="runtimeModels"
+        :note-request="noteRequest"
       />
       <NetworkQualityView v-else-if="activeTool === 'network-quality'" />
       <MultiProtocolGateway
@@ -446,6 +447,7 @@ const toolItems = computed(() => getToolItems(props))
 const activeToolMeta = computed(
   () => toolItems.value.find((tool) => tool.id === activeTool.value) || null
 )
+const noteRequest = ref(null)
 
 function openTool(toolId) {
   if (toolId === "image-workbench") imageGenerationMode.value = "web"
@@ -454,6 +456,7 @@ function openTool(toolId) {
 
 function closeTool() {
   activeTool.value = ""
+  noteRequest.value = null
   gatewayStatus.value = { enabled: false, loading: false, busy: false }
 }
 
@@ -472,6 +475,7 @@ watch(
     if (!toolItems.value.some((tool) => tool.id === request.toolId)) return
     appliedToolRequest = request
     openTool(request.toolId)
+    noteRequest.value = request.noteRequest || null
     emit("tool-request-handled")
   },
   { immediate: true }

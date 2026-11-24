@@ -39,6 +39,11 @@ export const changed=()=>{for(const handle of handlers)handle({})}
 export const quickNotesApi={onChanged:async fn=>{handlers.add(fn);return()=>handlers.delete(fn)},onOpen:async fn=>{openHandlers.add(fn);return()=>openHandlers.delete(fn)},invoke:async(action,p={})=>{
  p=JSON.parse(JSON.stringify(p))
  calls.push({action,p:JSON.parse(JSON.stringify(p))})
+ if(action==='calendar-entries')return structuredClone({
+  notes:state.notes.filter(note=>note.lifecycle==='active'),
+  reminders:state.reminders,
+  calendarRules:state.calendarRules
+ })
  if(action==='calendar-rule-save'){
   const old=state.calendarRules.find(rule=>rule.id===p.id)
   if(old&&p.revision!==old.revision)throw Error('测试日历修订号不匹配')
@@ -111,12 +116,21 @@ export const quickNotesApi={onChanged:async fn=>{handlers.add(fn);return()=>hand
  return {ok:true}
 }}
 export const settingsApi={saveSettings:async()=>{throw Error('速记模型选择不应改写助手配置')}}
-export const request=async(channel,p)=>channel==='local-models:installed'?{models:[{id:'qwen3.5-0.8b'}]}:{}
+export const request=async(channel,p)=>{
+ if(channel==='usage:stats'){
+  calls.push({action:channel,p})
+  const at=new Date(2026,10,19,12).getTime()
+  return {status:'ok',data:{trends:p.startAt<=at&&p.endAt>=at?[{date:'2026/11/19',requestCount:7,actualTokens:1200,outputTokens:350}]:[]}}
+ }
+ return channel==='local-models:installed'?{models:[{id:'qwen3.5-0.8b'}]}:{}
+}
+export const usageApi={getUsageStats:payload=>request('usage:stats',payload)}
 export const subscribeReady=async()=>()=>{}
 `
 const fixture = `
-import {createApp,nextTick} from 'vue'
+import {createApp,h,nextTick,ref} from 'vue'
 import Notes from './src/features/quick-notes/index.vue'
+import Calendar from './src/features/calendar/index.vue'
 import {calls,state,openHandlers,changed} from 'notes-mock'
 const assert=(value,message)=>{if(!value)throw Error(message)}
 const pause=()=>new Promise(resolve=>setTimeout(resolve,40))
@@ -126,14 +140,28 @@ const set=(element,value)=>{assert(element,'找不到输入控件');element.valu
 const local=value=>new Date(value-new Date(value).getTimezoneOffset()*60000).toISOString().slice(0,16)
 const day=date=>document.querySelector('.calendar-day[data-date="'+date+'"]')
 const period=(year,month)=>{set(document.querySelector('[aria-label=日历年份]'),String(year));set(document.querySelector('[aria-label=日历月份]'),String(month-1))}
-const workspace=createApp(Notes,{providers:[],codexAccounts:[],runtimeModels:[]}).mount('#app')
+const route=ref('calendar')
+const request=ref(null)
+const notes=ref(null)
+const workspace={
+ refresh:()=>notes.value.refresh(),
+ focusSearch:()=>notes.value.focusSearch(),
+ toggleFilters:()=>notes.value.toggleFilters(),
+ openOrganizer:()=>notes.value.openOrganizer()
+}
+const toCalendar=()=>{route.value='calendar'}
+const toNotes=(payload=null)=>{request.value=payload;route.value='notes'}
+createApp({
+ setup:()=>()=>route.value==='calendar'
+  ?h(Calendar,{onOpenNotes:toNotes})
+  :h(Notes,{ref:notes,noteRequest:request.value,providers:[],codexAccounts:[],runtimeModels:[]})
+}).mount('#app')
 async function test(){
  for(let i=0;i<30&&!document.querySelector('.calendar-day');i++)await pause()
  assert(document.querySelectorAll('.calendar-day').length===42,'默认月视图没有显示六周')
  assert(!document.querySelector('.notes-header')&&!document.querySelector('.notes-filters'),'日历不应有列表头部')
- assert(document.querySelectorAll('.notes-nav-section').length===3,'侧栏没有按工作区、提醒、归档分组')
  const calendar=document.querySelector('.note-calendar').getBoundingClientRect()
- assert(Math.abs(calendar.bottom-document.querySelector('.quick-notes').getBoundingClientRect().bottom)<20,'日历未填满可用高度')
+ assert(Math.abs(calendar.bottom-document.querySelector('#app').getBoundingClientRect().bottom)<20,'日历未填满可用高度')
  button('周视图').click();await settle();assert(document.querySelectorAll('.calendar-day').length===7,'周视图没有显示七天')
  button('列表').click();await settle();assert(document.querySelector('.calendar-list'),'没有切换到日程列表')
  button('月视图').click();await settle();period(2026,11);await settle();day('2026-11-18').click();await settle()
@@ -192,8 +220,13 @@ async function test(){
  assert(rules.querySelector('.rules-description').getClientRects().length,'AI 设置未显示输入区')
  rules.querySelector('.base-modal__close').click();await settle()
  day('2026-11-19').click();await settle();assert(document.querySelector('.calendar-agenda').textContent.includes('验证重启后的提醒恢复'),'截止日没有关联待办')
+ assert(day('2026-11-19').querySelector('.calendar-dot-usage'),'有模型请求的日期没有用量标记')
+ const usage=[...document.querySelectorAll('.calendar-usage-metrics dd')]
+ assert(usage[0].textContent==='7'&&usage[1].title===(1200).toLocaleString()&&usage[2].title===(350).toLocaleString(),'当日用量和所选日期不匹配')
+ assert(calls.some(call=>call.action==='usage:stats'&&call.p.statsScope==='calendar'),'日历没有请求独立的按日用量')
  document.querySelector('[aria-label=在这天新建便签]').click();await settle()
  let form=document.querySelector('.note-form')
+ assert(document.querySelectorAll('.notes-nav-section').length===3&&!document.querySelector('.note-calendar'),'日历新建没有打开独立的便签工具')
  assert(!document.querySelector('.note-editor-inline')&&form,'新建没有打开右侧抽屉')
  assert(form.querySelector('input[type=date]').value==='2026-11-19','新建没有带入日历日期')
  set(form.querySelector('.editor-title-field input'),'界面回归记录')
@@ -386,26 +419,31 @@ async function test(){
  assert(JSON.parse(localStorage.getItem('quick-notes:new-draft')).content==='本机草稿内容','草稿没有存入本机')
  document.querySelector('[aria-label=关闭便签编辑器]').click();await settle();button('新建便签').click();await settle()
  assert(document.querySelector('.body-input').value==='本机草稿内容','未恢复本机草稿');document.querySelector('[aria-label=关闭便签编辑器]').click();localStorage.removeItem('quick-notes:new-draft');await settle()
- button('日历日程').click();await settle();period(2028,1);await settle();day('2028-01-31').click();document.querySelector('[aria-label=下个月]').click();await settle();assert(day('2028-02-29').getAttribute('aria-pressed')==='true','闰年月末切换错误')
+ toCalendar();await settle();period(2028,1);await settle();day('2028-01-31').click();document.querySelector('[aria-label=下个月]').click();await settle();assert(day('2028-02-29').getAttribute('aria-pressed')==='true','闰年月末切换错误')
  period(2026,12);await settle();day('2026-12-31').click();document.querySelector('[aria-label=下个月]').click();await settle();assert(day('2027-01-31').getAttribute('aria-pressed')==='true','跨年切换错误')
  period(2026,11);await settle();day('2026-11-18').click();await settle()
+ document.querySelector('.calendar-entry').click();await settle()
+ assert(document.querySelector('.note-editor-inline'),'日历事项没有打开原便签详情')
  await workspace.focusSearch();await settle()
  assert(document.activeElement===document.querySelector('.notes-search input'),'顶部搜索入口没有聚焦列表搜索')
  workspace.toggleFilters();await settle();assert(!document.querySelector('.notes-filters'),'顶部筛选入口没有收起筛选')
  workspace.toggleFilters();await settle();assert(document.querySelector('.notes-filters'),'顶部筛选入口没有恢复筛选')
  workspace.openOrganizer();await settle();assert(document.querySelector('.notes-organizer'),'顶部目录入口没有打开目录管理')
  document.querySelector('.notes-organizer').closest('.base-modal').querySelector('.base-modal__close').click();await settle()
- await workspace.refresh();await settle();button('日历日程').click();await settle()
+ await workspace.refresh();await settle();toCalendar();await settle()
+ period(2026,11);await settle();day('2026-11-18').click();await settle()
  const scene=__NOTES_SCENE__
- if(scene==='list'){button('全部记录').click();await settle()}
+ if(scene==='list'){toNotes();await settle()}
  if(scene==='detail'){document.querySelector('.calendar-entry').click();await settle()}
  if(scene==='drawer'){document.querySelector('[aria-label=在这天新建便签]').click();await settle()}
- if(scene==='smart'){button('智能记录').click();await settle();set(modal.querySelector('.smart-input'),'修复登录页与预约页分值不同步的问题，补充回归验证。');await settle();button('分析并预览',modal).click();await settle();await settle()}
+ if(scene==='smart'){button('智能记录').click();await settle();const smart=document.querySelector('.smart-record-modal');set(smart.querySelector('.smart-input'),'修复登录页与预约页分值不同步的问题，补充回归验证。');await settle();button('分析并预览',smart).click();await settle();await settle()}
  if(scene==='rules'){button('休假规则').click();await settle()}
  if(scene==='leave'){day('2026-11-18').click();button('请假').click();await settle();button('时间范围',leaveDialog()).click();await settle()}
+ if(scene==='usage'){day('2026-11-19').click();await settle()}
  if(scene==='leave-edit'){period(2026,11);await settle();await rightClick('2026-11-25');contextItem('编辑请假').click();await settle()}
  if(scene==='leave-dates'){period(2026,11);await settle();day('2026-11-26').click();await settle()}
- assert(document.querySelector('.quick-notes').scrollWidth<=document.querySelector('.quick-notes').clientWidth,'便签工作区横向溢出')
+ const visibleWorkspace=document.querySelector('.quick-notes,.calendar-view')
+ assert(visibleWorkspace.scrollWidth<=visibleWorkspace.clientWidth,'工作区横向溢出')
  document.getElementById('result').textContent='PASS: 便签布局重构，侧栏分组、全高日历、月周列表、农历、抽屉新建、正文工具栏、草稿恢复、双栏详情、提醒校验、AI 预览确认与原文保存'
 }
 async function quickNotesMockAi(){

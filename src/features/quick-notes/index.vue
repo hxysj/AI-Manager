@@ -61,10 +61,7 @@
         </button>
       </nav>
     </aside>
-    <main
-      class="notes-main"
-      :class="{ 'notes-main-calendar': view === 'calendar' || !!editing?.id }"
-    >
+    <main class="notes-main" :class="{ 'notes-main-detail': !!editing?.id }">
       <QuickNoteEditor
         v-if="editing?.id"
         ref="noteEditor"
@@ -76,7 +73,7 @@
         @saved="saved"
       />
       <template v-else>
-        <header v-if="view !== 'calendar'" class="notes-header">
+        <header class="notes-header">
           <div class="notes-heading">
             <h2 class="notes-title">{{ heading }}</h2>
             <span v-if="view !== 'reminders'" class="notes-caption">
@@ -177,10 +174,7 @@
           </div>
         </section>
         <template v-else>
-          <div
-            v-if="view !== 'calendar' && filtersVisible"
-            class="notes-filters"
-          >
+          <div v-if="filtersVisible" class="notes-filters">
             <div class="notes-toolbar">
               <label class="notes-search">
                 <Search :size="16" />
@@ -445,68 +439,47 @@
           </section>
           <div
             class="notes-workspace"
-            :class="
-              view === 'calendar'
-                ? 'notes-display-calendar'
-                : `notes-display-${display}`
-            "
+            :class="`notes-display-${display}`"
             :aria-busy="loading"
           >
-            <QuickNoteCalendar
-              v-if="view === 'calendar'"
-              :notes="filtered"
-              :reminders="state.reminders"
-              :rules="state.calendarRules || []"
-              @open="edit"
-              @create="newNote"
-              @smart-record="openSmartCapture"
-            />
-            <template v-else>
-              <section
-                v-for="section in sections"
-                :key="section.id"
-                class="notes-group"
-              >
-                <h3 v-if="section.title" class="notes-group-title">
-                  {{ section.title }}<span>{{ section.items.length }}</span>
-                </h3>
-                <div class="notes-cards">
-                  <QuickNoteCard
-                    v-for="note in section.items"
-                    :key="note.id"
-                    :note="note"
-                    :folders="state.folders"
-                    :next-reminder="nextReminder(note.id)"
-                    :selected="selected.has(note.id)"
-                    :summary-capture="summariesByNote.get(note.id)"
-                    @cancel-summary="cancelCapture"
-                    @open="edit"
-                    @reminder="openReminder"
-                    @select="toggleSelect"
-                    @pin="pin"
-                    @task="toggleTask"
-                  />
-                </div>
-              </section>
-              <div v-if="!filtered.length && !loading" class="notes-empty">
-                <NotebookPen :size="34" /><span>{{
-                  search || activeFilterCount
-                    ? "没有找到匹配的记录"
-                    : "从一条便签开始"
-                }}</span
-                ><span class="notes-caption"
-                  >记住要做的事，也留下已经完成的事。</span
-                ><button class="notes-button" type="button" @click="newNote">
-                  写一条便签
-                </button>
-              </div>
-            </template>
-            <p
-              v-if="view === 'calendar' && state.hasMore"
-              class="notes-caption"
+            <section
+              v-for="section in sections"
+              :key="section.id"
+              class="notes-group"
             >
-              日历显示已加载的记录，加载更多可查看其余事项。
-            </p>
+              <h3 v-if="section.title" class="notes-group-title">
+                {{ section.title }}<span>{{ section.items.length }}</span>
+              </h3>
+              <div class="notes-cards">
+                <QuickNoteCard
+                  v-for="note in section.items"
+                  :key="note.id"
+                  :note="note"
+                  :folders="state.folders"
+                  :next-reminder="nextReminder(note.id)"
+                  :selected="selected.has(note.id)"
+                  :summary-capture="summariesByNote.get(note.id)"
+                  @cancel-summary="cancelCapture"
+                  @open="edit"
+                  @reminder="openReminder"
+                  @select="toggleSelect"
+                  @pin="pin"
+                  @task="toggleTask"
+                />
+              </div>
+            </section>
+            <div v-if="!filtered.length && !loading" class="notes-empty">
+              <NotebookPen :size="34" /><span>{{
+                search || activeFilterCount
+                  ? "没有找到匹配的记录"
+                  : "从一条便签开始"
+              }}</span
+              ><span class="notes-caption"
+                >记住要做的事，也留下已经完成的事。</span
+              ><button class="notes-button" type="button" @click="newNote">
+                写一条便签
+              </button>
+            </div>
             <button
               v-if="state.hasMore"
               class="notes-button notes-load"
@@ -705,7 +678,6 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import {
   Archive,
   Bell,
-  CalendarDays,
   CheckCheck,
   Clock3,
   Download,
@@ -727,11 +699,11 @@ import BaseModal from "@/components/BaseModal.vue"
 import QuickNoteSmartCapture from "./components/QuickNoteSmartCapture.vue"
 import QuickNoteCard from "./components/QuickNoteCard.vue"
 import QuickNoteEditor from "./components/QuickNoteEditor.vue"
-import QuickNoteCalendar from "./components/QuickNoteCalendar.vue"
 import { quickNotesApi } from "@/api/modules/quick-notes"
 import { localInput, noteTypes, workStates } from "./constant"
 import { formatDateTime } from "@/utils/formatters"
 const props = defineProps({
+  noteRequest: { type: Object, default: null },
   providers: { type: Array, default: () => [] },
   codexAccounts: { type: Array, default: () => [] },
   runtimeModels: { type: Array, default: () => [] }
@@ -743,7 +715,7 @@ const state = ref({
   events: [],
   captures: []
 })
-const view = ref("calendar")
+const view = ref("all")
 const groupId = ref("")
 const categoryId = ref("")
 const workStatus = ref("")
@@ -779,7 +751,6 @@ const folderDraft = ref({
 })
 const views = [
   { id: "all", label: "全部记录", icon: StickyNote },
-  { id: "calendar", label: "日历日程", icon: CalendarDays },
   { id: "inbox", label: "收件箱", icon: Mail },
   { id: "todo", label: "待办事项", icon: ListTodo },
   { id: "today", label: "今日提醒", icon: Bell },
@@ -791,7 +762,7 @@ const views = [
   { id: "trash", label: "回收站", icon: Trash2 }
 ]
 const navSections = [
-  { title: "工作区", ids: ["all", "calendar", "inbox", "todo"] },
+  { title: "工作区", ids: ["all", "inbox", "todo"] },
   { title: "提醒", ids: ["today", "overdue"] },
   {
     title: "归档",
@@ -839,8 +810,6 @@ const unread = computed(
 )
 const filtered = computed(() =>
   state.value.notes.filter((note) => {
-    // 日历显示完整事项，列表视图的筛选条件不影响日历。
-    if (view.value === "calendar") return true
     const date =
       note.occurredOn || new Date(note.createdAt).toLocaleDateString("sv-SE")
     if (
@@ -893,7 +862,6 @@ const summariesByNote = computed(() => {
   return summaries
 })
 const visibleCaptures = computed(() => {
-  if (view.value === "calendar") return []
   const inAll = view.value === "all" && !groupId.value
   const visibleIds = new Set(filtered.value.map((note) => note.id))
   return state.value.captures.filter((capture) => {
@@ -960,9 +928,9 @@ async function load(more = false, keepLoaded = false) {
       lifecycle: ["trash", "archived"].includes(view.value)
         ? view.value
         : "active",
-      search: view.value === "calendar" ? "" : search.value,
+      search: search.value,
       groupId: groupId.value,
-      categoryId: view.value === "calendar" ? "" : categoryId.value,
+      categoryId: categoryId.value,
       type: view.value === "worklog" ? "worklog" : "",
       workStatus: view.value === "worklog" ? workStatus.value : "",
       offset: more === true ? state.value.notes.length : 0,
@@ -1023,7 +991,7 @@ async function focusSearch() {
   searchInput.value.focus()
 }
 function toggleFilters() {
-  if (view.value === "calendar" || editing.value) {
+  if (editing.value) {
     selectView("all")
     filtersVisible.value = true
   } else filtersVisible.value = !filtersVisible.value
@@ -1355,6 +1323,16 @@ async function completeEvent(event) {
     error.value = String(failure)
   }
 }
+// 主日历交给现有的编辑入口处理，工具独立打开时仍直接进入全部记录。
+watch(
+  () => props.noteRequest,
+  (request) => {
+    if (request?.id) edit(request)
+    else if (request?.date) newNote(request.date)
+    else if (request?.smart) openSmartCapture()
+  },
+  { immediate: true }
+)
 watch([groupBy, display], () => {
   localStorage.setItem("quick-notes:group-by", groupBy.value)
   localStorage.setItem("quick-notes:display", display.value)
@@ -1373,6 +1351,7 @@ onMounted(async () => {
       return
     }
     await load()
+    if (props.noteRequest) return
     const options = await quickNotesApi.invoke("options")
     if (options.openNoteId) await edit({ id: options.openNoteId })
     else if (typeof options.draft === "string")
@@ -1625,7 +1604,7 @@ onBeforeUnmount(() => {
       var(--color-panel-soft)
     );
     overflow: auto;
-    &.notes-main-calendar {
+    &.notes-main-detail {
       padding: 0;
       border: 0;
       border-radius: 0;
@@ -1849,10 +1828,6 @@ onBeforeUnmount(() => {
       display: flex;
       flex-direction: column;
       gap: 20px;
-      &.notes-display-calendar {
-        flex: 1;
-        min-height: 0;
-      }
       .notes-group {
         .notes-group-title {
           display: flex;

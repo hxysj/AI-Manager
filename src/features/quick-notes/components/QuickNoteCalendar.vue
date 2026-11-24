@@ -19,6 +19,15 @@
           <button
             class="calendar-button"
             type="button"
+            aria-label="刷新日历"
+            title="刷新日历"
+            @click="$emit('refresh')"
+          >
+            <RefreshCw :size="15" />
+          </button>
+          <button
+            class="calendar-button"
+            type="button"
             @click="rulesVisible = true"
           >
             休假规则
@@ -100,6 +109,9 @@
           </button>
         </div>
       </header>
+      <p v-if="entriesError" class="calendar-error" role="alert">
+        {{ entriesError }}
+      </p>
       <div
         v-if="calendarView !== 'list'"
         class="calendar-week"
@@ -137,7 +149,7 @@
               ? { color: day.schedule.color }
               : {}
           "
-          :aria-label="`${day.key}，农历${day.lunar}${day.scheduleLabel ? `，${day.scheduleLabel}` : ''}${day.leaves.length ? `，${leaveSummary(day)}` : ''}，${day.entries.length} 项事项`"
+          :aria-label="`${day.key}，农历${day.lunar}${day.scheduleLabel ? `，${day.scheduleLabel}` : ''}${day.leaves.length ? `，${leaveSummary(day)}` : ''}，${day.entries.length} 项事项${day.usage ? `，${day.usage.requestCount} 次模型请求` : ''}`"
           :aria-current="day.key === today ? 'date' : undefined"
           :aria-pressed="day.key === selectedDate"
           @click="selectDate(day.key)"
@@ -152,7 +164,12 @@
           </span>
           <span class="calendar-lunar">{{ day.lunar }}</span>
           <span
-            v-if="day.leaves.length || day.scheduleLabel || day.entries.length"
+            v-if="
+              day.leaves.length ||
+              day.scheduleLabel ||
+              day.entries.length ||
+              day.usage
+            "
             class="calendar-corner"
           >
             <span
@@ -169,7 +186,10 @@
               :title="day.schedule.title"
               >{{ day.scheduleLabel }}</span
             >
-            <span v-if="day.entries.length" class="calendar-markers">
+            <span
+              v-if="day.entries.length || day.usage"
+              class="calendar-markers"
+            >
               <span
                 v-if="day.entries.some((item) => item.kind === 'note')"
                 class="calendar-dot calendar-dot-note"
@@ -182,7 +202,13 @@
                 v-if="day.entries.some((item) => item.kind === 'reminder')"
                 class="calendar-dot calendar-dot-reminder"
               ></span>
-              <span class="calendar-day-count">{{ day.entries.length }}</span>
+              <span
+                v-if="day.usage"
+                class="calendar-dot calendar-dot-usage"
+              ></span>
+              <span v-if="day.entries.length" class="calendar-day-count">{{
+                day.entries.length
+              }}</span>
             </span>
           </span>
           <span v-if="calendarView === 'week'" class="calendar-week-entries"
@@ -210,6 +236,10 @@
           >
             {{ day.key.slice(5) }}<span>农历 {{ day.lunar }}</span>
           </button>
+          <span v-if="day.usage" class="calendar-list-usage">
+            <BarChart3 :size="14" />模型用量 ·
+            {{ day.usage.requestCount }} 次请求
+          </span>
           <button
             v-for="rule in day.leaves"
             :key="rule.id"
@@ -262,6 +292,9 @@
         <span class="calendar-legend-item">
           <i class="calendar-dot calendar-dot-leave"></i>请假
           {{ leaveDayCount }} 天
+        </span>
+        <span class="calendar-legend-item">
+          <i class="calendar-dot calendar-dot-usage"></i>模型用量
         </span>
         <span class="calendar-caption"
           >本月事项 · 共
@@ -325,6 +358,45 @@
           {{ leaveDayLabel(rule, selectedDate) }}
         </button>
       </header>
+      <section
+        class="calendar-usage"
+        aria-label="当日模型用量"
+        :aria-busy="usageLoading"
+      >
+        <h3 class="calendar-usage-title"><BarChart3 :size="15" />模型用量</h3>
+        <p
+          v-if="usageLoading || usageError || !selectedDay?.usage"
+          class="calendar-usage-message"
+        >
+          {{
+            usageLoading ? "正在读取用量…" : usageError || "当天暂无用量记录"
+          }}
+        </p>
+        <dl v-else class="calendar-usage-metrics">
+          <div class="calendar-usage-metric">
+            <dt>请求次数</dt>
+            <dd>{{ selectedDay.usage.requestCount.toLocaleString() }}</dd>
+          </div>
+          <div class="calendar-usage-metric">
+            <dt>实际 Token</dt>
+            <dd :title="selectedDay.usage.actualTokens?.toLocaleString()">
+              {{
+                formatTokenCountParts(selectedDay.usage.actualTokens ?? null)
+                  .compact
+              }}
+            </dd>
+          </div>
+          <div class="calendar-usage-metric">
+            <dt>输出 Token</dt>
+            <dd :title="selectedDay.usage.outputTokens?.toLocaleString()">
+              {{
+                formatTokenCountParts(selectedDay.usage.outputTokens ?? null)
+                  .compact
+              }}
+            </dd>
+          </div>
+        </dl>
+      </section>
       <div v-if="selectedEntries.length" class="calendar-agenda-list">
         <button
           v-for="entry in selectedEntries"
@@ -375,8 +447,9 @@
       </div>
       <div v-else class="calendar-agenda-empty">
         <CalendarDays :size="30" />
-        <span>这一天，留一点空白</span>
-        <span class="calendar-caption">写下想法，或安排一件要做的事。</span>
+        <span>{{
+          entriesLoading ? "正在读取事项…" : "当天暂无便签、待办或提醒"
+        }}</span>
       </div>
     </aside>
     <span
@@ -428,9 +501,11 @@ import {
   onBeforeUnmount,
   onMounted,
   ref,
-  shallowRef
+  shallowRef,
+  watch
 } from "vue"
 import {
+  BarChart3,
   Bell,
   CalendarClock,
   CalendarDays,
@@ -443,11 +518,12 @@ import {
   CalendarRange,
   List,
   PanelRightClose,
-  PanelRightOpen
+  PanelRightOpen,
+  RefreshCw
 } from "lucide-vue-next"
 import { ElDropdown, ElDropdownItem, ElDropdownMenu } from "element-plus"
 import { localInput } from "@/features/quick-notes/constant"
-import { formatDateTime } from "@/utils/formatters"
+import { formatDateTime, formatTokenCountParts } from "@/utils/formatters"
 
 import BaseModal from "@/components/BaseModal.vue"
 import CalendarRuleSettings from "./CalendarRuleSettings.vue"
@@ -458,9 +534,20 @@ const agendaVisible = ref(true)
 const props = defineProps({
   rules: { type: Array, default: () => [] },
   notes: { type: Array, default: () => [] },
-  reminders: { type: Array, default: () => [] }
+  reminders: { type: Array, default: () => [] },
+  usageByDate: { type: Map, default: () => new Map() },
+  usageLoading: { type: Boolean, default: false },
+  usageError: { type: String, default: "" },
+  entriesLoading: { type: Boolean, default: false },
+  entriesError: { type: String, default: "" }
 })
-defineEmits(["open", "create", "smart-record"])
+const emit = defineEmits([
+  "open",
+  "create",
+  "smart-record",
+  "range-change",
+  "refresh"
+])
 const today = ref(localInput(Date.now()).slice(0, 10))
 const selectedDate = ref(today.value)
 const calendarView = ref("month")
@@ -488,6 +575,30 @@ const lunarFormatter = new Intl.DateTimeFormat("zh-CN-u-ca-chinese", {
 })
 const years = computed(() =>
   Array.from({ length: 21 }, (_, index) => year.value - 10 + index)
+)
+
+const firstGridDay = computed(() => {
+  const date = new Date(year.value, month.value, 1)
+  date.setDate(1 - ((date.getDay() + 6) % 7))
+  return date
+})
+// 相邻月份的日期也在月格中，统一读取六周的本地日期范围。
+watch(
+  firstGridDay,
+  (first) => {
+    const until = new Date(
+      first.getFullYear(),
+      first.getMonth(),
+      first.getDate() + 42
+    )
+    emit("range-change", {
+      from: localInput(first.getTime()).slice(0, 10),
+      until: localInput(until.getTime()).slice(0, 10),
+      startAt: first.getTime(),
+      endAt: until.getTime()
+    })
+  },
+  { immediate: true }
 )
 
 // 使用本地日期与浏览器农历数据，不将日期转为 UTC，也不推测节假日调休。
@@ -534,16 +645,21 @@ const entriesByDate = computed(() => {
   return result
 })
 const days = computed(() => {
-  const first = new Date(year.value, month.value, 1, 12)
-  const offset = (first.getDay() + 6) % 7
+  const first = firstGridDay.value
   return Array.from({ length: 42 }, (_, index) => {
-    const date = new Date(year.value, month.value, index - offset + 1, 12)
+    const date = new Date(
+      first.getFullYear(),
+      first.getMonth(),
+      first.getDate() + index,
+      12
+    )
     const key = localInput(date.getTime()).slice(0, 10)
     const lunar = lunarFormatter.formatToParts(date)
     const lunarDay = Number(lunar.find((part) => part.type === "day").value)
     const { schedule, leaves } = calendarDay(date, props.rules)
     return {
       key,
+      usage: props.usageByDate.get(key),
       schedule,
       leaves,
       // 日期格只展示简短状态，规则名称保留在标签悬浮提示和规则设置中。
@@ -569,7 +685,8 @@ const days = computed(() => {
 })
 const listDays = computed(() =>
   days.value.filter(
-    (day) => !day.outside && (day.entries.length || day.leaves.length)
+    (day) =>
+      !day.outside && (day.entries.length || day.leaves.length || day.usage)
   )
 )
 const leaveDayCount = computed(
@@ -714,6 +831,11 @@ onBeforeUnmount(() => clearInterval(clock))
   gap: 20px;
   min-width: 0;
   min-height: 0;
+  .calendar-error {
+    margin: 0 0 8px;
+    color: var(--color-danger);
+    font-size: var(--font-size-sm);
+  }
   .calendar-menu-anchor {
     position: fixed;
     width: 1px;
@@ -769,6 +891,9 @@ onBeforeUnmount(() => clearInterval(clock))
     }
     &.calendar-dot-leave {
       background: var(--calendar-leave-color);
+    }
+    &.calendar-dot-usage {
+      background: #9277ba;
     }
   }
   .calendar-month {
@@ -1009,6 +1134,14 @@ onBeforeUnmount(() => clearInterval(clock))
       .calendar-list-day {
         padding: 12px 0;
         border-bottom: 1px solid var(--color-line);
+        .calendar-list-usage {
+          display: flex;
+          align-items: center;
+          gap: 10px;
+          padding: 8px 10px;
+          color: var(--color-text-muted);
+          font-size: 12px;
+        }
         .calendar-list-date {
           display: flex;
           align-items: center;
@@ -1088,6 +1221,42 @@ onBeforeUnmount(() => clearInterval(clock))
     border: 1px solid var(--color-line);
     border-radius: 19px;
     background: var(--color-panel-soft);
+    .calendar-usage {
+      flex: none;
+      padding: 13px 3px;
+      border-bottom: 1px solid var(--color-line);
+      .calendar-usage-title {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin: 0 0 10px;
+        font: inherit;
+      }
+      .calendar-usage-message {
+        margin: 0;
+        color: var(--color-text-muted);
+        font-size: var(--font-size-xs);
+      }
+      .calendar-usage-metrics {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+        margin: 0;
+        .calendar-usage-metric {
+          min-width: 0;
+          :deep(dt) {
+            color: var(--color-text-muted);
+            font-size: var(--font-size-xs);
+          }
+          :deep(dd) {
+            margin: 4px 0 0;
+            font-size: var(--font-size-lg);
+            font-variant-numeric: tabular-nums;
+            overflow-wrap: anywhere;
+          }
+        }
+      }
+    }
     .calendar-agenda-head {
       display: flex;
       flex-direction: column;
@@ -1210,6 +1379,26 @@ onBeforeUnmount(() => clearInterval(clock))
       min-height: 0;
       color: var(--color-text-muted);
       font-size: 12px;
+    }
+  }
+}
+
+@container (max-width: 690px) {
+  .note-calendar {
+    flex-direction: column;
+    gap: 12px;
+    overflow: auto;
+    .calendar-month {
+      flex: none;
+      min-height: 520px;
+      padding: 12px;
+    }
+    .calendar-agenda {
+      flex: none;
+      min-width: 0;
+      .calendar-agenda-empty {
+        padding: 22px 0;
+      }
     }
   }
 }
