@@ -7,6 +7,44 @@ import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { createInterface } from "node:readline"
 import { randomUUID } from "node:crypto"
+import modules from "../src-tauri/node/assistant-tools/modules.json" with { type: "json" }
+import catalog from "../src-tauri/node/assistant-tools/catalog.json" with { type: "json" }
+import { moduleTools } from "../src-tauri/node/assistant-tools/app-api.mjs"
+
+// 不访问外部网络，验证后台日历查询与页面共用公共补班、自定义调休和请假规则。
+const originalFetch = globalThis.fetch
+globalThis.fetch = async () => ({
+  ok: true,
+  json: async () => ({
+    year: 2026,
+    days: [{ date: "2026-10-10", name: "国庆节", isOffDay: false }]
+  })
+})
+try {
+  const calendar = moduleTools.find(tool => tool.id === "app_calendar")
+  const startDate = "2026-10-10"
+  const leave = { kind: "leave", repeat: "once", enabled: true, startDate, startTime: "14:00", endTime: "17:00" }
+  const weekend = { kind: "rest", repeat: "weekly", enabled: true, weekdays: [5], priority: 99 }
+  const makeup = { kind: "makeup", workStatus: "rest", repeat: "once", enabled: true, startDate }
+  const input = { action: "day", payload: { date: startDate } }
+  const rules = [leave, weekend]
+  async function readRules(name, args) {
+    assert.equal(name, "app_calendar")
+    assert.equal(args.action, "calendar-rule-list")
+    return { rules }
+  }
+  const publicDay = await calendar.execute(input, readRules)
+  assert.equal(publicDay.schedule.kind, "workday")
+  assert.equal(publicDay.leaves[0].timeLabel, "14:00–17:00")
+  assert.ok(publicDay.lunar && publicDay.suitable.length && publicDay.unsuitable.length)
+  rules.push(makeup)
+  const customDay = await calendar.execute(input, readRules)
+  assert.equal(customDay.schedule.kind, "makeup")
+  assert.equal(customDay.publicHoliday.kind, "workday")
+  await assert.rejects(() => calendar.execute({ action: "day", payload: { date: "2026-02-30" } }, readRules), /有效的日历日期/)
+} finally {
+  globalThis.fetch = originalFetch
+}
 
 // 使用真实 Mastra、libSQL 和安装目录副本，仅把模型及原生桌面动作替换成本地夹具。
 const root = await mkdtemp(join(tmpdir(), "application-assistant-test-"))
@@ -155,6 +193,45 @@ const server = createServer(async (request, response) => {
       status: "in_progress"
     }
   })
+  if (plan?.type === "mixed") {
+    const output = plan.calls.map(({ name, args }, index) => ({
+      id: `fc_${index}`,
+      type: "function_call",
+      call_id: `call_${randomUUID()}`,
+      name,
+      arguments: JSON.stringify(args),
+      status: "completed"
+    }))
+    for (const [index, item] of output.entries()) {
+      emit("response.output_item.added", {
+        output_index: index,
+        item: { ...item, arguments: "" }
+      })
+      emit("response.function_call_arguments.delta", {
+        output_index: index,
+        item_id: item.id,
+        delta: item.arguments
+      })
+      emit("response.function_call_arguments.done", {
+        output_index: index,
+        item_id: item.id,
+        arguments: item.arguments
+      })
+      emit("response.output_item.done", { output_index: index, item })
+    }
+    emit("response.completed", {
+      response: {
+        id,
+        created_at: 1700000000,
+        model: payload.model,
+        status: "completed",
+        output,
+        usage: { input_tokens: 12, output_tokens: 8, total_tokens: 20 }
+      }
+    })
+    response.end("data: [DONE]\n\n")
+    return
+  }
   const item =
     plan?.type === "tool"
       ? {
@@ -367,18 +444,28 @@ try {
     8192,
     "模型请求携带输出预算"
   )
-  assert.equal(requests[0].payload.tools.length, 14)
+  assert.equal(
+    requests[0].payload.tools.length,
+    catalog.length + Object.keys(modules).length - 5
+  )
+  for (const tool of Object.values(modules))
+    assert.ok(
+      requests[0].payload.tools.some((item) => item.name === tool.id),
+      tool.id
+    )
   assert.ok(
     requests[0].payload.tools.some((tool) => tool.name === "call_app_api")
   )
   assert.ok(
-    JSON.stringify(requests[0].payload).includes("执行软件内操作默认静默完成")
+    JSON.stringify(requests[0].payload).includes(
+      "应用业务操作使用 app_ 模块工具直接在后台完成"
+    )
   )
   assert.ok(
-    requests[0].payload.tools.some((tool) => tool.name === "read_app_ui")
+    !requests[0].payload.tools.some((tool) => tool.name === "read_app_ui")
   )
   assert.ok(
-    requests[0].payload.tools.some((tool) => tool.name === "interact_app_ui")
+    !requests[0].payload.tools.some((tool) => tool.name === "interact_app_ui")
   )
   assert.ok(
     JSON.stringify(requests[1].payload.input).includes("原生动作已执行"),
@@ -452,7 +539,7 @@ try {
 
   const uiThread = await rpc("create-thread")
   const uiParams = {
-    ...turn(uiThread.id, "读取图片工作台并输入一张游乐园照片"),
+    ...turn(uiThread.id, "读取图片工作台的界面并在输入框中填写一张游乐园照片"),
     surface: "desktop"
   }
   const fillArgs = {
@@ -494,26 +581,62 @@ try {
   await rpc("cancel", { runId: earlyCancel.runId })
   assert.equal((await rpc("run", earlyCancel)).cancelled, true)
 
-  // 澄清日期单双号后，原目标和纠正一同进入下一轮，排班通过后台接口执行。
+  // 模型先发出可选项，用户选定后直接调用日历工具并保留前文。
   const calendarThread = await rpc("create-thread")
-  plans.push({ text: "请确认单双号是周序号还是周六当天日期。" })
-  await rpc(
+  const clarification = {
+    question: "单双号指周六当天日期，还是每隔一周轮换？",
+    options: ["按周六当天日期的单双号排班", "按隔周轮换设置大小周"]
+  }
+  const beforeChoice = { tools: tools.length, requests: requests.length }
+  plans.push({
+    type: "mixed",
+    calls: [
+      {
+        name: "app_calendar",
+        args: {
+          action: "calendar-rule-delete",
+          payload: { id: "不应执行", revision: 1 }
+        }
+      },
+      { name: "ask_user_choice", args: clarification }
+    ]
+  })
+  const choice = await rpc(
     "run",
     turn(calendarThread.id, "单号周六休息，双号周六上班，周日固定休息")
   )
+  assert.equal(choice.text, clarification.question)
+  assert.equal(tools.length, beforeChoice.tools)
+  assert.equal(requests.length, beforeChoice.requests + 1)
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === "tool-end" &&
+        event.name === "ask_user_choice" &&
+        event.output.options[0] === clarification.options[0]
+    )
+  )
+  const choiceHistory = await rpc("messages", { threadId: calendarThread.id })
+  assert.ok(
+    choiceHistory.messages.some((message) =>
+      message.content.parts?.some(
+        (part) =>
+          part.toolInvocation?.result?.question === clarification.question
+      )
+    )
+  )
   const calendarStart = tools.length
   plans.push(
-    { type: "tool", name: "read_app_api", args: { module: "calendar" } },
     {
       type: "tool",
-      name: "call_app_api",
-      args: { channel: "quick-notes:calendar-rule-list", payload: {} }
+      name: "app_calendar",
+      args: { action: "calendar-rule-list", payload: {} }
     },
     {
       type: "tool",
-      name: "call_app_api",
+      name: "app_calendar",
       args: {
-        channel: "quick-notes:calendar-rule-batch",
+        action: "calendar-rule-batch",
         payload: {
           operations: [
             {
@@ -533,19 +656,23 @@ try {
     },
     {
       type: "tool",
-      name: "call_app_api",
-      args: { channel: "quick-notes:calendar-rule-list", payload: {} }
+      name: "app_calendar",
+      args: { action: "calendar-rule-list", payload: {} }
     },
     { text: "已按周六当天日期设置单双号排班，周日休息。" }
   )
   const calendarResult = await rpc(
     "run",
-    turn(calendarThread.id, "周六那天日期的单双数")
+    turn(calendarThread.id, clarification.options[0])
   )
   assert.match(calendarResult.text, /当天日期/)
   assert.deepEqual(
-    tools.slice(calendarStart).map((tool) => tool.name),
-    ["read_app_api", "call_app_api", "call_app_api", "call_app_api"]
+    tools.slice(calendarStart).map((tool) => [tool.name, tool.args.action]),
+    [
+      ["app_calendar", "calendar-rule-list"],
+      ["app_calendar", "calendar-rule-batch"],
+      ["app_calendar", "calendar-rule-list"]
+    ]
   )
   assert.equal(tools.at(-2).args.payload.operations[0].rule.dateParity, "even")
   assert.ok(
@@ -556,7 +683,7 @@ try {
   )
   assert.ok(
     JSON.stringify(requests.at(-1).payload.input).includes(
-      "周六那天日期的单双数"
+      clarification.options[0]
     )
   )
   // 多天请假保留日期和首末时刻，沿用排班的读取、批量写入和回读链路。
@@ -592,10 +719,23 @@ try {
     },
     { text: "已记录 11 月 25 日 14:00 到 11 月 27 日 10:00 的请假。" }
   )
-  await rpc("run", turn(calendarThread.id, "在便签日历记下 2026 年 11 月 25 日 14:00 到 27 日 10:00 的请假"))
+  await rpc(
+    "run",
+    turn(
+      calendarThread.id,
+      "在便签日历记下 2026 年 11 月 25 日 14:00 到 27 日 10:00 的请假"
+    )
+  )
   assert.deepEqual(
-    tools.slice(leaveStart).map(tool => tool.args.channel || tool.args.module),
-    ["calendar", "quick-notes:calendar-rule-list", "quick-notes:calendar-rule-batch", "quick-notes:calendar-rule-list"]
+    tools
+      .slice(leaveStart)
+      .map((tool) => tool.args.channel || tool.args.module),
+    [
+      "calendar",
+      "quick-notes:calendar-rule-list",
+      "quick-notes:calendar-rule-batch",
+      "quick-notes:calendar-rule-list"
+    ]
   )
   assert.deepEqual(tools.at(-2).args.payload.operations[0].rule, leaveRule)
   const leaveRequest = JSON.stringify(requests.at(-1).payload)

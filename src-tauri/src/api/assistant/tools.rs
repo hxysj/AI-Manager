@@ -14,7 +14,10 @@ mod app_api;
 pub(super) mod ui;
 
 pub(super) fn catalog() -> Value {
-    serde_json::from_str(include_str!("../../../node/assistant-tools/catalog.json")).expect("助手工具目录必须是合法 JSON")
+    let mut catalog: Vec<Value> = serde_json::from_str(include_str!("../../../node/assistant-tools/catalog.json"))
+        .expect("助手工具目录必须是合法 JSON");
+    catalog.extend(app_api::modules().as_object().unwrap().values().cloned());
+    json!(catalog)
 }
 
 // 显式擦除 Future 类型，工具回调可复用应用 dispatch 而不形成异步类型递归。
@@ -35,12 +38,14 @@ pub(super) fn execute<'a>(
     let state = app.state::<AppState>();
     let args = &request["args"];
     let snapshot = state.state_snapshot().await;
-    if snapshot["appSettings"]["agents"]["assistant"]["disabledTools"].as_array().is_some_and(|items| items.iter().any(|id| id == &request["name"])) {
+    let disabled = &snapshot["appSettings"]["agents"]["assistant"]["disabledTools"];
+    if disabled.as_array().is_some_and(|items| items.iter().any(|id| id == &request["name"])) {
         return Err(ManagerError::System("此助手工具已被停用".into()));
     }
     match request["name"].as_str().unwrap_or("") {
         "read_app_config" => config::execute(service, app, args).await,
-        "read_app_api" | "call_app_api" => app_api::execute(app, args, request["name"].as_str().unwrap_or("")).await,
+        name if matches!(name, "read_app_api" | "call_app_api") || name.starts_with("app_") =>
+            app_api::execute(service, app, args, name, disabled).await,
         "update_app_settings" => settings::execute(app, args).await,
         "open_app_window" => windows::execute(app, args, request["surface"].as_str()).await,
         "read_app_ui" | "interact_app_ui" => ui::execute(service, app, args, cancellation, request).await,
@@ -60,7 +65,13 @@ pub(super) fn redact_config(value: Value) -> Value {
             let sensitive = ["password", "secret", "token", "apikey", "authorization", "cookie"]
                 .iter().any(|part| name.contains(part))
                 || matches!(name.as_str(), "headers" | "env" | "auth" | "credentials");
-            (key, if sensitive && !value.is_boolean() {
+            // 用量字段是数值，保留计费数据，同时继续隐藏真正的认证令牌。
+            let usage_metric = value.is_number() && matches!(name.as_str(),
+                "tokens" | "inputtokens" | "outputtokens" | "totaltokens" | "cachecreationtokens" |
+                "cacheinputtokens" | "cachereadtokens" | "reasoningtokens" | "prompttokens" |
+                "completiontokens" | "actualtokens" | "cachedtokens" | "tokencount" | "bytoken" |
+                "maxtokens" | "maxoutputtokens");
+            (key, if sensitive && !value.is_boolean() && !usage_metric {
                 json!(if value.is_null() || value.as_str() == Some("") { "" } else { "[已隐藏]" })
             } else {
                 redact_config(value)
@@ -130,10 +141,13 @@ mod tests {
     fn config_projection_hides_nested_credentials_and_preserves_flags() {
         let result = redact_config(json!({
             "cloudSync": {"password": "private", "webdavUrl": "https://user:private@example.com?custom=private"},
+            "usage": {"inputTokens": 1024, "outputTokens": 128, "token": "private"},
             "providers": [{"apiKeys": [{"value": "private"}], "headers": {"x-key": "private"},
                 "hasApiKey": true, "runtimeConfig": {"env": {"ANY_NAME": "private"}, "mainModel": "model"}}]
         }));
         assert!(!result.to_string().contains("private"));
+        assert_eq!(result["usage"]["inputTokens"], 1024);
+        assert_eq!(result["usage"]["outputTokens"], 128);
         assert_eq!(result["providers"][0]["hasApiKey"], true);
         assert_eq!(result["providers"][0]["runtimeConfig"]["mainModel"], "model");
     }

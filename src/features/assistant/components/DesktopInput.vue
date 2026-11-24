@@ -35,6 +35,12 @@
             (noteSaving || busy ? '思考中…' : '已停止回复')
           "
         />
+        <AssistantChoices
+          v-if="responseTask.status === 'completed'"
+          :tools="responseTask.tools"
+          :disabled="busy || submitting || modelSaving"
+          @choose="submitChat"
+        />
       </div>
       <AssistantImages
         :images="images"
@@ -138,6 +144,7 @@ import { quickNotesApi } from "@/api/modules/quick-notes"
 import AssistantModelSelect from "@/features/assistant/components/AssistantModelSelect.vue"
 import QuickNoteCapture from "@/features/quick-notes/components/QuickNoteCapture.vue"
 import AssistantImages from "@/features/assistant/components/AssistantImages.vue"
+import AssistantChoices from "@/features/assistant/components/AssistantChoices.vue"
 import { readAssistantImages } from "@/features/assistant/attachments"
 import MarkdownContent from "@/components/MarkdownContent.vue"
 
@@ -341,6 +348,18 @@ async function send() {
     await noteCapture.value?.capture()
     return
   }
+  await submitChat(draft.value.trim(), true)
+}
+
+// 点击澄清选项沿用当前桌面对话，保留未发出的草稿和附件。
+async function submitChat(message, fromComposer = false) {
+  if (
+    submitting.value ||
+    busy.value ||
+    modelSaving.value ||
+    settings.value.enabled === false
+  )
+    return
   if (!settings.value.targetId || !settings.value.model) {
     error.value = "请先在设置 → 功能扩展中选择助手模型。"
     return
@@ -349,17 +368,18 @@ async function send() {
   noteTask.value = {}
   const version = eventVersion
   const sentDraft = draft.value
-  const message = sentDraft.trim()
   error.value = ""
   submitting.value = true
   try {
-    const sentImages = images.value
+    const sentImages = fromComposer ? images.value : []
     const snapshot = await assistantApi.desktopSend(message, sentImages)
     if (disposed || current !== sequence) return
     if (version === eventVersion) applyTask(snapshot)
     // 输入窗由用户手动关闭，发送期间新输入的草稿继续保留。
-    if (draft.value === sentDraft) draft.value = ""
-    images.value = images.value.filter((image) => !sentImages.includes(image))
+    if (fromComposer) {
+      if (draft.value === sentDraft) draft.value = ""
+      images.value = images.value.filter((image) => !sentImages.includes(image))
+    }
     await nextTick()
     if (!disposed && current === sequence) input.value?.focus()
   } catch (failure) {

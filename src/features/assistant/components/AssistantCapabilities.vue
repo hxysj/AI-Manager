@@ -45,8 +45,15 @@
             <input
               type="checkbox"
               :aria-label="'启用工具 ' + tool.name"
-              :checked="!(settings.disabledTools || []).includes(tool.id)"
-              :disabled="busy || saving"
+              :checked="
+                !(settings.disabledTools || []).includes(tool.id) &&
+                !(tool.id.startsWith('app_') && businessToolsDisabled)
+              "
+              :disabled="
+                busy ||
+                saving ||
+                (tool.id.startsWith('app_') && businessToolsDisabled)
+              "
               @change="toggleTool(tool.id, $event.target.checked)"
             />
           </label>
@@ -238,6 +245,9 @@ const tabs = [
   { id: "tools", label: "工具管理" }
 ]
 const catalog = ref({ tools: [], softwareSkills: [] })
+const businessToolsDisabled = computed(() =>
+  props.settings.disabledTools?.includes("call_app_api")
+)
 const modules = computed(() => [
   ...new Set(catalog.value.tools.map((tool) => tool.module))
 ])

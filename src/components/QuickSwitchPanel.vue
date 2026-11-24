@@ -217,6 +217,12 @@
           :class="{ 'quick-switch-speech-text-streaming': desktopBusy }"
           :text="desktopReply"
         />
+        <AssistantChoices
+          v-if="desktopTask.status === 'completed'"
+          :tools="desktopTask.tools"
+          :disabled="desktopChoiceSending"
+          @choose="chooseDesktopOption"
+        />
         <span
           v-if="desktopChatError"
           class="quick-switch-speech-error-text"
@@ -285,6 +291,7 @@ import { quickNotesApi } from "@/api/modules/quick-notes"
 import AiIcon from "@/components/AiIcon.vue"
 import DesktopPet from "@/components/DesktopPet.vue"
 import MarkdownContent from "@/components/MarkdownContent.vue"
+import AssistantChoices from "@/features/assistant/components/AssistantChoices.vue"
 import { getDesktopPet } from "@/constants/desktop-pets"
 import logoUrl from "@/assets/ai-manager-logo.png?url"
 import { getToolItems } from "@/features/tools/constant"
@@ -323,6 +330,7 @@ const desktopReplyElement = ref(null)
 const desktopRunId = ref("")
 const desktopReply = ref("")
 const desktopChatError = ref("")
+const desktopChoiceSending = ref(false)
 const chatWaiting = ref(false)
 let desktopReplyTimer = null
 let assistantStateVersion = 0
@@ -330,6 +338,13 @@ const desktopSeenRuns = new Set()
 let desktopReplyPaused = false
 let desktopTimerVersion = 0
 const desktopBusy = computed(() => chatWaiting.value)
+const desktopHasChoices = computed(
+  () =>
+    desktopTask.value.status === "completed" &&
+    desktopTask.value.tools?.some(
+      (tool) => tool.name === "ask_user_choice" && tool.output?.options?.length
+    )
+)
 const desktopThinking = computed(
   () => desktopBusy.value && !desktopReply.value && !desktopChatError.value
 )
@@ -430,7 +445,8 @@ function resumeDesktopReply(event) {
 function startDesktopReplyTimer(delay = 10000) {
   const version = ++desktopTimerVersion
   clearTimeout(desktopReplyTimer)
-  if (desktopReplyPaused) return
+  // 有待用户决定的选项时保留气泡，直到选择或手动关闭。
+  if (desktopReplyPaused || desktopHasChoices.value) return
   const runId = desktopRunId.value
   desktopReplyTimer = window.setTimeout(() => {
     if (
@@ -486,6 +502,25 @@ function applyDesktopTask(snapshot) {
 function applyAssistantState(snapshot) {
   assistantState.value = snapshot
   applyDesktopReply(snapshot)
+}
+
+async function chooseDesktopOption(option) {
+  if (
+    desktopChoiceSending.value ||
+    desktopBusy.value ||
+    !desktopHasChoices.value
+  )
+    return
+  desktopChoiceSending.value = true
+  try {
+    const snapshot = await assistantApi.desktopSend(option)
+    if (assistantState.value.runId !== snapshot.runId)
+      applyAssistantState(snapshot)
+  } catch (error) {
+    desktopChatError.value = error.message || String(error)
+  } finally {
+    desktopChoiceSending.value = false
+  }
 }
 
 function applyNoteState(snapshot) {

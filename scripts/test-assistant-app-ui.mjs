@@ -1,12 +1,13 @@
 import assert from "node:assert/strict"
 import { execFile } from "node:child_process"
 import { existsSync } from "node:fs"
-import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises"
+import { mkdtemp, readFile, realpath, rm, writeFile } from "node:fs/promises"
 import { tmpdir } from "node:os"
 import { dirname, join, resolve } from "node:path"
 import { pathToFileURL } from "node:url"
 import { promisify } from "node:util"
 import { build } from "esbuild"
+import { compileScript, parse } from "@vue/compiler-sfc"
 
 // 使用独立无头浏览器验证真实 DOM 和 Vue v-model，不连接用户现有浏览器。
 const executable = [
@@ -23,6 +24,7 @@ const root = await mkdtemp(join(tmpdir(), "assistant-app-ui-"))
 const fixture = `
 import { createApp, h, reactive, nextTick } from 'vue'
 import { createAppUiController, installAssistantUiControl } from './src/features/assistant/ui-control.js'
+import AssistantChoices from './src/features/assistant/components/AssistantChoices.vue'
 
 const claims = new Set()
 const replies = []
@@ -141,6 +143,26 @@ async function run() {
   app.unmount()
   await callback({ ...pending[0], id: 'unmounted' })
   assert(replies.length === 1 && unsubscribeCount === 1, '卸载后应清理监听并停止响应')
+
+  const choice = reactive({ disabled: false, sent: [] })
+  const choiceApp = createApp({
+    setup: () => () => h(AssistantChoices, {
+      disabled: choice.disabled,
+      tools: [{ name: 'ask_user_choice', output: {
+        question: '按哪一种规则计算？',
+        options: ['按周六日期单双号排班', '按隔周轮换设置大小周']
+      }}],
+      onChoose: value => { choice.sent.push(value); choice.disabled = true }
+    })
+  })
+  choiceApp.mount('#app')
+  const buttons = document.querySelectorAll('.assistant-choice')
+  assert(buttons.length === 2, '已完成的澄清应呈现两项选择')
+  buttons[1].click()
+  await nextTick()
+  buttons[0].click()
+  assert(choice.sent.join() === '按隔周轮换设置大小周', '点击只提交选中指令，等待期间阻止重复提交')
+  choiceApp.unmount()
 }
 run().then(() => {
   document.getElementById('assistant-ui-result').textContent = JSON.stringify({ ok: true })
@@ -159,6 +181,15 @@ try {
       {
         name: "assistant-ui-host",
         setup(builder) {
+          builder.onLoad({ filter: /AssistantChoices\.vue$/ }, async ({ path }) => {
+            const { descriptor, errors } = parse(await readFile(path, "utf8"), { filename: path })
+            assert.deepEqual(errors, [])
+            return {
+              contents: compileScript(descriptor, { id: "assistant-choices-test", inlineTemplate: true }).content,
+              loader: "js",
+              resolveDir: dirname(path)
+            }
+          })
           builder.onResolve({ filter: /^@\/|^@tauri-apps\/api\// }, (args) => {
             if (
               [

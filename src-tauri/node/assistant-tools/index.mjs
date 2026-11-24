@@ -6,7 +6,7 @@ import pet from "./pet.mjs"
 import jsonEditor from "./json-editor.mjs"
 import skills from "./skills.mjs"
 import ui from "./ui.mjs"
-import appApi from "./app-api.mjs"
+import appApi, { moduleTools } from "./app-api.mjs"
 import catalog from "./catalog.json" with { type: "json" }
 export { catalog }
 
@@ -21,14 +21,24 @@ export function createTools(signal, nativeTool, disabled = []) {
       ...jsonEditor,
       ...skills,
       ...ui,
-      ...appApi
+      ...appApi,
+      ...moduleTools
     ]
-      .filter((definition) => !disabled.includes(definition.id))
+      .filter(
+        (definition) =>
+          !disabled.includes(definition.id) &&
+          !(
+            definition.id.startsWith("app_") &&
+            disabled.includes("call_app_api")
+          )
+      )
       .map((definition) => [
         definition.id,
         createTool({
           ...definition,
           execute: async (args) => {
+            if (definition.execute)
+              return definition.execute(args, nativeTool, signal)
             if (definition.id === "write_json_editor") JSON.parse(args.result)
             return nativeTool(definition.id, args, signal)
           }

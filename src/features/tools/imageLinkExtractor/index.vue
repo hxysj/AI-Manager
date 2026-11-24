@@ -393,11 +393,9 @@ import {
 } from "lucide-vue-next"
 import { systemApi, toolboxApi } from "@/api"
 import { createMessage } from "@/utils/message"
+import { extractImageLinks } from "./extract-image-links"
 
 // 常见图片扩展名正则匹配
-const imageUrlPattern =
-  /https?:\/\/[^\s"'<>()[\]{}]+?\.(?:png|jpe?g|gif|webp|bmp|svg|avif)(?:\?[^\s"'<>()[\]{}]*)?(?:#[^\s"'<>()[\]{}]*)?/giu
-
 const sampleText = `# 图片链接提取示例
 
 文章封面：https://images.pexels.com/photos/1181671/pexels-photo-1181671.jpeg?auto=compress&cs=tinysrgb&w=900
@@ -491,19 +489,6 @@ function syncScroll(event) {
   if (gutterRef.value) {
     gutterRef.value.scrollTop = event.target.scrollTop
   }
-}
-
-function extractImageLinks(text) {
-  const found = []
-  const seen = new Set()
-
-  for (const match of text.matchAll(imageUrlPattern)) {
-    if (!seen.has(match[0])) {
-      seen.add(match[0])
-      found.push(match[0])
-    }
-  }
-  return found
 }
 
 function isSelected(link) {

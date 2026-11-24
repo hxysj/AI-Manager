@@ -1,0 +1,152 @@
+{
+  "calendar": {
+    "id": "app_calendar",
+    "name": "日历",
+    "description": "请假、排班、个人节假日、调休、农历和每日便签或用量",
+    "module": "日历"
+  },
+  "quick-notes": {
+    "id": "app_quick_notes",
+    "name": "速记便签",
+    "description": "便签、待办、文件夹和提醒",
+    "module": "速记便签"
+  },
+  "providers": {
+    "id": "app_providers",
+    "name": "服务商",
+    "description": "读取和切换服务商，管理模型、配置与额度",
+    "module": "服务商"
+  },
+  "usage": {
+    "id": "app_usage",
+    "name": "用量统计",
+    "description": "请求、Token、费用和技能用量",
+    "module": "用量统计"
+  },
+  "sessions": {
+    "id": "app_sessions",
+    "name": "会话管理",
+    "description": "搜索、读取和回收应用管理的历史会话",
+    "module": "会话管理"
+  },
+  "skills": {
+    "id": "app_skills",
+    "name": "技能管理",
+    "description": "Skills、技能组和回收站",
+    "module": "技能管理"
+  },
+  "rules": {
+    "id": "app_rules",
+    "name": "规则管理",
+    "description": "读取和配置应用管理的 CLI 规则",
+    "module": "规则管理"
+  },
+  "repos": {
+    "id": "app_repos",
+    "name": "仓库管理",
+    "description": "查看、同步和管理受管仓库",
+    "module": "仓库管理"
+  },
+  "git": {
+    "id": "app_git",
+    "name": "Git 工具",
+    "description": "受管仓库的分支、提交、差异、暂存和归档",
+    "module": "Git 工具"
+  },
+  "images": {
+    "id": "app_images",
+    "name": "图片工作台",
+    "description": "生成、编辑、查询和管理图片任务",
+    "module": "图片工作台"
+  },
+  "image-links": {
+    "id": "app_image_links",
+    "name": "图片链接提取",
+    "description": "从用户提供的文本提取和去重图片链接",
+    "module": "图片链接提取"
+  },
+  "string-diff": {
+    "id": "app_string_diff",
+    "name": "字符串对比",
+    "description": "对比用户提供的两段文本或 JSON",
+    "module": "字符串对比"
+  },
+  "gateway": {
+    "id": "app_gateway",
+    "name": "多协议网关",
+    "description": "查看用量、配置和启停网关",
+    "module": "多协议网关"
+  },
+  "translation": {
+    "id": "app_translation",
+    "name": "划词翻译",
+    "description": "翻译指定文本，查询翻译历史",
+    "module": "划词翻译"
+  },
+  "screenshot": {
+    "id": "app_screenshot",
+    "name": "截图贴图",
+    "description": "查看截图历史和设置，处理已有截图",
+    "module": "截图贴图"
+  },
+  "lan-share": {
+    "id": "app_lan_share",
+    "name": "设备快传",
+    "description": "查看配对设备、会话和消息，管理共享服务",
+    "module": "设备快传"
+  },
+  "network": {
+    "id": "app_network",
+    "name": "网络质量",
+    "description": "执行应用内置网络质量检测并读取报告",
+    "module": "网络质量"
+  },
+  "ports": {
+    "id": "app_ports",
+    "name": "端口监控",
+    "description": "查询本机监听端口和进程",
+    "module": "端口监控"
+  },
+  "pets": {
+    "id": "app_pets",
+    "name": "Codex 桌宠",
+    "description": "查询、重命名和启停已安装的 Codex 桌宠",
+    "module": "Codex 桌宠"
+  },
+  "local-models": {
+    "id": "app_local_models",
+    "name": "本地模型",
+    "description": "列出、下载、验证和调用本地模型",
+    "module": "本地模型"
+  },
+  "logs": {
+    "id": "app_logs",
+    "name": "运行日志",
+    "description": "查询运行日志和日志统计",
+    "module": "运行日志"
+  },
+  "backups": {
+    "id": "app_backups",
+    "name": "数据备份",
+    "description": "查询、创建本地备份和查看云备份",
+    "module": "数据备份"
+  },
+  "app": {
+    "id": "app_app",
+    "name": "应用信息",
+    "description": "查看应用概览、版本更新和公告",
+    "module": "应用信息"
+  },
+  "json": {
+    "id": "app_json",
+    "name": "JSON 工具",
+    "description": "校验、格式化、压缩用户给出的 JSON",
+    "module": "JSON 工具"
+  },
+  "coordinates": {
+    "id": "app_coordinates",
+    "name": "坐标叠加",
+    "description": "解析题目和作答坐标，返回供叠图使用的框数据",
+    "module": "坐标叠加"
+  }
+}

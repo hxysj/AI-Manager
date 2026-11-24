@@ -667,7 +667,7 @@ const desktopSettingsListeners = [...settingsListeners].filter(
 )
 assert.equal(desktop.state.visible, false)
 const idleTimer = () =>
-  [...timers.entries()].find(([, timer]) => timer.delay === 60_000)
+  [...timers.entries()].find(([, timer]) => timer.delay === 30_000)
 const openDesktop = async () => {
   await Promise.all([...desktopOpenListeners].map((callback) => callback()))
   await tick()
@@ -679,7 +679,7 @@ const focusDesktop = (focused) => {
 }
 const expireIdle = async () => {
   const timer = idleTimer()
-  assert.ok(timer, "输入框失焦时应有一分钟计时器")
+  assert.ok(timer, "输入框失焦时应有三十秒计时器")
   timers.delete(timer[0])
   timer[1].callback()
   await tick()
@@ -706,7 +706,7 @@ assert.ok(idleTimer())
 focusDesktop(true)
 assert.equal(idleTimer(), undefined, "聚焦后应取消自动关闭")
 focusDesktop(false)
-assert.ok(idleTimer(), "再次失焦应重新计算一分钟")
+assert.ok(idleTimer(), "再次失焦应重新计算三十秒")
 for (const callback of document.listeners.get("focusin") || []) callback()
 assert.ok(idleTimer(), "窗口仍失焦时，内部焦点变化不应取消计时")
 document.focused = true
@@ -744,6 +744,19 @@ assert.equal(
 assert.equal(desktop.state.visible, true, "发送不应自动收起窗口")
 assert.equal(desktop.state.draft, "")
 assert.equal(desktop.state.task.status, "thinking")
+desktop.state.task = {
+  ...desktop.state.task,
+  status: "completed",
+  surface: "desktop",
+  replyAtPet: false
+}
+desktop.state.draft = "正在编辑的另一条消息"
+await desktop.state.submitChat("按隔周轮换设置大小周")
+assert.deepEqual(calls.findLast(([name]) => name === "desktop-send")[1], {
+  message: "按隔周轮换设置大小周",
+  images: []
+})
+assert.equal(desktop.state.draft, "正在编辑的另一条消息")
 desktop.state.draft = "回复期间的新草稿"
 focusDesktop(false)
 const cancels = calls.filter(([name]) => name === "cancel").length

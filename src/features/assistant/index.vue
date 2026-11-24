@@ -163,8 +163,16 @@
                 <div v-else-if="message.text" class="assistant-message-text">
                   {{ message.text }}
                 </div>
+                <AssistantChoices
+                  v-if="message.status === 'completed'"
+                  :tools="message.tools"
+                  :disabled="busy || message.id !== displayMessages.at(-1)?.id"
+                  @choose="submitChat"
+                />
                 <details
-                  v-for="tool in message.tools"
+                  v-for="tool in message.tools.filter(
+                    (item) => item.name !== 'ask_user_choice'
+                  )"
                   :key="tool.id"
                   class="assistant-tool"
                 >
@@ -478,6 +486,7 @@ import {
   Wrench
 } from "lucide-vue-next"
 import { ElDrawer } from "element-plus"
+import AssistantChoices from "./components/AssistantChoices.vue"
 import "element-plus/es/components/drawer/style/css"
 import { appApi, assistantApi } from "@/api"
 import { formatDateTime } from "@/utils/formatters"
@@ -753,6 +762,9 @@ function normalizeMessage(message) {
             .map((part) => part.text)
             .join("") ||
           content?.content ||
+          parts.find(
+            (part) => part.toolInvocation?.toolName === "ask_user_choice"
+          )?.toolInvocation.result?.question ||
           "",
     tools: parts
       .filter((part) => part.type === "tool-invocation")
@@ -848,12 +860,16 @@ async function sendMessage() {
     await noteCapture.value?.capture()
     return
   }
-  const message = draft.value.trim()
+  await submitChat(draft.value.trim(), images.value, true)
+}
+
+// 选项是新的聊天指令，保留编辑中的草稿和附件。
+async function submitChat(message, sentImages = [], clearDraft = false) {
+  if (busy.value || !threadId.value || invalidTarget.value) return
   const id = threadId.value
   submitting.value = true
   errorMessage.value = ""
   try {
-    const sentImages = images.value
     const snapshot = await assistantApi.send({
       threadId: id,
       message,
@@ -862,8 +878,10 @@ async function sendMessage() {
     if (disposed) return
     // 事件可能先于 IPC 回包到达，已有进度不能被最初的 thinking 快照覆盖。
     if (task.value.runId !== snapshot.runId) task.value = snapshot
-    draft.value = ""
-    images.value = images.value.filter((image) => !sentImages.includes(image))
+    if (clearDraft) {
+      draft.value = ""
+      images.value = images.value.filter((image) => !sentImages.includes(image))
+    }
   } catch (error) {
     errorMessage.value = error.message || String(error)
   } finally {
