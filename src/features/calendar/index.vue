@@ -8,7 +8,7 @@
       :usage-loading="usageLoading"
       :usage-error="usageError"
       :entries-loading="entriesLoading"
-      :entries-error="entriesError"
+      :entries-error="notePanelError || entriesError"
       :public-holidays="publicHolidays"
       :assistant-settings="assistantSettings"
       :providers="providers"
@@ -16,10 +16,27 @@
       :runtime-models="runtimeModels"
       @range-change="changeRange"
       @refresh="refresh"
-      @open="$emit('open-notes', { id: $event.id })"
-      @create="$emit('open-notes', { date: $event })"
-      @smart-record="$emit('open-notes', { smart: true })"
+      @open="openNotePanel({ id: $event.id })"
+      @create="openNotePanel({ occurredOn: $event })"
+      @smart-record="openNotePanel({ smart: true })"
     />
+    <Teleport to="body">
+      <QuickNoteSmartCapture
+        :open="smartCaptureOpen"
+        :folders="folders"
+        :providers="providers"
+        :codex-accounts="codexAccounts"
+        :runtime-models="runtimeModels"
+        @close="smartCaptureOpen = false"
+      />
+      <QuickNoteEditor
+        v-if="editing"
+        :note="editing"
+        :folders="folders"
+        @close="editing = null"
+        @saved="editing = null"
+      />
+    </Teleport>
   </section>
 </template>
 
@@ -35,6 +52,8 @@ import {
 import { quickNotesApi } from "@/api/modules/quick-notes"
 import { usageApi } from "@/api"
 import QuickNoteCalendar from "@/features/quick-notes/components/QuickNoteCalendar.vue"
+import QuickNoteEditor from "@/features/quick-notes/components/QuickNoteEditor.vue"
+import QuickNoteSmartCapture from "@/features/quick-notes/components/QuickNoteSmartCapture.vue"
 import {
   bundledPublicHolidayYear,
   loadPublicHolidayYear
@@ -46,7 +65,6 @@ defineProps({
   codexAccounts: { type: Array, default: () => [] },
   runtimeModels: { type: Array, default: () => [] }
 })
-defineEmits(["open-notes"])
 const cacheLifetime = 30_000
 const rangeCache = new Map()
 const entries = shallowRef({ notes: [], reminders: [], calendarRules: [] })
@@ -55,6 +73,10 @@ const entriesLoading = ref(false)
 const usageLoading = ref(false)
 const entriesError = ref("")
 const usageError = ref("")
+const notePanelError = ref("")
+const folders = shallowRef([])
+const editing = shallowRef(null)
+const smartCaptureOpen = ref(false)
 const visibleYears = shallowRef([])
 const holidayYears = shallowReactive(new Map())
 const publicHolidays = computed(
@@ -72,8 +94,28 @@ let currentCache
 let entriesRequest = 0
 let usageRequest = 0
 let holidayRequest = 0
+let notePanelRequest = 0
 let disposed = false
 let unsubscribe
+
+// 日历内打开便签面板，保留当前视图和所选日期。
+async function openNotePanel({ id, occurredOn, smart }) {
+  const request = ++notePanelRequest
+  notePanelError.value = ""
+  try {
+    const [result, note] = await Promise.all([
+      quickNotesApi.invoke("folders"),
+      id ? quickNotesApi.invoke("detail", { id }) : { occurredOn }
+    ])
+    if (disposed || request !== notePanelRequest) return
+    folders.value = result.folders
+    if (smart) smartCaptureOpen.value = true
+    else editing.value = note
+  } catch (error) {
+    if (!disposed && request === notePanelRequest)
+      notePanelError.value = error.message || String(error)
+  }
+}
 
 // 便签和用量独立读取，忽略快速翻月后迟到的结果。
 async function loadEntries() {

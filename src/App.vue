@@ -117,7 +117,6 @@
           :providers="state.providers"
           :codex-accounts="state.codexAccounts"
           :runtime-models="state.runtimeModels"
-          @open-notes="openNotesFromCalendar"
         />
 
         <ServiceProviderCenter
@@ -738,11 +737,6 @@ const showLogsTab = ref(false)
 // 主窗口重建时从 URL 恢复入口，已有窗口通过事件接收工具请求。
 const queryTool = new URLSearchParams(window.location.search).get("tool")
 const toolRequest = ref(queryTool ? { toolId: queryTool } : null)
-// 日历只传日期或便签 ID，由原有工具工作区打开编辑器。
-function openNotesFromCalendar(noteRequest) {
-  toolRequest.value = { toolId: "quick-notes", noteRequest }
-  activeView.value = "tools"
-}
 const assistantSettingsRequest = ref(queryTool === "assistant-settings" ? 1 : 0)
 if (assistantSettingsRequest.value) {
   activeView.value = "settings"
