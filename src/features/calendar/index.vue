@@ -23,6 +23,7 @@
     <Teleport to="body">
       <QuickNoteSmartCapture
         :open="smartCaptureOpen"
+        drawer
         :folders="folders"
         :providers="providers"
         :codex-accounts="codexAccounts"

@@ -2,6 +2,10 @@
   <BaseModal
     v-show="open"
     class="smart-record-modal"
+    :class="{ 'smart-record-drawer': drawer }"
+    role="dialog"
+    aria-modal="true"
+    aria-label="智能记录"
     @close="$emit('close')"
     @keydown.esc.stop="$emit('close')"
   >
@@ -10,7 +14,7 @@
         <span class="smart-symbol"><Sparkles :size="28" /></span>
         <div class="smart-heading">
           <h2 class="smart-title">智能记录</h2>
-          <p class="smart-subtitle">
+          <p v-if="!drawer" class="smart-subtitle">
             粘贴原始内容，AI 将为你整理便签、待办与提醒。
           </p>
         </div>
@@ -76,6 +80,7 @@
               @error="error = $event"
             />
             <button
+              v-if="!drawer"
               class="smart-button"
               type="button"
               :disabled="!text.trim() || busy"
@@ -87,12 +92,12 @@
             </button>
           </div>
         </section>
-        <div class="smart-results">
+        <div v-if="!drawer || busy || preview" class="smart-results">
           <section class="smart-analysis">
             <div class="smart-section-head">
               <span class="smart-section-title"
                 ><Sparkles :size="18" />AI 分析结果</span
-              ><span class="smart-badge">基于内容智能提取</span>
+              ><span v-if="!drawer" class="smart-badge">基于内容智能提取</span>
             </div>
             <template v-if="preview">
               <label class="smart-field"
@@ -184,18 +189,20 @@
                 {{ preview.pendingTime }}
               </p>
             </template>
-            <div v-else class="smart-empty">
-              <Sparkles :size="34" /><span>{{
+            <div v-else class="smart-empty" role="status">
+              <Sparkles v-if="!drawer" :size="34" /><span>{{
                 busy ? "正在理解内容，提取待办和提醒…" : "从一段原始记录开始"
               }}</span>
-              <p>分析后可以修改标题、分类、待办与时间，确认后再保存。</p>
+              <p v-if="!drawer">
+                分析后可以修改标题、分类、待办与时间，确认后再保存。
+              </p>
             </div>
           </section>
-          <section class="smart-preview">
+          <section v-if="!drawer || preview" class="smart-preview">
             <div class="smart-section-head">
               <span class="smart-section-title"
                 ><NotebookPen :size="17" />便签生成预览</span
-              ><span class="smart-badge">{{
+              ><span v-if="!drawer" class="smart-badge">{{
                 preview ? "可编辑正文" : "等待分析"
               }}</span>
             </div>
@@ -283,6 +290,7 @@ import {
 } from "@/features/quick-notes/constant"
 const props = defineProps({
   open: Boolean,
+  drawer: Boolean, // 日历快捷入口使用右侧抽屉。
   applyOnly: Boolean,
   preserveWorkTracking: Boolean,
   initialText: { type: String, default: "" },
@@ -787,6 +795,136 @@ onBeforeUnmount(() => {
       justify-content: flex-end;
       gap: 12px;
       padding-top: 24px;
+    }
+  }
+  &.smart-record-drawer {
+    display: flex;
+    justify-content: flex-end;
+    padding: 0;
+    :deep(> .base-modal__panel) {
+      width: min(416px, calc(100vw - 24px));
+      height: 100%;
+      max-height: 100%;
+      border-radius: 19px 0 0 19px;
+      .base-modal__content {
+        overflow: hidden;
+      }
+    }
+    .smart-record {
+      display: flex;
+      flex: 1;
+      flex-direction: column;
+      min-height: 0;
+      padding: 0;
+      .smart-head {
+        flex: none;
+        gap: 8px;
+        margin: 0;
+        padding: 15px 17px;
+        border-bottom: 1px solid var(--color-line);
+        .smart-symbol {
+          width: 19px;
+          height: 19px;
+          border: 0;
+          background: transparent;
+          :deep(svg) {
+            width: 19px;
+            height: 19px;
+          }
+        }
+        .smart-heading {
+          .smart-title {
+            margin: 0;
+            font-size: var(--font-size-lg);
+          }
+        }
+      }
+      .smart-section-head {
+        margin-bottom: 8px;
+        font-size: var(--font-size-sm);
+      }
+      .smart-button,
+      .smart-select {
+        min-height: 32px;
+        padding: 6px 10px;
+        border-radius: 8px;
+        font-size: var(--font-size-sm);
+        white-space: nowrap;
+      }
+      .smart-columns {
+        flex: 1;
+        flex-direction: column;
+        gap: 16px;
+        min-height: 0;
+        padding: 16px 17px;
+        overflow: auto;
+        .smart-source {
+          flex: none;
+          padding: 0;
+          border: 0;
+          background: transparent;
+          .smart-input {
+            flex: none;
+            height: 124px;
+            min-height: 96px;
+            padding: 9px 10px;
+            border-radius: 8px;
+            font-size: var(--font-size-sm);
+            line-height: 1.65;
+            resize: vertical;
+            &:focus {
+              border-color: var(--color-primary);
+              outline: none;
+              box-shadow: 0 0 0 2px var(--color-primary-soft);
+            }
+          }
+          .smart-source-foot,
+          .smart-model {
+            margin-top: 8px;
+          }
+        }
+        .smart-results {
+          flex: none;
+          gap: 16px;
+          .smart-analysis,
+          .smart-preview {
+            padding: 12px 0 0;
+            border: 0;
+            border-top: 1px solid var(--color-line);
+            border-radius: 0;
+            background: transparent;
+          }
+          .smart-analysis {
+            .smart-empty {
+              align-items: flex-start;
+              min-height: 0;
+              padding: 4px 0;
+              font-size: var(--font-size-sm);
+            }
+          }
+        }
+      }
+      .smart-error,
+      .smart-feedback {
+        margin: 0;
+        padding: 8px 17px;
+        overflow-wrap: anywhere;
+      }
+      .smart-footer {
+        flex: none;
+        flex-wrap: wrap;
+        gap: 8px;
+        padding: 12px 17px;
+        border-top: 1px solid var(--color-line);
+        background: var(--color-panel-soft);
+        .smart-primary {
+          border-color: var(--color-primary-solid);
+          background: var(--color-primary-solid);
+          &:hover {
+            background: var(--color-primary);
+          }
+        }
+      }
     }
   }
 }
