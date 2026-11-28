@@ -111,6 +111,21 @@ export function formatGitGraphDate(value) {
   return `${day} ${month} ${year} ${hour}:${minute}`
 }
 
+const gitDateTooltipFormatter = new Intl.DateTimeFormat("zh-CN", {
+  dateStyle: "long",
+  timeStyle: "medium",
+  hourCycle: "h23"
+})
+
+// 悬浮提示沿用列表的本地时区，显示完整中文日期和秒数。
+export function formatGitDateTooltip(value) {
+  if (!value) return undefined
+  const date = new Date(value)
+  return Number.isNaN(date.getTime())
+    ? undefined
+    : gitDateTooltipFormatter.format(date)
+}
+
 export function formatCheckStatus(status) {
   const statusMap = {
     "exists-hash": "已合入",

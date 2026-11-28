@@ -11,6 +11,8 @@ export const gitToolApi = {
   executeGitToolOperation: (payload) => request("git-tool:operation", payload),
   scanGitToolBranches: (payload) => request("git-tool:branches", payload),
   listGitToolCommits: (payload) => request("git-tool:commits", payload),
+  listGitToolCommitAuthors: (payload) =>
+    request("git-tool:commit-authors", payload),
   // 文件历史按页读取，沿用仓库和当前工作树的上下文。
   listGitToolFileHistory: (payload) =>
     request("git-tool:file-history", payload),

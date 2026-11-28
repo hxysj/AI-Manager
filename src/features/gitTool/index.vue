@@ -542,11 +542,46 @@
               <span class="git-tool-panel-subtitle">{{
                 branchCompareVisible
                   ? "选择两个分支进行对比，查看文件差异和代码变更。"
-                  : `${commits.length} 条提交`
+                  : selectedCommitAuthors.length
+                    ? `已显示 ${commitCount} 条匹配提交`
+                    : `${commitCount} 条提交`
               }}</span>
             </div>
           </div>
           <div class="git-tool-panel-actions">
+            <ElSelect
+              v-if="!branchCompareVisible"
+              v-model="selectedCommitAuthors"
+              class="git-tool-author-select"
+              aria-label="筛选提交人"
+              placeholder="筛选提交人"
+              placement="bottom-end"
+              :disabled="!selectedBranch"
+              :loading="commitAuthorsLoading"
+              loading-text="正在读取提交人"
+              no-data-text="暂无提交人"
+              no-match-text="没有匹配的提交人"
+              :reserve-keyword="false"
+              multiple
+              filterable
+              clearable
+              collapse-tags
+              collapse-tags-tooltip
+              @visible-change="loadCommitAuthors"
+              @change="loadCommits()"
+            >
+              <template #label="{ label }">
+                <span :title="label">{{
+                  label.replace(/ <[^>]*>$/, "") || label
+                }}</span>
+              </template>
+              <ElOption
+                v-for="author in commitAuthors"
+                :key="author"
+                :value="author"
+                :label="author"
+              />
+            </ElSelect>
             <select
               v-if="!branchCompareVisible"
               class="git-tool-mini-select"
@@ -705,7 +740,14 @@
                   {{ formatCheckStatus(commit.checkStatus) }}
                 </span>
               </span>
-              <span class="git-tool-commit-date">
+              <span
+                class="git-tool-commit-date"
+                :title="
+                  commit.isGraphOnly
+                    ? undefined
+                    : formatGitDateTooltip(commit.date)
+                "
+              >
                 {{ commit.isGraphOnly ? "" : formatGitGraphDate(commit.date) }}
               </span>
               <span class="git-tool-commit-author">
@@ -736,7 +778,11 @@
               正在加载更多提交
             </div>
             <div v-else-if="!commits.length" class="git-tool-list-empty">
-              暂无提交记录
+              {{
+                selectedCommitAuthors.length
+                  ? "没有符合所选提交人的记录"
+                  : "暂无提交记录"
+              }}
             </div>
           </div>
         </div>
@@ -1307,6 +1353,7 @@ import GitFileHistoryPanel from "@/features/gitTool/components/GitFileHistoryPan
 import {
   gitOperationDefinitions,
   formatGitGraphDate,
+  formatGitDateTooltip,
   formatCheckStatus,
   formatCheckReason
 } from "@/features/gitTool/constant"
@@ -1698,6 +1745,14 @@ const project = ref(null)
 const checkBranchLoading = ref(false)
 const branches = ref([])
 const commits = ref([])
+const commitCount = computed(
+  () => commits.value.filter((item) => !item.isGraphOnly).length
+)
+const selectedCommitAuthors = ref([])
+const commitAuthors = ref([])
+const commitAuthorsLoading = ref(false)
+let commitAuthorsLoaded = false
+let commitAuthorsSeq = 0
 const archives = ref([])
 const stashes = ref([])
 const stashArchives = ref([])
@@ -2179,6 +2234,19 @@ watch(
 )
 
 watch(
+  [selectedRepoId, selectedWorktreePath, selectedBranch],
+  () => {
+    // 筛选条件和候选成员属于当前分支，切换时让旧请求失效。
+    selectedCommitAuthors.value = []
+    commitAuthors.value = []
+    commitAuthorsLoaded = false
+    commitAuthorsLoading.value = false
+    commitAuthorsSeq++
+  },
+  { flush: "sync" }
+)
+
+watch(
   () => props.repos,
   async () => {
     const previousRepoId = selectedRepoId.value
@@ -2269,6 +2337,7 @@ function scheduleRefreshGitProject() {
 }
 
 onBeforeUnmount(() => {
+  commitAuthorsSeq++
   window.clearTimeout(refreshTimer)
   window.removeEventListener("keydown", handleGitKeydown)
   closeConfirmDialog(false)
@@ -2350,6 +2419,7 @@ async function refreshGitProject(options = {}) {
     }
 
     if (gitWorkspace.value === "branch" && selectedBranch.value) {
+      commitAuthorsLoaded = false
       loadCommits()
     }
 
@@ -2543,6 +2613,34 @@ async function selectBranch(branchName) {
   await loadCommits()
 }
 
+async function loadCommitAuthors(open) {
+  if (
+    !open ||
+    !selectedBranch.value ||
+    commitAuthorsLoaded ||
+    commitAuthorsLoading.value
+  )
+    return
+
+  // 打开筛选时才读取整条分支的提交人。
+  const sequence = ++commitAuthorsSeq
+  commitAuthorsLoading.value = true
+  try {
+    const authors = await gitToolApi.listGitToolCommitAuthors({
+      repoId: selectedRepoId.value,
+      worktreePath: selectedWorktreePath.value,
+      branchName: selectedBranch.value
+    })
+    if (sequence !== commitAuthorsSeq) return
+    commitAuthors.value = authors
+    commitAuthorsLoaded = true
+  } catch (error) {
+    if (sequence === commitAuthorsSeq) showErrorMessage(error)
+  } finally {
+    if (sequence === commitAuthorsSeq) commitAuthorsLoading.value = false
+  }
+}
+
 async function loadCommits(options = {}) {
   closeCommitContextMenu()
 
@@ -2560,6 +2658,7 @@ async function loadCommits(options = {}) {
   const repoId = selectedRepoId.value
   const worktreePath = selectedWorktreePath.value
   const branchName = selectedBranch.value
+  const authors = [...selectedCommitAuthors.value]
   commits.value = []
   commitsHasMore.value = false
   commitsCheckEnabled.value = false
@@ -2571,6 +2670,7 @@ async function loadCommits(options = {}) {
       repoId,
       worktreePath,
       branchName,
+      authors,
       skipCheck: true,
       offset: 0,
       limit: commitPageSize
@@ -2603,6 +2703,7 @@ async function loadCommits(options = {}) {
       repoId,
       worktreePath,
       branchName,
+      authors,
       skipCheck: false,
       offset: 0,
       limit: commitPageSize
@@ -2664,7 +2765,8 @@ async function loadMoreCommits() {
   const repoId = selectedRepoId.value
   const worktreePath = selectedWorktreePath.value
   const branchName = selectedBranch.value
-  const offset = commits.value.filter((item) => !item.isGraphOnly).length
+  const authors = [...selectedCommitAuthors.value]
+  const offset = commitCount.value
   const currentLength = commits.value.length
 
   try {
@@ -2672,6 +2774,7 @@ async function loadMoreCommits() {
       repoId,
       worktreePath,
       branchName,
+      authors,
       skipCheck: true,
       offset,
       limit: commitPageSize
@@ -2698,6 +2801,7 @@ async function loadMoreCommits() {
       repoId,
       worktreePath,
       branchName,
+      authors,
       skipCheck: false,
       offset,
       limit: commitPageSize
@@ -4284,6 +4388,22 @@ function showErrorMessage(error) {
     display: flex;
     align-items: center;
     gap: 8px;
+
+    .git-tool-author-select {
+      width: 154px;
+      :deep(.el-select__wrapper) {
+        min-height: 32px;
+        border-radius: 7px;
+        background: var(--color-panel);
+        color: var(--color-text);
+        font-size: 12.5px;
+        box-shadow: 0 0 0 1px var(--color-line) inset;
+
+        &.is-focused {
+          box-shadow: 0 0 0 1px var(--color-primary) inset;
+        }
+      }
+    }
 
     .git-tool-mini-select {
       width: 120px;

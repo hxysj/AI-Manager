@@ -16,8 +16,8 @@ const vue = require("vue")
 // 交互回归使用轻量选择器宿主，真实下拉层另在浏览器中核对。
 const selectComponents = {
   ElSelect: vue.defineComponent({
-    props: ["modelValue", "disabled"],
-    emits: ["update:modelValue", "change"],
+    props: { modelValue: null, disabled: Boolean, multiple: Boolean },
+    emits: ["update:modelValue", "change", "visible-change"],
     setup:
       (props, { emit, slots }) =>
       () =>
@@ -26,9 +26,17 @@ const selectComponents = {
           {
             value: props.modelValue,
             disabled: props.disabled,
+            multiple: props.multiple,
+            onFocus: () => emit("visible-change", true),
             onChange: (event) => {
-              emit("update:modelValue", event.target.value)
-              emit("change", event.target.value)
+              const value = props.multiple
+                ? Array.from(
+                    event.target.selectedOptions,
+                    (option) => option.value
+                  )
+                : event.target.value
+              emit("update:modelValue", value)
+              emit("change", value)
             }
           },
           slots.default?.()
@@ -895,6 +903,55 @@ page.state.branchCompareVisible = false
 await tick()
 assert.equal(findNodes(page.root, "git-tool-branch-panel").length, 1)
 assert.equal(findNodes(page.root, "git-tool-operation-button").length, 8)
+const authorFilter = findNodes(page.root, "git-tool-author-select")[0]
+const authors = ["开发甲 <first@example.test>", "开发乙 <second@example.test>"]
+handlers.listGitToolCommitAuthors = () => authors
+assert.equal(authorFilter.props.multiple, true)
+authorFilter.props.onFocus()
+await tick()
+assert.deepEqual(
+  authorFilter.children
+    .filter((child) => child.type === "option")
+    .map((option) => option.props.value),
+  authors
+)
+const authorCommits = Array.from({ length: 81 }, (_, index) => ({
+  rowId: `author-${index}`,
+  hash: `author-${index}`,
+  subject: `提交 ${index}`,
+  author: index % 2 ? "开发乙" : "开发甲",
+  checkStatus: "none",
+  date: "2026-11-12T12:37:05Z"
+}))
+handlers.listGitToolCommits = ({ authors, offset, limit }) =>
+  authors.length ? authorCommits.slice(offset, offset + limit) : []
+authorFilter.props.onChange({
+  target: { selectedOptions: authors.map((value) => ({ value })) }
+})
+await tick()
+assert.deepEqual(
+  calls.findLast((call) => call.name === "listGitToolCommits").payload.authors,
+  authors
+)
+assert.equal(findNodes(page.root, "git-tool-commit").length, 80)
+const commitDate = findNodes(page.root, "git-tool-commit-date")[0]
+assert.match(commitDate.text, /Nov 2026/)
+assert.match(commitDate.props.title, /^2026年11月\d+日 \d{2}:\d{2}:05$/)
+await page.state.loadMoreCommits()
+await tick()
+const filteredPage = calls.findLast(
+  (call) => call.name === "listGitToolCommits"
+).payload
+assert.deepEqual(filteredPage.authors, authors)
+assert.equal(filteredPage.offset, 80)
+assert.equal(findNodes(page.root, "git-tool-commit").length, 81)
+authorFilter.props.onChange({ target: { selectedOptions: [] } })
+await tick()
+assert.deepEqual(
+  calls.findLast((call) => call.name === "listGitToolCommits").payload.authors,
+  []
+)
+assert.equal(findNodes(page.root, "git-tool-commit").length, 0)
 await page.state.openGitOperation("merge", { revision: "feature" })
 assert.equal(page.state.operationDialog.status.branch, "main")
 page.state.operationDialog = null

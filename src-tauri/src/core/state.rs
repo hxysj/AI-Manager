@@ -158,6 +158,7 @@ impl AppState {
                 "git-tool:status"
                     | "git-tool:worktree-diff"
                     | "git-tool:branch-diff"
+                    | "git-tool:commit-authors"
                     | "git-tool:revision-preview"
                     | "git-tool:operation"
             ) {
@@ -173,6 +174,9 @@ impl AppState {
                     }
                     "git-tool:branch-diff" => {
                         git_tool::get_branch_diff(&paths, &repos, payload).await
+                    }
+                    "git-tool:commit-authors" => {
+                        git_tool::list_commit_authors(&paths, &repos, payload).await
                     }
                     "git-tool:revision-preview" => {
                         git_tool::preview_revision(&paths, &repos, payload).await

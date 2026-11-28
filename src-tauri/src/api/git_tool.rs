@@ -1,7 +1,7 @@
 use crate::core::error::ManagerError;
 use crate::core::paths::{path_text, AppPaths};
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
 use tokio::process::Command;
 
@@ -61,7 +61,14 @@ pub async fn list_commits(
     let limit = payload.get("limit").and_then(Value::as_u64).unwrap_or(80) as usize;
     let project = worktrees::project(paths, repos, &repo_id, &payload).await?;
     let project_path = string_value(project.get("projectPath"));
-    let commits = get_commits(&project_path, &branch_name, offset, limit).await?;
+    let authors = payload["authors"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter(|author| !author.is_empty())
+        .collect::<Vec<_>>();
+    let commits = get_commits(&project_path, &branch_name, offset, limit, &authors).await?;
     let check_branch_name = string_value(project.get("checkBranchName"));
 
     if skip_check || check_branch_name.is_empty() || check_branch_name == branch_name {
@@ -1039,28 +1046,69 @@ async fn get_local_branch_scan(project_path: &str) -> Result<Value, ManagerError
     }))
 }
 
+pub async fn list_commit_authors(
+    paths: &AppPaths,
+    repos: &Value,
+    payload: Value,
+) -> Result<Value, ManagerError> {
+    let repo_id = string_value(payload.get("repoId"));
+    let branch_name = string_value(payload.get("branchName"));
+    let project = worktrees::project(paths, repos, &repo_id, &payload).await?;
+    let authors = run_git_raw(
+        &[
+            "log",
+            "--no-use-mailmap",
+            "--format=%an <%ae>",
+            "--end-of-options",
+            &branch_name,
+            "--",
+        ],
+        &string_value(project.get("projectPath")),
+    )
+    .await?;
+    Ok(json!(authors.lines().collect::<BTreeSet<_>>()))
+}
+
 async fn get_commits(
     project_path: &str,
     branch_name: &str,
     offset: usize,
     limit: usize,
+    authors: &[&str],
 ) -> Result<Vec<Value>, ManagerError> {
     let limit_text = limit.to_string();
     let skip_arg = format!("--skip={}", offset);
-    let output = run_git(
-        &[
-            "log",
-            "--graph",
-            branch_name,
-            "--date=iso-strict",
-            "--pretty=format:%H%x00%h%x00%s%x00%an%x00%ad%x00%D",
-            "-n",
-            &limit_text,
-            &skip_arg,
-        ],
-        project_path,
-    )
-    .await?;
+    let patterns = authors
+        .iter()
+        .map(|author| {
+            // Git 使用 POSIX 扩展正则匹配作者行，按姓名和邮箱组成的完整身份匹配。
+            let mut pattern = String::from("--author=^");
+            for character in author.chars() {
+                if r"\.^$*+?()[]{}|".contains(character) {
+                    pattern.push('\\');
+                }
+                pattern.push(character);
+            }
+            pattern.push_str("( |$)");
+            pattern
+        })
+        .collect::<Vec<_>>();
+    let mut args = vec![
+        "log",
+        "--graph",
+        "--no-use-mailmap",
+        "--date=iso-strict",
+        "--pretty=format:%H%x00%h%x00%s%x00%an%x00%ad%x00%D",
+        "-n",
+        &limit_text,
+        &skip_arg,
+    ];
+    if !patterns.is_empty() {
+        args.push("--extended-regexp");
+        args.extend(patterns.iter().map(String::as_str));
+    }
+    args.extend(["--end-of-options", branch_name, "--"]);
+    let output = run_git(&args, project_path).await?;
 
     let mut commits = parse_commit_log(&output)?;
 
@@ -1889,7 +1937,7 @@ fn now_millis() -> u128 {
 
 #[cfg(test)]
 mod tests {
-    use super::{git_local_remote_path, strip_windows_verbatim_prefix};
+    use super::*;
 
     #[test]
     fn strips_windows_drive_verbatim_prefix() {
@@ -1899,5 +1947,57 @@ mod tests {
     #[test]
     fn converts_windows_drive_verbatim_path_for_git_remote() {
         assert_eq!(git_local_remote_path(r"\\?\D:\repo"), "D:/repo");
+    }
+
+    #[test]
+    fn author_filter_matches_exact_identities_before_pagination() {
+        struct TestRepo(std::path::PathBuf);
+        impl Drop for TestRepo {
+            fn drop(&mut self) {
+                if self.0.parent() == Some(std::env::temp_dir().as_path()) {
+                    let _ = std::fs::remove_dir_all(&self.0);
+                }
+            }
+        }
+        let repo = TestRepo(std::env::temp_dir().join(format!("git-tool-author-test-{}", uuid::Uuid::new_v4())));
+        std::fs::create_dir_all(&repo.0).unwrap();
+        let cwd = repo.0.to_str().unwrap();
+        tokio::runtime::Builder::new_current_thread().enable_all().build().unwrap().block_on(async {
+            run_git(&["init", "-q", "-b", "main"], cwd).await.unwrap();
+            let first = "开发+甲 (dev) <first+test@example.invalid>";
+            let second = "开发乙 <second@example.invalid>";
+            let same_name = "开发+甲 (dev) <other@example.invalid>";
+            let regex_lookalike = "开发发甲 dev <firstttest@exampleXinvalid>";
+            for (author, subject) in [
+                (first, "旧提交"),
+                (same_name, "同名提交"),
+                (regex_lookalike, "相似提交"),
+                (second, "新提交"),
+            ] {
+                run_git(&[
+                    "-c", "user.name=测试",
+                    "-c", "user.email=test@example.invalid",
+                    "-c", "core.hooksPath=.git/no-test-hooks",
+                    "commit", "-q", "--no-gpg-sign", "--allow-empty", "--author", author, "-m", subject,
+                ], cwd).await.unwrap();
+            }
+            let paths = crate::core::paths::resolve_app_paths(&repo.0.join("manager-data"));
+            let repos = json!([{ "id": "repo", "name": "测试", "localPath": cwd }]);
+            let options = list_commit_authors(&paths, &repos, json!({"repoId":"repo", "branchName":"main"}))
+                .await.unwrap();
+            assert_eq!(options.as_array().unwrap().len(), 4);
+            assert!(options.as_array().unwrap().contains(&json!(first)));
+            for (offset, subject) in [(0, "新提交"), (1, "旧提交")] {
+                let page = list_commits(&paths, &repos, json!({
+                    "repoId":"repo", "branchName":"main", "authors":[first, second],
+                    "offset":offset, "limit":1, "skipCheck":true
+                })).await.unwrap();
+                let commits = page.as_array().unwrap().iter()
+                    .filter(|commit| commit["isGraphOnly"] == false)
+                    .collect::<Vec<_>>();
+                assert_eq!(commits.len(), 1);
+                assert_eq!(commits[0]["subject"], subject);
+            }
+        });
     }
 }
